@@ -98,9 +98,7 @@ jobs:
         run: cargo install cargo-ndk --locked
         
       - name: Inspect Slint manifest
-        run: |
-          grep -n "backend-android" \
-          ~/*/slint-1.16.1/Cargo.toml
+        run: cargo tree -e features | grep android
         
       - name: Show Slint dependencies
         working-directory: android-ide
