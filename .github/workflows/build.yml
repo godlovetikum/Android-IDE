@@ -97,24 +97,24 @@ jobs:
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --locked
         
-      - name: Inspect Slint manifest
-        run: cargo tree -e features | grep android
-        
       - name: Show Slint dependencies
         working-directory: android-ide
         run: cargo tree | grep slint
         
-      - name: Show Slint features
+      - name: Show Slint features (A)
         working-directory: android-ide
         run: cargo tree -e features | grep slint
       
-      - name: Show failing source
+      - name: Show Slint features (B)
+        working-directory: android-ide
         run: |
-          sed -n '380,420p' \
-          ~/.cargo/registry/src/*/i-slint-backend-selector-1.16.1/api.rs
-        
-        
-    
+          grep -n "\[features\]" \
+            ~/*/slint-*/Cargo.toml
+      
+          grep -A100 "\[features\]" \
+            ~/*/slint-*/Cargo.toml | grep android
+          
+      
       - name: Build Rust library (arm64-v8a)
         working-directory: android-ide
         run: |
