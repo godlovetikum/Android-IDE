@@ -110,14 +110,7 @@ jobs:
           echo "ANDROID_NDK_HOME=$ANDROID_NDK_HOME"
           ls -la "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android-clang" 2>/dev/null || echo "Clang not found"
         
-      - name: Show Slint features (B)
-        working-directory: android-ide
-        run: |
-          grep -n "\[features\]" \
-            ~/*/slint-*/Cargo.toml
-      
-          grep -A100 "\[features\]" \
-            ~/*/slint-*/Cargo.toml | grep android
+  
           
       
       - name: Build Rust library (arm64-v8a)
