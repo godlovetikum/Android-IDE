@@ -54,7 +54,7 @@ anyhow = { workspace = true }
 # UI framework
 # "backend-qt" on desktop for native rendering; the Android backend is
 # activated by the "backend-android-activity" feature in the APK build profile.
-slint = { version = "=1.8.0", features = ["backend-android-activity"] }
+slint = { version = "1.8", features = ["backend-winit"] }
 # Modules
 android-ide-filesystem = { path = "modules/filesystem" }
 android-ide-editor    = { path = "modules/editor" }
@@ -67,4 +67,4 @@ android_logger = "0.14"
 [build-dependencies]
 # slint-build compiles .slint UI files into Rust code at build time.
 # Justification: mandatory build step for any project using the Slint UI toolkit.
-slint-build = "1.8.0"
+slint-build = "1.8"
