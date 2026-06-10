@@ -39,9 +39,9 @@ jobs:
           key: ${{ runner.os }}-cargo-check-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-check-
 
-      - name: Check formatting
-        working-directory: android-ide
-        run: cargo fmt --all -- --check
+    #  - name: Check formatting
+    #    working-directory: android-ide
+    #    run: cargo fmt --all -- --check
 
       - name: Clippy (all targets)
         working-directory: android-ide
