@@ -58,11 +58,14 @@ pub mod android_entry {
         JNI_VERSION_1_6
     }
 
-    /// Called by MainActivity.nativeStart() after SafBridge.init(this) has run.
+    /// Called by MainActivity after SafBridge.init(this) has run.
     ///
     /// Initialization order (enforced by the Activity):
     ///   1. SafBridge.init(this)   — Java side, stores ContentResolver context
     ///   2. nativeStart()          — calls this function
+    ///
+    /// This function initializes subsystems but does NOT start the UI event loop.
+    /// The Activity manages the UI via android-activity crate integration.
     #[no_mangle]
     pub extern "system" fn Java_dev_androidide_MainActivity_nativeStart(
         _env: JNIEnv,
@@ -75,13 +78,18 @@ pub mod android_entry {
         );
         info!("Android IDE native layer started");
 
+        // Initialize subsystems on the JNI thread.
+        // These are thread-safe (Arc<Mutex<>>).
         if let Err(e) = crate::init_settings() {
             tracing::error!("Settings init failed: {e}");
         }
         if let Err(e) = crate::init_filesystem() {
             tracing::error!("Filesystem init failed: {e}");
         }
-        // UI is driven by the Slint Android backend via the Activity event loop.
-        // TODO(task-014 follow-up): integrate android-activity crate for Slint Android backend.
+
+        info!("Android IDE subsystems initialized; waiting for Activity UI integration");
+        
+        // TODO(task-014 follow-up): Call crate::run_ui_loop() from Activity's
+        // android_activity::AndroidApp event loop after window is created.
     }
 }
