@@ -1,0 +1,70 @@
+[workspace]
+members = [
+    "modules/editor",
+    "modules/filesystem",
+    "modules/terminal",
+    "modules/linux-runtime",
+    "modules/git",
+    "modules/lsp",
+    "modules/extensions",
+    "modules/settings",
+    "modules/documentation",
+]
+resolver = "2"
+
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+# Error handling
+thiserror = "1"
+anyhow = "1"
+# Logging
+tracing = "0.1"
+tracing-subscriber = "0.3"
+# Android JNI bindings
+jni = "0.21"
+# Git
+git2 = "0.19"
+
+[package]
+name = "android-ide"
+version = "0.1.0"
+edition = "2021"
+description = "Production-grade Android IDE — Rust + Slint"
+
+[[bin]]
+name = "android-ide"
+path = "src/main.rs"
+
+[lib]
+name = "android_ide_lib"
+path = "src/lib.rs"
+
+[dependencies]
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+# UI framework
+# "backend-qt" on desktop for native rendering; the Android backend is
+# activated by the "backend-android-activity" feature in the APK build profile.
+slint = { version = "1.8", features = ["backend-winit"] }
+# Modules
+android-ide-filesystem = { path = "modules/filesystem" }
+android-ide-editor    = { path = "modules/editor" }
+android-ide-settings  = { path = "modules/settings" }
+
+[target.'cfg(target_os = "android")'.dependencies]
+jni            = { workspace = true }
+android_logger = "0.14"
+
+[build-dependencies]
+# slint-build compiles .slint UI files into Rust code at build time.
+# Justification: mandatory build step for any project using the Slint UI toolkit.
+slint-build = "1.8"

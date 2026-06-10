@@ -1,0 +1,14 @@
+[package]
+name = "android-ide-extensions"
+version = "0.1.0"
+edition = "2021"
+description = "Extensions module — extension loader, permissions, lifecycle management"
+
+[dependencies]
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+anyhow = { workspace = true }
+android-ide-settings = { path = "../settings" }

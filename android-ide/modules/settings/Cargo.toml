@@ -1,0 +1,21 @@
+[package]
+name = "android-ide-settings"
+version = "0.1.0"
+edition = "2021"
+description = "Settings module — typed TOML persistence, per-project config"
+
+[dependencies]
+serde = { workspace = true }
+toml = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+anyhow = { workspace = true }
+
+[target.'cfg(not(target_os = "android"))'.dependencies]
+# dirs provides platform-correct config/data directories on desktop.
+# Justification: avoids hard-coding ~/.config paths across Linux/macOS/Windows.
+dirs = "5"
+
+[target.'cfg(target_os = "android")'.dependencies]
+# jni is required by android.rs for the nativeSetFilesDir JNI export.
+jni = { workspace = true }

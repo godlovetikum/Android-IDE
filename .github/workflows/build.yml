@@ -1,0 +1,171 @@
+name: Android IDE Build
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  ANDROID_NDK_VERSION: "26.3.11579264"
+  ANDROID_TARGET_SDK: "34"
+  ANDROID_MIN_SDK: "26"
+
+jobs:
+  # ─────────────────────────────────────────────
+  # Job 1: Check and lint (fast feedback, no NDK)
+  # ─────────────────────────────────────────────
+  check:
+    name: Check & Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-check-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-check-
+
+      - name: Check formatting
+        working-directory: android-ide
+        run: cargo fmt --all -- --check
+
+      - name: Clippy (all targets)
+        working-directory: android-ide
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Build (host)
+        working-directory: android-ide
+        run: cargo build --all
+
+      - name: Test (host)
+        working-directory: android-ide
+        run: cargo test --all
+
+  # ─────────────────────────────────────────────
+  # Job 2: Build Android arm64-v8a (release APK)
+  # ─────────────────────────────────────────────
+  build-android:
+    name: Build Android (arm64-v8a)
+    runs-on: ubuntu-latest
+    needs: check
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable + Android targets
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            android-ide/target
+          key: ${{ runner.os }}-cargo-android-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-android-
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: "17"
+          distribution: "temurin"
+
+      - name: Set up Android SDK & NDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install NDK
+        run: |
+          sdkmanager "ndk;${{ env.ANDROID_NDK_VERSION }}"
+          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/${{ env.ANDROID_NDK_VERSION }}" >> $GITHUB_ENV
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --locked
+
+      - name: Build Rust library (arm64-v8a)
+        working-directory: android-ide
+        run: |
+          cargo ndk -t arm64-v8a -o android/app/src/main/jniLibs build --release -p android-ide
+
+      - name: Build APK
+        working-directory: android-ide/android
+        run: ./gradlew assembleRelease
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-ide-release-arm64
+          path: android-ide/android/app/build/outputs/apk/release/*.apk
+          retention-days: 30
+
+  # ─────────────────────────────────────────────
+  # Job 3: Build Android x86_64 (emulator target)
+  # ─────────────────────────────────────────────
+  build-android-x86:
+    name: Build Android (x86_64, emulator)
+    runs-on: ubuntu-latest
+    needs: check
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable + Android targets
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-linux-android
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            android-ide/target
+          key: ${{ runner.os }}-cargo-android-x86-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: "17"
+          distribution: "temurin"
+
+      - name: Set up Android SDK & NDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install NDK
+        run: |
+          sdkmanager "ndk;${{ env.ANDROID_NDK_VERSION }}"
+          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/${{ env.ANDROID_NDK_VERSION }}" >> $GITHUB_ENV
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --locked
+
+      - name: Build Rust library (x86_64)
+        working-directory: android-ide
+        run: |
+          cargo ndk -t x86_64 -o android/app/src/main/jniLibs build --release -p android-ide
+
+      - name: Build APK (debug, x86_64)
+        working-directory: android-ide/android
+        run: ./gradlew assembleDebug
+
+      - name: Upload x86_64 APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-ide-debug-x86_64
+          path: android-ide/android/app/build/outputs/apk/debug/*.apk
+          retention-days: 14

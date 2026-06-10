@@ -1,0 +1,13 @@
+[package]
+name = "android-ide-linux-runtime"
+version = "0.1.0"
+edition = "2021"
+description = "Linux runtime module — proot environment, package management, process lifecycle"
+
+[dependencies]
+tokio = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+anyhow = { workspace = true }
+android-ide-filesystem = { path = "../filesystem" }

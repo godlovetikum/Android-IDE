@@ -1,0 +1,15 @@
+[package]
+name = "android-ide-git"
+version = "0.1.0"
+edition = "2021"
+description = "Git module — clone, commit, branch, push/pull via git2-rs"
+
+[dependencies]
+tokio = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+anyhow = { workspace = true }
+git2 = { workspace = true }
+android-ide-filesystem = { path = "../filesystem" }
+android-ide-settings = { path = "../settings" }

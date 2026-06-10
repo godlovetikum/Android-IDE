@@ -1,0 +1,13 @@
+[package]
+name = "android-ide-documentation"
+version = "0.1.0"
+edition = "2021"
+description = "Documentation module — markdown rendering, in-app docs, README viewer"
+
+[dependencies]
+tokio = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+anyhow = { workspace = true }
+android-ide-filesystem = { path = "../filesystem" }
