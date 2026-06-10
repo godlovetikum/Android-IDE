@@ -54,7 +54,7 @@ anyhow = { workspace = true }
 # UI framework
 # "backend-qt" on desktop for native rendering; the Android backend is
 # activated by the "backend-android-activity" feature in the APK build profile.
-slint = { version = "=1.16.1", features = ["backend-android-activity-05"] }
+slint = { version = "=1.16.1", features = ["backend-android-activity"] }
 # Modules
 android-ide-filesystem = { path = "modules/filesystem" }
 android-ide-editor    = { path = "modules/editor" }
