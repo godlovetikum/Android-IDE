@@ -105,10 +105,10 @@ jobs:
         working-directory: android-ide
         run: cargo tree -e features | grep -E "slint|android" | head -20
 
-      - name: Verify NDK path
-        run: |
-          echo "ANDROID_NDK_HOME=$ANDROID_NDK_HOME"
-          ls -la "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android-clang" 2>/dev/null || echo "Clang not found"
+      #- name: Verify NDK path
+    #    run: |
+   #       echo "ANDROID_NDK_HOME=$ANDROID_NDK_HOME"
+     #     ls -la "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android-clang" 2>/dev/null || echo "Clang not found"
         
   
           
