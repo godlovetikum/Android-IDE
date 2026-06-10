@@ -100,7 +100,7 @@ jobs:
       - name: Inspect Slint manifest
         run: |
           grep -n "backend-android" \
-          ~/.cargo/registry/src/*/slint-1.16.1/Cargo.toml
+          ~/*/slint-1.16.1/Cargo.toml
         
       - name: Show Slint dependencies
         working-directory: android-ide
