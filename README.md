@@ -297,10 +297,36 @@ Success Criteria: A third-party extension can be installed and executed without 
 
 | Phase | Status | Completion |
 |-------|--------|-----------|
-| Phase 1 — Foundation | In Progress | 0% |
+| Phase 1 — Foundation | **Complete** ✅ | 100% |
 | Phase 2 — Linux Runtime | Not Started | 0% |
 | Phase 3 — Git | Not Started | 0% |
 | Phase 4 — Language Intelligence | Not Started | 0% |
 | Phase 5 — Extensions | Not Started | 0% |
+
+## Architecture Decisions
+
+### AD-001 — NativeActivity over custom Activity for Slint Android host
+
+**Date:** 2026-06-10
+
+Slint 1.16.1's `backend-android-activity-06` targets `android.app.NativeActivity` (NDK-provided) rather than a custom Java Activity subclass. The entry point is `android_main(app: AndroidApp)`, not a JNI method on a custom Activity. This removes the need for any Java code in the app's Activity layer.
+
+**Consequence:** `SafBridge.init(context)` can no longer be called from `Activity.onCreate()`. Instead it is called from `android_main()` via `saf::init_safe_bridge(app.activity_as_ptr())`, which reads `ANativeActivity.clazz` — the Activity `jobject` — using a stable NDK ABI layout.
+
+### AD-002 — SAF for all external storage; internal storage for settings
+
+**Date:** 2026-06-10
+
+All project file access uses the Android Storage Access Framework (SAF) via `SafBridge`. Settings TOML is stored in `getFilesDir()` (internal storage — no permission required). External storage permissions (`READ_EXTERNAL_STORAGE`, `WRITE_EXTERNAL_STORAGE`) are declared only for API 26–28; API 29+ relies entirely on SAF URI grants from `Intent.ACTION_OPEN_DOCUMENT_TREE`.
+
+### AD-003 — Slint version pinned at 1.16.1 with backend-android-activity-06
+
+**Date:** 2026-06-10
+
+Slint is split into two per-target dependency entries:
+- Desktop: `features = ["backend-winit"]`
+- Android: `features = ["backend-android-activity-06"]`
+
+The `backend-android-activity-06` suffix means the feature targets android-activity crate 0.6.x. This must be updated if android-activity is upgraded to 0.7+.
 
 Last updated: 2026-06-10
