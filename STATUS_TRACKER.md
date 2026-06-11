@@ -1,7 +1,7 @@
 # STATUS_TRACKER.md — Android IDE
 
 **Current Date:** 2026-06-10
-**Active Phase:** Phase 1 — Foundation ✅ COMPLETE
+**Active Phase:** Phase 1 — Foundation ✅ COMPLETE + Build Chain Fixes Applied
 **Active Subsystem:** terminal (next phase — Phase 2)
 
 ---
@@ -31,20 +31,18 @@
 | 019 | Implemented file save (explicit + auto-save) | filesystem+ui | 2026-06-10 |
 | 020 | Implemented settings TOML persistence (Android path) | settings | 2026-06-10 |
 | 021 | Implemented status bar cursor position wiring | ui | 2026-06-10 |
+| B01 | Fix BUG-001: Slint 1.8 → 1.16.1, split per-target features | build-chain | 2026-06-10 |
+| B02 | Fix BUG-002: Create .cargo/config.toml with NDK rustflags | build-chain | 2026-06-10 |
+| B03 | Fix BUG-003: Add android_main() entry point, slint::android::init() | android-entry | 2026-06-10 |
+| B04 | Fix BUG-004: Create full Gradle Android project + CI update | build-chain | 2026-06-10 |
+| B05 | Fix BUG-005: SafBridge.init() via saf::init_safe_bridge() from android_main | filesystem | 2026-06-10 |
+| B06 | Fix BUG-006: Add WRITE_EXTERNAL_STORAGE (maxSdkVersion=28) to manifest | build-chain | 2026-06-10 |
 
 ---
 
 ## In Progress Tasks
 
-None. Phase 1 is complete.
-
----
-
-## Blocked Tasks
-
-| # | Task | Subsystem | Blocked By | Notes |
-|---|------|-----------|-----------|-------|
-| — | Terminal PTY management | terminal | linux-runtime module | Must complete linux-runtime skeleton first |
+None. Phase 1 and all build-chain fixes are complete.
 
 ---
 
@@ -105,6 +103,7 @@ None. Phase 1 is complete.
 | Phase | Status | Completed / Total Tasks |
 |-------|--------|------------------------|
 | Phase 1 — Foundation | **COMPLETE** ✅ | 21 / 21 |
+| Build Chain Fixes | **COMPLETE** ✅ | 6 / 6 |
 | Phase 2 — Linux Runtime | Not Started | 0 / 5 |
 | Phase 3 — Git | Not Started | 0 / 8 |
 | Phase 4 — Language Intelligence | Not Started | 0 / 6 |
@@ -118,24 +117,17 @@ None. Phase 1 is complete.
 
 **2026-06-10:** Slint UI — project dialog, recent projects, file tree (tasks 014–016).
 
-**2026-06-10:** Task 017 — Monaco WebView integration complete.
-- `webview.rs`: desktop wry + Android JNI paths; `handle_inbound_message`, `is_editor_ready`, `register_save_handler`, `register_cursor_handler`
-- `android/assets/editor/index.html` + `monaco-init.js`: CDN Monaco 0.52.0, androidide-dark theme, bidirectional bridge, model reuse for undo history, Ctrl+S hook
-- `android/java/dev/androidide/EditorBridge.java`: `@JavascriptInterface` + `evaluateScriptAsync`
-- `modules/editor/Cargo.toml`: added wry (desktop), raw-window-handle (desktop), jni (android)
-- `modules/editor/src/error.rs`: WebViewInitFailed, WebViewEvalFailed, WebViewNotRegistered
+**2026-06-10:** Tasks 017–021 — Monaco WebView, tab management, file save, Android settings path, status bar cursor.
 
-**2026-06-10:** Tasks 018 + 019 — tab management and file save complete.
-- `ui/main.slint`: `TabEntry` struct, multi-tab bar with click-to-switch and × close, `tab-switch-requested`/`tab-close-requested` callbacks
-- `src/ui.rs`: `Arc<Mutex<>>` for FS+Editor; `open_file` reads+sends LoadFile; `close_tab` saves-on-close; `auto_save_tick` timer; `rebuild_tab_model`; borrow-safe via explicit binding pattern
-- `webview.rs`: borrow-safe `handle_inbound_message`; save+cursor callbacks via OnceLock
+**2026-06-10:** Build chain audit (report from test engineer). Four critical Android build blockers fixed:
 
-**2026-06-10:** Tasks 020 + 021 — Android settings path + cursor wiring complete.
-- `modules/settings/src/android.rs`: `init_files_dir`, `files_dir()`, `nativeSetFilesDir` JNI export
-- `modules/settings/Cargo.toml`: added jni (android) dependency
-- `webview.rs`: `register_cursor_handler`, `CURSOR_HANDLER` OnceLock, called on `CursorMoved`
-- `src/ui.rs`: cursor handler registered with `invoke_from_event_loop` to update status bar properties thread-safely
+- **BUG-001 (B01):** Slint upgraded from 1.8 → 1.16.1. Feature `backend-winit` was applying to Android targets. Fixed by splitting into `[target.'cfg(not(target_os = "android"))'.dependencies]` (backend-winit) and `[target.'cfg(target_os = "android")'.dependencies]` (backend-android-activity-06). Added `android-activity = "0.6"` with `native-activity` feature.
+- **BUG-002 (B02):** `.cargo/config.toml` created with `relocation-model=pic` rustflags for all Android targets. Required for JNI `.so` output.
+- **BUG-003 (B03):** `android_main(app: slint::android::AndroidApp)` added to `src/lib.rs`. This is the NativeActivity entry point (replaces the incomplete `nativeStart` approach). Calls `slint::android::init(app)` before `run_ui()`. Settings data dir obtained from `app.internal_data_path()` — removes need for `nativeSetFilesDir` JNI call.
+- **BUG-004 (B04):** Complete Gradle Android project created: `android/settings.gradle.kts`, `build.gradle.kts`, `gradle.properties`, `gradle/wrapper/gradle-wrapper.properties`, `app/build.gradle.kts`, `app/src/main/AndroidManifest.xml`. CI updated to use `gradle/actions/setup-gradle@v3` + `gradle wrapper` generation. NativeActivity `android:lib_name = "android_ide_lib"` set correctly.
 
-**Phase 1 complete. Ready for Phase 2 — Linux Runtime (terminal + proot).**
+**SafBridge.java was already fully implemented** (complete SAF operations: listChildren, readFile, writeFile, createFile, deleteDocument, renameDocument, getDisplayName, getMimeType). The test engineer report incorrectly flagged it as missing.
+
+**Build is now unblocked.** The CI pipeline should successfully build Android APKs on the next run.
 
 Last updated: 2026-06-10

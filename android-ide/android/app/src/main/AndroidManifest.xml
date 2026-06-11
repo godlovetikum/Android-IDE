@@ -1,0 +1,112 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    android-ide/android/app/src/main/AndroidManifest.xml
+
+    Android manifest for the IDE application.
+
+    Activity model:
+      This app uses android.app.NativeActivity — the standard Android
+      framework Activity that hosts a native (.so) application directly.
+      NativeActivity finds the Rust library via the android.app.lib_name
+      metadata value, which MUST match [lib] name in Cargo.toml.
+
+      Cargo.toml:   [lib]  name = "android_ide_lib"
+      This file:    android:value="android_ide_lib"
+      On disk:      libandroid_ide_lib.so  (built by cargo-ndk)
+
+    Slint entry point:
+      The android-activity crate exports `android_main(app: AndroidApp)` from
+      the .so. NativeActivity calls it on a dedicated thread after the Activity
+      is created and the native window is available.
+
+    Storage permission strategy:
+      The IDE reads AND writes project files. The strategy depends on API level:
+
+        API 26–28 (Android 8–9):
+          Scoped storage did not yet exist. READ + WRITE external storage
+          permissions are required for any access outside internal storage.
+
+        API 29 (Android 10):
+          Scoped storage introduced. WRITE_EXTERNAL_STORAGE has no effect
+          (unless requestLegacyExternalStorage is set, which we do not).
+          The app uses SAF (Storage Access Framework) for all external
+          file access — no manifest permission required for SAF-granted URIs.
+
+        API 30+ (Android 11+):
+          Scoped storage enforced. WRITE_EXTERNAL_STORAGE is completely
+          ignored. All external file access goes through SAF. Internal
+          storage (getFilesDir / getCacheDir) needs no permission.
+
+        API 33+ (Android 13+):
+          READ_EXTERNAL_STORAGE is split into media-specific permissions
+          (READ_MEDIA_IMAGES, etc.). For text files / source code, SAF is
+          the correct approach — no permission needed for SAF-granted URIs.
+
+      Summary: permissions below cover API 26–28 only. API 29+ relies
+      entirely on SAF (Intent.ACTION_OPEN_DOCUMENT_TREE runtime grant).
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+        INTERNET: Required to load Monaco Editor from the unpkg CDN on first
+        launch. Once the WebView caches the Monaco assets, subsequent launches
+        work offline. A future task will bundle Monaco in the APK assets instead.
+    -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!--
+        READ_EXTERNAL_STORAGE (API 26–32 only):
+        Needed for direct std::fs / java.io.File access to external storage on
+        Android 8–12. On API 33+ this permission is split and ignored for
+        non-media file types; SAF handles access without it.
+    -->
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+
+    <!--
+        WRITE_EXTERNAL_STORAGE (API 26–28 only):
+        Needed to write files on external storage on Android 8–9. Deprecated
+        and non-functional on API 29+ — scoped storage / SAF handles writes
+        there. The IDE both reads AND writes project files, so this permission
+        is required for full functionality on older devices (API 26–28).
+    -->
+    <uses-permission
+        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
+
+    <application
+        android:label="Android IDE"
+        android:allowBackup="false"
+        android:supportsRtl="true"
+        android:hardwareAccelerated="true">
+
+        <!--
+            NativeActivity hosts the Slint UI rendered by the Rust layer.
+
+            configChanges: handled natively so the Activity is not recreated
+              on orientation change (Slint re-layouts internally).
+
+            android:exported="true": required for the LAUNCHER intent filter.
+        -->
+        <activity
+            android:name="android.app.NativeActivity"
+            android:label="Android IDE"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:configChanges="orientation|keyboardHidden|screenSize|screenLayout|uiMode|density">
+
+            <!-- MUST match [lib] name in android-ide/Cargo.toml -->
+            <meta-data
+                android:name="android.app.lib_name"
+                android:value="android_ide_lib" />
+
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+    </application>
+
+</manifest>

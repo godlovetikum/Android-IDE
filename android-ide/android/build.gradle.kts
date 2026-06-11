@@ -1,9 +1,9 @@
-plugins {
-    id("com.android.application") version "8.1.2" apply false
-    id("com.android.library") version "8.1.2" apply false
-    kotlin("android") version "1.9.10" apply false
-}
+// android-ide/android/build.gradle.kts
+//
+// Root-level build file. Only applies plugins; all build logic is in :app.
 
-tasks.register("clean", Delete::class) {
-    delete(rootProject.buildDir)
+plugins {
+    // Android Gradle Plugin 8.3.2 — matches compileSdk 34 / Gradle 8.x.
+    // Do not apply here (apply false); :app applies it.
+    id("com.android.application") version "8.3.2" apply false
 }

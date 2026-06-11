@@ -43,6 +43,76 @@ fn vm() -> Result<&'static JavaVM, FilesystemError> {
 }
 
 // ---------------------------------------------------------------------------
+// SafBridge initialization
+// ---------------------------------------------------------------------------
+
+/// Minimal repr(C) mirror of the NDK's ANativeActivity struct — first four
+/// fields only, sufficient to reach the Activity jobject (`clazz`).
+///
+/// The layout is specified by the NDK ABI and has been stable since API 9:
+///   callbacks  — *mut ANativeActivityCallbacks  (pointer-sized)
+///   vm         — *mut JavaVM                    (pointer-sized)
+///   env        — *mut JNIEnv  (main thread)     (pointer-sized)
+///   clazz      — jobject  (the Activity object) (pointer-sized)
+///
+/// References: <android/native_activity.h>  NDK r26 / API 9+
+#[repr(C)]
+struct NativeActivityPartial {
+    _callbacks: *mut std::ffi::c_void,
+    _vm:        *mut std::ffi::c_void,
+    _env:       *mut std::ffi::c_void,
+    clazz:      jni::sys::jobject,
+}
+
+/// Call `SafBridge.init(activity)` via JNI from the ANativeActivity pointer
+/// provided by `android_main`.
+///
+/// This replaces the old `Activity.onCreate() → SafBridge.init(this)` call
+/// that was lost when we switched from a custom Java Activity to NativeActivity.
+///
+/// Must be called:
+///   - After `init_vm()` (i.e. after JNI_OnLoad — always true in android_main)
+///   - Before any filesystem operations that go through SafBridge
+///   - Before `slint::android::init(app)` consumes the AndroidApp
+///
+/// # Safety
+/// `activity_ptr` must be the `ANativeActivity*` from `AndroidApp::activity_as_ptr()`.
+/// The NDK guarantees this pointer is valid for the lifetime of the NativeActivity.
+pub unsafe fn init_safe_bridge(
+    activity_ptr: *mut std::ffi::c_void,
+) -> Result<(), FilesystemError> {
+    if activity_ptr.is_null() {
+        return Err(FilesystemError::Jni(
+            "init_safe_bridge: null ANativeActivity pointer".into(),
+        ));
+    }
+
+    // Read the Activity jobject from ANativeActivity.clazz.
+    // SAFETY: activity_ptr is a valid ANativeActivity* guaranteed by the caller.
+    let native_activity = activity_ptr as *const NativeActivityPartial;
+    let clazz = unsafe { (*native_activity).clazz };
+
+    let vm = vm()?;
+    let env = attach(vm)?;
+    // SAFETY: we own the attach guard; env is valid for this scope.
+    let mut env = unsafe { env.unsafe_clone() };
+
+    // SAFETY: clazz is the Activity jobject, valid for the NativeActivity lifetime.
+    let activity_obj = unsafe { jni::objects::JObject::from_raw(clazz) };
+
+    env.call_static_method(
+        BRIDGE_CLASS,
+        "init",
+        "(Landroid/content/Context;)V",
+        &[JValue::Object(&activity_obj)],
+    )
+    .map_err(|e| FilesystemError::Jni(format!("SafBridge.init JNI call failed: {e}")))?;
+
+    info!("SafBridge initialized via ANativeActivity.clazz");
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 

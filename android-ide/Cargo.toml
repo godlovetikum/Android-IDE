@@ -43,6 +43,8 @@ path = "src/main.rs"
 [lib]
 name = "android_ide_lib"
 path = "src/lib.rs"
+# cdylib for the Android .so; rlib for the desktop binary that links the lib.
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 tokio = { workspace = true }
@@ -51,23 +53,40 @@ serde_json = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 anyhow = { workspace = true }
-# UI framework
-# "backend-qt" on desktop for native rendering; the Android backend is
-# activated by the "backend-android-activity" feature in the APK build profile.
-slint = { version = "=1.16.1", features = ["backend-android-activity-06"] }
 # Modules
 android-ide-filesystem = { path = "modules/filesystem" }
 android-ide-editor    = { path = "modules/editor" }
 android-ide-settings  = { path = "modules/settings" }
 
+# ---------------------------------------------------------------------------
+# Desktop-only dependencies (Linux / macOS / Windows)
+# ---------------------------------------------------------------------------
+# Slint 1.16.1 with the winit backend for X11/Wayland/Metal/WGL.
+# "backend-winit" is required for desktop and does NOT compile for Android.
+[target.'cfg(not(target_os = "android"))'.dependencies]
+slint = { version = "1.16.1", features = ["backend-winit"] }
+
+# ---------------------------------------------------------------------------
+# Android-only dependencies
+# ---------------------------------------------------------------------------
+# Slint 1.16.1 with the android-activity 0.6 backend (stable in Slint 1.10+,
+# production-ready since 1.16). "backend-android-activity-06" replaces the
+# old placeholder comment that incorrectly referenced 1.8's non-existent
+# "backend-android-activity" feature.
+#
+# android-activity provides the NativeActivity entry point (android_main) and
+# the AndroidApp handle used by slint::android::init().
+#
+# Justification for "native-activity" feature:
+#   NativeActivity is the simplest Activity type that works with Slint's
+#   Android backend — no custom Java Activity class needed.
 [target.'cfg(target_os = "android")'.dependencies]
-jni            = { workspace = true }
-android_logger = "0.14"
-android-activity = { version = "0.5", features = ["game-activity"] }
-ndk-sys        = "0.4"
-ndk            = "0.7"
+slint            = { version = "1.16.1", features = ["backend-android-activity-06"] }
+android-activity = { version = "0.6", features = ["native-activity"] }
+jni              = { workspace = true }
+android_logger   = "0.14"
 
 [build-dependencies]
-# slint-build compiles .slint UI files into Rust code at build time.
-# Justification: mandatory build step for any project using the Slint UI toolkit.
+# slint-build must match the slint runtime version exactly.
+# Compiles .slint UI files into Rust at build time.
 slint-build = "1.16.1"

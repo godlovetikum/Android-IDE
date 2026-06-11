@@ -15,6 +15,18 @@
 ///   save handler (registered via webview::register_save_handler) can be
 ///   Send+Sync, enabling it to be called from the Android JNI background thread.
 ///   All Slint callbacks run on the main event-loop thread.
+///
+/// Android initialization contract:
+///   `run_ui_loop()` MUST be called after `slint::android::init(app)` on Android.
+///   This is guaranteed by `android_main()` in src/lib.rs, which calls
+///   `slint::android::init()` before `crate::run_ui()`. Never call run_ui_loop()
+///   from a JNI function — only from android_main() after Slint is initialized.
+///
+///   Platform-specific behaviour at runtime:
+///   - `MainWindow::new()`: works on both platforms after Slint init
+///   - `window.run()`: blocks on desktop; integrates with NativeActivity looper on Android
+///   - WebView (wry): desktop only — gated with #[cfg(not(target_os = "android"))]
+///   - `send_to_editor()`: Android WebView path — gated with #[cfg(target_os = "android")]
 
 slint::include_modules!();
 
@@ -39,28 +51,14 @@ use android_ide_settings::SettingsManager;
 /// Create the MainWindow, wire all callbacks, and run the Slint event loop.
 /// Blocks until the window is closed.
 pub fn run_ui_loop() -> anyhow::Result<()> {
-    #[cfg(target_os = "android")]
-    {
-        // On Android, delegate to the Activity-driven UI initialization
-        // The Activity will create the window and call wire_callbacks
-        return android_ui_loop();
-    }
-
-    #[cfg(not(target_os = "android"))]
-    {
-        // On desktop, create window and run event loop directly
-        return desktop_ui_loop();
-    }
-}
-
-/// Desktop UI initialization — creates and runs the Slint window
-#[cfg(not(target_os = "android"))]
-fn desktop_ui_loop() -> anyhow::Result<()> {
-    // Shared subsystem instances
+    // Shared subsystem instances — Arc<Mutex<>> so the save handler can be Send.
     let fs     = Arc::new(Mutex::new(FilesystemManager::new()?));
     let editor = Arc::new(Mutex::new(EditorManager::new()));
 
-    // Register save handler (task 019)
+    // --- Register save handler (task 019) ------------------------------------
+    // Runs on possibly a background thread (Android JNI) or main thread (desktop).
+    // On success: mark_clean is already called by handle_inbound_message before
+    // this handler is invoked. On failure: re-dirty the tab and re-buffer content.
     {
         let fs_save     = Arc::clone(&fs);
         let editor_save = Arc::clone(&editor);
@@ -71,6 +69,7 @@ fn desktop_ui_loop() -> anyhow::Result<()> {
                     Ok(_) => info!(path, "File saved"),
                     Err(e) => {
                         error!(path, "Save failed: {e}");
+                        // Put the content back so the next save cycle can retry
                         if let Ok(mut mgr) = editor_save.lock() {
                             if let Some(tab) = mgr.tab_by_path(&path).cloned() {
                                 mgr.mark_dirty(&tab.id);
@@ -95,7 +94,11 @@ fn desktop_ui_loop() -> anyhow::Result<()> {
 
     wire_callbacks(&window, Rc::clone(&app));
 
-    // Cursor position callback (task 021)
+    // --- Cursor position callback (task 021) ---------------------------------
+    // On Android this fires on the WebView background thread; invoke_from_event_loop
+    // schedules the Slint property update onto the main event-loop thread.
+    // On desktop (wry) the IPC callback is already main-thread, but
+    // invoke_from_event_loop is safe to call from any thread.
     {
         let window_weak = window.as_weak();
         webview::register_cursor_handler(move |line, col| {
@@ -109,7 +112,10 @@ fn desktop_ui_loop() -> anyhow::Result<()> {
         });
     }
 
-    // Auto-save timer (task 019)
+    // --- Auto-save timer (task 019) ------------------------------------------
+    // Runs every auto_save_delay_ms on the main thread.
+    // Checks each dirty tab for pending content and triggers a save via the
+    // registered save handler through the Monaco bridge.
     {
         let delay_ms = app.borrow().settings.get().editor.auto_save_delay_ms;
         let fs_auto  = Arc::clone(&fs);
@@ -123,26 +129,14 @@ fn desktop_ui_loop() -> anyhow::Result<()> {
                 auto_save_tick(&fs_auto, &ed_auto);
             },
         );
+        // Keep timer alive for the session — leak intentionally (single process).
         std::mem::forget(timer);
     }
 
+    // Restore settings into the window
     app.borrow_mut().restore_ui_state(&window);
-    window.run()?;
-    Ok(())
-}
 
-/// Android UI initialization — called from JNI after Activity is ready
-/// TODO(task-014 follow-up): Complete Android integration with android-activity crate
-#[cfg(target_os = "android")]
-fn android_ui_loop() -> anyhow::Result<()> {
-    // On Android, Slint + android-activity will create the window via the Activity.
-    // This is a placeholder; full integration requires:
-    //   1. MainActivity to inherit from android_activity::AndroidApp
-    //   2. Use slint::android::init() to initialize the Slint runtime
-    //   3. Create MainWindow within the Activity event loop
-    //
-    // For now, this prevents the desktop code from running on Android.
-    tracing::warn!("Android UI loop not yet implemented; returning");
+    window.run()?;
     Ok(())
 }
 
