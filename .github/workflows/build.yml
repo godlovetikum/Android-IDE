@@ -147,14 +147,19 @@ jobs:
             echo "To enable release signing, add KEYSTORE_BASE64, KEYSTORE_PASSWORD,"
             echo "KEY_ALIAS, and KEY_PASSWORD to repo Settings → Secrets → Actions."
           fi
-
+          
+      - name: Restore release keystore
+        if: ${{ secrets.KEYSTORE_BASE64 != '' }}
+        working-directory: android-ide/android
+        run: |
+          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > release.keystore
+    
       # Pass the four signing secrets as environment variables.
       # Gradle's signingConfigs.release block reads these at configuration time.
       # When any variable is empty/absent, Gradle falls back to the debug keystore.
       - name: Build release APK
         working-directory: android-ide/android
         env:
-          KEYSTORE_BASE64:    ${{ secrets.KEYSTORE_BASE64 }}
           KEYSTORE_PASSWORD:  ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS:          ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD:       ${{ secrets.KEY_PASSWORD }}

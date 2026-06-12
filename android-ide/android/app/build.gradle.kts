@@ -88,31 +88,27 @@ android {
         }
 
         create("release") {
-            val b64   = System.getenv("KEYSTORE_BASE64")
             val spwd  = System.getenv("KEYSTORE_PASSWORD")
             val alias = System.getenv("KEY_ALIAS")
             val kpwd  = System.getenv("KEY_PASSWORD")
-
-            if (b64 != null && spwd != null && alias != null && kpwd != null) {
-                // Decode the base64 keystore into the build directory.
-                // The build directory is .gitignored and cleaned by `clean`.
-                val ksFile = layout.buildDirectory.file("signing/release.keystore").get().asFile
-                ksFile.parentFile.mkdirs()
-                ksFile.writeBytes(java.util.Base64.getDecoder().decode(b64))
-                storeFile     = ksFile
+        
+            val releaseKeystore = file("${rootDir}/release.keystore")
+        
+            if (
+                releaseKeystore.exists() &&
+                spwd != null &&
+                alias != null &&
+                kpwd != null
+            ) {
+                storeFile = releaseKeystore
                 storePassword = spwd
-                keyAlias      = alias
-                keyPassword   = kpwd
+                keyAlias = alias
+                keyPassword = kpwd
             } else {
-                // ── Fallback: debug keystore ────────────────────────────────
-                // Release secrets not configured → sign with the debug keystore.
-                // The resulting APK is installable on any device with USB
-                // debugging or "Install from unknown sources" enabled.
-                // NOT suitable for Play Store submission.
-                storeFile     = file("${System.getProperty("user.home")}/.android/debug.keystore")
+                storeFile = file("${System.getProperty("user.home")}/.android/debug.keystore")
                 storePassword = "android"
-                keyAlias      = "androiddebugkey"
-                keyPassword   = "android"
+                keyAlias = "androiddebugkey"
+                keyPassword = "android"
             }
         }
     }
