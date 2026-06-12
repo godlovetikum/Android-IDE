@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    android-ide/android/app/src/main/res/values/colors.xml
+
+    Application colour resources.
+
+    ic_launcher_background: dark IDE background colour used as the solid fill
+    for the adaptive icon's background layer. Matches the IDE's editor
+    background (#1e1e1e) so the icon feels at home on device home screens.
+-->
+<resources>
+    <color name="ic_launcher_background">#1e1e1e</color>
+</resources>

@@ -111,6 +111,109 @@ Future contributors must be able to understand previous mistakes without redisco
 
 ---
 
+### BUG-A — CI Android build panics: "No Android platforms found"
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-06-11 |
+| **Subsystem** | ci / build-chain |
+| **Issue** | CI job "Build Android (arm64-v8a)" fails during `cargo ndk ... build --release` with: `thread 'main' panicked at i-slint-backend-android-activity-1.16.1/build.rs:33: No Android platforms found` |
+| **Root Cause** | `i-slint-backend-android-activity`'s build script scans `$ANDROID_HOME/platforms/` for `android-<N>/android.jar` to determine the SDK API level at compile time. The CI "Install NDK" step only ran `sdkmanager "ndk;26.3.11579264"` — installing the NDK but NOT the Android platform package (`platforms;android-34`). The `android-actions/setup-android@v3` step installed only `tools platform-tools` by default. So `$ANDROID_HOME/platforms/` was empty and the build script panicked. |
+| **Files Modified** | `.github/workflows/build.yml` (both Android build jobs) |
+| **Solution** | Changed the "Install NDK" step (renamed "Install NDK and Android platform") to install both: `sdkmanager "ndk;..." "platforms;android-34"`. Also exports `ANDROID_PLATFORM=$ANDROID_SDK_ROOT/platforms/android-34` as an env var so the Slint build script can use it directly without scanning. Applied to both `build-android` and `build-android-x86` jobs. |
+| **Prevention** | Whenever a Slint Android build is added to CI, always install both the NDK AND the matching `platforms;android-<targetSdk>` SDK package. The Slint Android backend build script requires `android.jar` from the platform package — it does NOT use the NDK's `android.jar`. |
+| **Notes** | Secondary observation: `ANDROID_NDK_HOME` (set to NDK 26) differed from the runner's pre-installed `ANDROID_NDK_ROOT` (NDK 27). This caused a warning but was not the fatal error. The platform package was the sole cause of the panic. |
+
+---
+
+### BUG-B — CI Check & Lint fails: "Package glib-2.0 was not found"
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-06-11 |
+| **Subsystem** | ci / build-chain |
+| **Issue** | CI job "Check & Lint" fails on the Clippy step (and would also fail on Build/Test steps) with: `The system library 'glib-2.0' required by crate 'glib-sys' was not found.` |
+| **Root Cause** | `cargo clippy --all-targets` and `cargo build --all` compile the host (Linux x86_64) target. The `editor` module declares `wry = "0.46"` for non-Android targets. `wry` on Linux requires WebKit2GTK 4.1 (`libwebkit2gtk-4.1-dev`) and GLib (`libglib2.0-dev`) — GTK3 system libraries that are NOT pre-installed on the `ubuntu-latest` GitHub Actions runner. The `glib-sys` build script calls `pkg-config --libs --cflags glib-2.0` and fails because no `.pc` file is present. |
+| **Files Modified** | `.github/workflows/build.yml` (check job) |
+| **Solution** | Added a "Install Linux system dependencies" step in the `check` job, placed before the first `cargo` compile step. Installs: `libgtk-3-dev libwebkit2gtk-4.1-dev libglib2.0-dev libayatana-appindicator3-dev librsvg2-dev`. These packages satisfy all transitive system library requirements of `wry 0.46` on Ubuntu 22.04. |
+| **Prevention** | Any CI job that compiles a crate with `wry` (or any GTK/WebKit-backed crate) on a Linux runner must install the GTK3 + WebKit2GTK development packages first. Add this step whenever `wry`, `webkit2gtk`, or any GTK-dependent crate is added to the desktop dependency tree. |
+| **Notes** | The `cargo fmt` steps do not compile and are not affected. All three compile steps (Clippy, Build, Test) in the `check` job fail with the same root cause — the system dependencies step must precede all of them. |
+
+---
+
+### BUG-C — APK has no launcher icon — blank icon on home screen
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-06-11 |
+| **Subsystem** | android / build-chain |
+| **Issue** | APK installs and launches successfully but shows a blank/default icon on the Android home screen launcher. No `android:icon` attribute was set in the manifest `<application>` element and no icon resources existed. |
+| **Root Cause** | The `AndroidManifest.xml` `<application>` element had no `android:icon` or `android:roundIcon` attributes. No `res/` directory existed under `app/src/main/` — no mipmap or drawable resources of any kind were present. |
+| **Files Modified** | `android/app/src/main/AndroidManifest.xml`, `android/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml`, `android/app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml`, `android/app/src/main/res/drawable/ic_launcher_foreground.xml`, `android/app/src/main/res/values/colors.xml` |
+| **Solution** | Added `android:icon="@mipmap/ic_launcher"` and `android:roundIcon="@mipmap/ic_launcher_round"` to the `<application>` element. Created adaptive icon resources: mipmap XML files pointing to a vector "A" monogram foreground (VS-Code blue #007ACC) on a dark IDE background (#1e1e1e). Since `minSdk = 26`, only the `mipmap-anydpi-v26/` bucket is needed — adaptive icons are supported on all target devices. |
+| **Prevention** | Always add `android:icon` to the `<application>` element and create at least the `mipmap-anydpi-v26/` icon resources when creating a new Android project. Without an icon, the APK cannot be considered production-ready. |
+| **Notes** | `fillType="evenOdd"` on the vector path creates the aperture (inner hole) in the "A" letterform. This attribute requires `minSdk >= 24` (Android 7.0), which is satisfied since `minSdk = 26`. |
+
+---
+
+### BUG-D — `modules/git` in workspace members but directory does not exist
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-06-11 |
+| **Subsystem** | build-chain |
+| **Issue** | `cargo build` (any target) aborts immediately with `error: no such file or directory: modules/git` before any Rust code is compiled. |
+| **Root Cause** | `Cargo.toml` listed `"modules/git"` in `[workspace] members`. Cargo resolves all workspace members at startup and panics if a member directory or its `Cargo.toml` does not exist. The `modules/git` package is planned for Phase 3 but was never created. |
+| **Files Modified** | `Cargo.toml` |
+| **Solution** | Removed `"modules/git"` from `[workspace] members`. Also commented out `git2 = "0.19"` from `[workspace.dependencies]` since nothing in the current workspace depends on it. A note was added explaining that `modules/git` must be created (directory + `Cargo.toml`) before being re-added to members. |
+| **Prevention** | Never add a workspace member before its `Cargo.toml` exists. If a module is planned but not yet implemented, keep it out of the workspace `members` list until at least a stub `Cargo.toml` + `src/lib.rs` are committed. |
+
+---
+
+### BUG-E — `scaffold_project` concatenates `/filename` onto SAF tree URIs
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-06-11 |
+| **Subsystem** | filesystem / ui |
+| **Issue** | Creating a new project on Android succeeds at creating the directory but all scaffold files (Cargo.toml, main.rs, etc.) are silently not written. The new project directory is empty on device. |
+| **Root Cause** | `scaffold_project()` in `src/ui.rs` called `fs.create_file(root, "Cargo.toml", ...)` (which returns the new SAF document URI) but discarded the return value, then called `fs.write_file(&format!("{root}/Cargo.toml"), ...)`. On Android, `root` is a SAF tree URI (`content://...`). Appending `/Cargo.toml` to a SAF tree URI produces a string that is not a valid document URI — `SafBridge.writeFile()` receives it, attempts to open it as a `content://` URI, and gets `IllegalArgumentException` from the ContentResolver. The exception is caught and `false` is returned, which `saf::write_file` maps to `FilesystemError::Io`. On desktop `root` is a real filesystem path so slash-concatenation worked correctly there. |
+| **Files Modified** | `src/ui.rs` |
+| **Solution** | Captured the `Result<String>` returned by `create_file()` in a variable (e.g. `let toml_uri = fs.create_file(...)?`) and passed it to `write_file(&toml_uri, ...)`. Applied to all five project types: Rust, Kotlin, Python, C/C++, Generic. On desktop `create_file()` returns the full filesystem path, so the fix is backward-compatible. |
+| **Prevention** | SAF document URIs are opaque. NEVER construct a child document URI by concatenating a parent URI with `/filename`. Always use the URI returned by `createDocument()` / `create_file()` for subsequent operations on that document. |
+| **Notes** | `FilesystemManager::create_file()` already correctly returns the document URI on Android (via `saf::create_document`) and the filesystem path on desktop. The bug was purely in the call site discarding that return value. |
+
+---
+
+### BUG-F — Monaco editor required internet connection — offline use impossible
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-06-11 |
+| **Subsystem** | editor / build-chain |
+| **Issue** | On a device or emulator without internet access, the editor WebView shows "Loading editor…" indefinitely. Monaco fails to load because it is fetched from the unpkg CDN at runtime. |
+| **Root Cause** | `index.html` had `<script src="https://unpkg.com/monaco-editor@0.52.0/min/vs/loader.js">` and `monaco-init.js` had `require.config({ paths: { vs: 'https://unpkg.com/monaco-editor@0.52.0/min/vs' } })`. Both URLs point to the unpkg CDN. Any network failure (offline device, slow connection, CDN outage) prevents Monaco from loading at all. |
+| **Files Modified** | `android/assets/editor/index.html`, `android/assets/editor/monaco-init.js`, `scripts/fetch-monaco.sh` (created), `.gitignore` (created), `.github/workflows/build.yml` (both Android build jobs) |
+| **Solution** | Changed both files to use relative local paths (`vs/loader.js` and `vs` respectively). Created `scripts/fetch-monaco.sh` to download Monaco 0.52.0 from npm (`npm install monaco-editor@0.52.0 --prefix /tmp/monaco`) and copy `min/vs/` to `android/assets/editor/vs/`. Added `android/assets/editor/vs/` to `.gitignore` (~20 MB, not committed). Added "Bundle Monaco editor" step to both Android CI build jobs to run the script before `./gradlew`. |
+| **Prevention** | Never load runtime assets from a CDN in a mobile app. Bundle all required JS/CSS assets in the APK. Add download scripts to CI and document the local setup steps. Add `vs/` (or equivalent generated dirs) to `.gitignore` immediately when adopting this pattern. |
+| **Notes** | The npm `--no-save` `--ignore-scripts` flags prevent modifying the workspace and skip potentially unsafe post-install hooks. The script is idempotent — it exits early if `vs/loader.js` already exists. Monaco version is pinned in the script; upgrading requires changing `MONACO_VERSION` in `fetch-monaco.sh`. |
+
+---
+
+### BUG-G — Dead JNI export `nativeSetFilesDir` referenced nonexistent `MainActivity`
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-06-11 |
+| **Subsystem** | settings / android-entry |
+| **Issue** | `modules/settings/src/android.rs` contained a `mod jni_exports` block exporting `Java_dev_androidide_MainActivity_nativeSetFilesDir`. This JNI function requires a `dev.androidide.MainActivity` Java class to call it, but no such class exists — the app uses `android.app.NativeActivity`. The export compiled into the `.so` but was unreachable dead code. |
+| **Root Cause** | The JNI export was designed for the original custom-Activity architecture (BUG-003). When the entry point was changed to `android_main()` + `NativeActivity`, the settings data dir moved to `app.internal_data_path()` (direct Rust call, no JNI). The `mod jni_exports` block was not removed at the same time. |
+| **Files Modified** | `modules/settings/src/android.rs` |
+| **Solution** | Removed the `mod jni_exports` block entirely. Updated the module-level doc to describe the actual initialization flow: `android_main()` → `app.internal_data_path()` → `android::init_files_dir()`. The `init_files_dir()` and `files_dir()` functions are kept — they are still called from `android_main`. |
+| **Prevention** | When changing the Android entry-point model, grep for `Java_dev_androidide_MainActivity_native*` JNI exports and remove any that are no longer reachable. |
+
+---
+
 ## Architectural Corrections
 
 ### AC-001 — Slint Android entry point model changed (1.8 placeholder → 1.16 production)
@@ -131,6 +234,41 @@ Future contributors must be able to understand previous mistakes without redisco
 
 ---
 
+### BUG-H — Monaco WebView unreachable on Android — IDEActivity architectural fix
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-06-11 |
+| **Subsystem** | editor / android-entry |
+| **Issue** | On Android, every call to `send_to_editor()` returned `Err(WebViewNotRegistered)`. The `WEBVIEW_SENDER` in `webview.rs` was populated by `Java_dev_androidide_MainActivity_nativeRegisterEditorWebView` — a JNI export that required a `dev.androidide.MainActivity` class. No such class existed; the app used `android.app.NativeActivity` directly. Files could be opened (Slint tab bar updated) but Monaco received no `LoadFile` messages and the editor area was empty on device. |
+| **Root Cause** | OPEN-001: NativeActivity's native Surface is behind all Android Java Views. A `WebView` — a Java View — cannot be overlaid on a NativeActivity surface from Rust alone. The previous design required a custom Java Activity to create and register the WebView, but that Activity (`MainActivity`) was removed when the entry point changed to NativeActivity + `android_main`. The `nativeRegisterEditorWebView` JNI export was never reachable. |
+| **Files Modified** | `android/java/dev/androidide/IDEActivity.java` (created), `android/app/src/main/AndroidManifest.xml`, `modules/editor/src/webview.rs`, `src/lib.rs` |
+| **Solution** | Implemented Option 2 (custom hybrid Activity): Created `IDEActivity extends NativeActivity` in `android/java/dev/androidide/IDEActivity.java`. Key design points: (1) extends NativeActivity so Slint's android-activity 0.6 backend is unchanged; (2) `onCreate()` calls `super.onCreate()` (loads `.so`) then `setupEditorOverlay()` which creates a `FrameLayout` overlay via `getWindow().addContentView()` — Java Views always composite above the native Surface; (3) the overlay contains a `LinearLayout` with `mEditorWebView` (Monaco, always visible) and `mPreviewWebView` (hidden until `showPreview()` called) for side-by-side edit+preview; (4) overlay is positioned with margins to reveal Slint's chrome (app bar, sidebar, tab bar, status bar) in the uncovered areas. WebView registration uses a PULL design: `android_main()` calls `webview::android::init_webview_from_activity()` (step 5 of init sequence), which calls `IDEActivity.getInstance().getEditorWebView()` via JNI and stores the `GlobalRef` in `WEBVIEW_SENDER`. This is race-free: `android_main()` runs in the native thread started by `onStart()`, which is always called after `onCreate()` completes. Added `saf::get_vm()` to expose the stored `JavaVM` for use by `init_webview_from_activity()`. Added `webview::android::show_preview(url)`, `hide_preview()`, and `adjust_editor_bounds()` Rust functions that call the matching static Java methods via JNI. Manifest changed from `android.app.NativeActivity` to `dev.androidide.IDEActivity`. |
+| **Prevention** | When using NativeActivity + Slint, any Java View (WebView, custom UI) must be created in a NativeActivity subclass via `getWindow().addContentView()`. Java Views always layer above the native Surface — this is how Android's compositing works. NEVER try to create a WebView from Rust/JNI and attach it directly to the native Surface. Always extend NativeActivity rather than replacing it, to preserve the android-activity backend contract. |
+| **Notes** | AD-004 (IDEActivity design decision) added to PROJECT_PLAN.md. The `saf.rs` tracing import was also corrected in this session: `info!` was used on line 112 but not imported in `use tracing::{debug, warn}` — fixed to `use tracing::{debug, info, warn}`. |
+
+---
+
+### BUG-I — Tab ID collision risk: SystemTime stub replaced with UUID v4
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-06-11 |
+| **Subsystem** | editor |
+| **Issue** | OPEN-002: `uuid_v4()` in `modules/editor/src/tab.rs` used `SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()` formatted as hex. `SystemTime` is not monotonic; rapid tab opens (e.g. opening multiple files from the file tree) could yield duplicate IDs. Duplicate tab IDs caused `EditorManager::tab_by_id()` to return the wrong tab and `close_tab()` to close the wrong file. |
+| **Root Cause** | The `uuid_v4()` stub was documented as a placeholder (see OPEN-002 note in previous DEBUG_LOG). The `uuid` crate was not yet a dependency. |
+| **Files Modified** | `modules/editor/src/tab.rs`, `modules/editor/Cargo.toml`, `Cargo.toml` (workspace) |
+| **Solution** | Added `uuid = { version = "1", features = ["v4"] }` to workspace `[workspace.dependencies]` in root `Cargo.toml`. Declared `uuid = { workspace = true }` in `modules/editor/Cargo.toml`. Replaced the `uuid_v4()` stub function entirely: `EditorTab::new()` now calls `uuid::Uuid::new_v4().to_string()` directly. The `uuid` crate uses OS entropy (`/dev/urandom` on Android via `getrandom`) and is collision-proof in practice (2^122 random bits per ID). |
+| **Prevention** | Never use `SystemTime` for ID generation. IDs require uniqueness, not time — use a dedicated UUID crate or an atomic counter. |
+
+---
+
+## Known Open Issues
+
+_No open issues after 2026-06-11 session._
+
+---
+
 ## Failed Design Decisions
 
 ### FD-001 — nativeStart() as primary Android entry point
@@ -143,4 +281,4 @@ Future contributors must be able to understand previous mistakes without redisco
 
 ---
 
-Last updated: 2026-06-10
+Last updated: 2026-06-11

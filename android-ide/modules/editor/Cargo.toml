@@ -10,6 +10,11 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 anyhow = { workspace = true }
+# uuid: used for generating collision-free tab IDs (UUID v4, cryptographically random).
+# Justification: the previous SystemTime-based stub could produce duplicate IDs when
+# two tabs were opened within the same nanosecond. uuid crate uses OS entropy (/dev/urandom
+# on Android) and is collision-proof in practice. See modules/editor/README.md.
+uuid = { workspace = true }
 android-ide-filesystem = { path = "../filesystem" }
 android-ide-settings   = { path = "../settings" }
 

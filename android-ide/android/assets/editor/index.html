@@ -12,6 +12,13 @@
   Message types (matching bridge.rs):
     Rust → JS:  loadFile, setTheme, setFontSize, requestSave, closeTab
     JS → Rust:  ready, contentChanged, cursorMoved, fileSaved
+
+  Monaco bundle:
+    Loaded from vs/loader.js — the bundled AMD files in the same directory.
+    On Android: file:///android_asset/editor/vs/loader.js
+    On desktop: file:///path/to/assets/editor/vs/loader.js
+    Version: 0.52.0 (pinned in scripts/fetch-monaco.sh)
+    To upgrade: update MONACO_VERSION in scripts/fetch-monaco.sh.
 -->
 <html lang="en">
 <head>
@@ -38,11 +45,12 @@
   <div id="editor-root"></div>
 
   <!--
-    Monaco Editor via AMD loader.
-    Using a fixed version (0.52.x) for reproducibility; upgrade deliberately.
-    The vs/loader.js bootstraps the require() call below.
+    Monaco Editor AMD loader — served from the bundled vs/ directory.
+    Do NOT replace this with a CDN URL: the APK must work offline.
+    The vs/ directory is populated by scripts/fetch-monaco.sh during CI
+    and must be downloaded locally before running a desktop dev build.
   -->
-  <script src="https://unpkg.com/monaco-editor@0.52.0/min/vs/loader.js"></script>
+  <script src="vs/loader.js"></script>
   <script src="monaco-init.js"></script>
 </body>
 </html>

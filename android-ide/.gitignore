@@ -1,0 +1,24 @@
+# ── Rust build output ────────────────────────────────────────────────────────
+/target/
+**/*.rs.bk
+*.pdb
+
+# ── Downloaded / generated assets ────────────────────────────────────────────
+# Monaco Editor AMD bundle — downloaded by scripts/fetch-monaco.sh.
+# Not committed: ~20 MB of minified JS. Regenerate with:
+#   bash scripts/fetch-monaco.sh
+android/assets/editor/vs/
+
+# ── Android Gradle build outputs ─────────────────────────────────────────────
+android/app/build/
+android/.gradle/
+android/gradle/wrapper/gradle-wrapper.jar
+
+# ── IntelliJ / Android Studio ────────────────────────────────────────────────
+.idea/
+*.iml
+local.properties
+
+# ── npm temp installs (used only by fetch-monaco.sh) ─────────────────────────
+node_modules/
+package-lock.json

@@ -7,8 +7,9 @@
 ///
 /// Initialization sequence (must happen in this order):
 ///   1. JVM calls JNI_OnLoad → `saf::init_vm(vm)` stores the JavaVM globally
-///   2. Android Activity onCreate() → calls SafBridge.init(this) on the Java side
-///   3. FilesystemManager is now usable; SAF operations can proceed
+///   2. `android_main()` captures `activity_ptr` from `AndroidApp` (before slint init consumes it)
+///   3. `android_main()` → `saf::init_safe_bridge(activity_ptr)` → `SafBridge.init(activity)` via JNI
+///   4. FilesystemManager is now usable; SAF operations can proceed
 ///
 /// Dependencies:
 ///   jni = "0.21" — JNI bindings, Android target only.
@@ -19,7 +20,7 @@ use jni::objects::{JByteArray, JString, JValue};
 use jni::JavaVM;
 use serde::Deserialize;
 use std::sync::OnceLock;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 use crate::error::FilesystemError;
 use crate::tree::{FileKind, FileNode};
@@ -36,6 +37,18 @@ pub fn init_vm(vm: JavaVM) {
     if JAVA_VM.set(vm).is_err() {
         warn!("JavaVM already initialized — duplicate init_vm call ignored");
     }
+}
+
+/// Return a reference to the stored JavaVM.
+///
+/// Used by other Android modules (e.g. `editor::webview::android`) that need
+/// to make JNI calls but share the VM stored during `JNI_OnLoad` rather than
+/// managing their own reference.
+///
+/// Returns `None` if `init_vm()` has not yet been called (should not happen
+/// after `JNI_OnLoad` fires; treat as a fatal precondition failure).
+pub fn get_vm() -> Option<&'static JavaVM> {
+    JAVA_VM.get()
 }
 
 fn vm() -> Result<&'static JavaVM, FilesystemError> {

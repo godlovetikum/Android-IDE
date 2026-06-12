@@ -271,6 +271,14 @@ impl AppState {
     fn scaffold_project(&mut self, root: &str, name: &str, project_type: &str) -> anyhow::Result<()> {
         let fs = self.fs.lock().map_err(|e| anyhow::anyhow!("FS lock: {e}"))?;
 
+        // IMPORTANT — SAF URI contract:
+        //   On Android, `root` is a SAF tree URI (content://...), not a filesystem
+        //   path. `create_file()` and `create_directory()` return the new document's
+        //   URI. That returned URI must be passed directly to `write_file()`.
+        //   DO NOT concatenate `{root}/filename` — that produces an invalid URI on
+        //   Android (the provider will reject it with IllegalArgumentException).
+        //   On desktop `create_file()` returns the full filesystem path, so the same
+        //   pattern works on both platforms.
         match project_type {
             "Rust" => {
                 let cargo_toml = format!(
@@ -279,30 +287,30 @@ impl AppState {
                 );
                 let src_dir = fs.create_directory(root, "src")?;
                 let main_rs = "fn main() {\n    println!(\"Hello, world!\");\n}\n";
-                fs.create_file(root, "Cargo.toml", Some("application/toml"))?;
-                fs.write_file(&format!("{root}/Cargo.toml"), &cargo_toml)?;
-                fs.create_file(&src_dir, "main.rs", Some("text/x-rust"))?;
-                fs.write_file(&format!("{src_dir}/main.rs"), main_rs)?;
+                let toml_uri = fs.create_file(root, "Cargo.toml", Some("application/toml"))?;
+                fs.write_file(&toml_uri, &cargo_toml)?;
+                let main_rs_uri = fs.create_file(&src_dir, "main.rs", Some("text/x-rust"))?;
+                fs.write_file(&main_rs_uri, main_rs)?;
             }
             "Kotlin (Android)" => {
                 let src = format!("fun main() {{\n    println(\"Hello from {name}!\")\n}}\n");
-                fs.create_file(root, "Main.kt", Some("text/x-kotlin"))?;
-                fs.write_file(&format!("{root}/Main.kt"), &src)?;
+                let kt_uri = fs.create_file(root, "Main.kt", Some("text/x-kotlin"))?;
+                fs.write_file(&kt_uri, &src)?;
             }
             "Python" => {
                 let src = format!("# {name}\n\ndef main():\n    print(\"Hello, world!\")\n\nif __name__ == \"__main__\":\n    main()\n");
-                fs.create_file(root, "main.py", Some("text/x-python"))?;
-                fs.write_file(&format!("{root}/main.py"), &src)?;
+                let py_uri = fs.create_file(root, "main.py", Some("text/x-python"))?;
+                fs.write_file(&py_uri, &src)?;
             }
             "C/C++" => {
                 let src = "#include <stdio.h>\n\nint main(void) {\n    printf(\"Hello, world!\\n\");\n    return 0;\n}\n";
-                fs.create_file(root, "main.c", Some("text/x-c"))?;
-                fs.write_file(&format!("{root}/main.c"), src)?;
+                let c_uri = fs.create_file(root, "main.c", Some("text/x-c"))?;
+                fs.write_file(&c_uri, src)?;
             }
             _ => {
                 let readme = format!("# {name}\n\nA new project.\n");
-                fs.create_file(root, "README.md", Some("text/markdown"))?;
-                fs.write_file(&format!("{root}/README.md"), &readme)?;
+                let readme_uri = fs.create_file(root, "README.md", Some("text/markdown"))?;
+                fs.write_file(&readme_uri, &readme)?;
             }
         }
         Ok(())

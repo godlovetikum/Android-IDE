@@ -6,17 +6,22 @@
 // is obtained from a WeakReference<Context> stored at init() time.
 //
 // Initialization:
-//   Call SafBridge.init(context) from your Activity's onCreate() BEFORE any
-//   native IDE operations begin. A good pattern:
+//   SafBridge.init(context) is called from Rust via JNI inside
+//   saf::init_safe_bridge(activity_ptr) in modules/filesystem/src/saf.rs.
+//   This happens during android_main() — BEFORE slint::android::init() —
+//   so it is always initialized before any filesystem operation begins.
 //
-//     public class MainActivity extends AppCompatActivity {
-//         @Override
-//         protected void onCreate(Bundle savedInstanceState) {
-//             super.onCreate(savedInstanceState);
-//             SafBridge.init(this);          // <-- must be first
-//             nativeStart();                 // <-- then start the Rust layer
-//         }
-//     }
+//   Initialization sequence (enforced by android_main in src/lib.rs):
+//     1. JNI_OnLoad → saf::init_vm(vm)               (JavaVM stored globally)
+//     2. android_main captures activity_ptr from AndroidApp
+//     3. android_main → saf::init_safe_bridge(activity_ptr)
+//                     → SafBridge.init(activity) via JNI  ← this class
+//     4. slint::android::init(app)
+//     5. run_ui() → FilesystemManager operations can now proceed
+//
+//   Do NOT call SafBridge.init() from Java — it is called exclusively from
+//   Rust via JNI. There is no custom Java Activity in this app; the entry
+//   point is android_main() in the android_ide_lib.so NativeActivity binary.
 //
 // SAF URI shapes:
 //   Tree URI:     content://com.android.externalstorage.documents/tree/primary%3AMyProject
@@ -58,7 +63,9 @@ public final class SafBridge {
 
     /**
      * Store the application context for later ContentResolver access.
-     * Must be called from Activity.onCreate() before any IDE file operations.
+     *
+     * Called from Rust via saf::init_safe_bridge() during android_main().
+     * Do NOT call this from Java — initialization is managed by the Rust layer.
      */
     public static void init(Context context) {
         sContextRef = new WeakReference<>(context.getApplicationContext());

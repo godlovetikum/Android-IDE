@@ -38,11 +38,23 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-check-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-check-
-      
-      - name: Format code 
+
+      # wry (used by the desktop editor module) requires GTK3 + WebKit2GTK headers.
+      # Without these the glib-sys build script fails with "Package glib-2.0 was not found".
+      - name: Install Linux system dependencies (GTK3 / WebKit2GTK for desktop wry build)
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
+            libglib2.0-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
+
+      - name: Format code
         working-directory: android-ide
         run: cargo fmt --all
-      
+
       - name: Check formatting
         working-directory: android-ide
         run: cargo fmt --all -- --check
@@ -65,7 +77,7 @@ jobs:
   build-android:
     name: Build Android (arm64-v8a)
     runs-on: ubuntu-latest
-    #needs: check
+    needs: check
     steps:
       - uses: actions/checkout@v4
 
@@ -90,18 +102,26 @@ jobs:
           java-version: "17"
           distribution: "temurin"
 
-      - name: Set up Android SDK & NDK
+      - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install NDK
+      # Install NDK *and* the Android platform package.
+      # i-slint-backend-android-activity's build script scans $ANDROID_HOME/platforms/
+      # for android.jar. Without platforms;android-34 installed the scan finds nothing
+      # and panics with "No Android platforms found".
+      - name: Install NDK and Android platform
         run: |
-          sdkmanager "ndk;${{ env.ANDROID_NDK_VERSION }}"
+          sdkmanager "ndk;${{ env.ANDROID_NDK_VERSION }}" "platforms;android-${{ env.ANDROID_TARGET_SDK }}"
           echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/${{ env.ANDROID_NDK_VERSION }}" >> $GITHUB_ENV
+          echo "ANDROID_PLATFORM=$ANDROID_SDK_ROOT/platforms/android-${{ env.ANDROID_TARGET_SDK }}" >> $GITHUB_ENV
 
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --locked
-        
-        
+
+      - name: Show Slint features
+        working-directory: android-ide
+        run: cargo tree -e features | grep slint
+
       - name: Build Rust library (arm64-v8a)
         working-directory: android-ide
         env:
@@ -122,6 +142,13 @@ jobs:
       - name: Generate Gradle wrapper
         working-directory: android-ide/android
         run: gradle wrapper --gradle-version=8.7
+
+      # Download Monaco Editor 0.52.0 AMD bundle into assets/editor/vs/.
+      # The vs/ directory is git-ignored to avoid committing ~20 MB of minified JS.
+      # npm is pre-installed on ubuntu-latest; the script is idempotent.
+      - name: Bundle Monaco editor (offline APK asset)
+        working-directory: android-ide
+        run: bash scripts/fetch-monaco.sh
 
       - name: Build APK
         working-directory: android-ide/android
@@ -164,13 +191,15 @@ jobs:
           java-version: "17"
           distribution: "temurin"
 
-      - name: Set up Android SDK & NDK
+      - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install NDK
+      # Same platform fix as the arm64 job above.
+      - name: Install NDK and Android platform
         run: |
-          sdkmanager "ndk;${{ env.ANDROID_NDK_VERSION }}"
+          sdkmanager "ndk;${{ env.ANDROID_NDK_VERSION }}" "platforms;android-${{ env.ANDROID_TARGET_SDK }}"
           echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/${{ env.ANDROID_NDK_VERSION }}" >> $GITHUB_ENV
+          echo "ANDROID_PLATFORM=$ANDROID_SDK_ROOT/platforms/android-${{ env.ANDROID_TARGET_SDK }}" >> $GITHUB_ENV
 
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --locked
@@ -188,6 +217,11 @@ jobs:
       - name: Generate Gradle wrapper
         working-directory: android-ide/android
         run: gradle wrapper --gradle-version=8.7
+
+      # Same Monaco bundle step as the arm64 job.
+      - name: Bundle Monaco editor (offline APK asset)
+        working-directory: android-ide
+        run: bash scripts/fetch-monaco.sh
 
       - name: Build APK (debug, x86_64)
         working-directory: android-ide/android

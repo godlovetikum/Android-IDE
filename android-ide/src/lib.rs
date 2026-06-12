@@ -2,23 +2,31 @@
 ///
 /// Library root. Exposes the public initialization API used by:
 ///   - src/main.rs         (desktop binary entry point)
-///   - android_main()      (Android NativeActivity entry point via android-activity crate)
+///   - android_main()      (Android entry point via android-activity crate)
 ///
-/// Android entry-point model (Slint 1.16+ / android-activity 0.6):
-///   The Android runtime calls `android_main(app: AndroidApp)` in the loaded .so.
-///   This function initialises Slint's Android backend and runs the UI event loop.
-///   There is NO custom Java Activity — `android.app.NativeActivity` in
-///   AndroidManifest.xml finds the .so via `android.app.lib_name = "android_ide_lib"`.
+/// Android Activity model (as of this implementation):
+///   `dev.androidide.IDEActivity extends android.app.NativeActivity`.
+///   Slint's android-activity 0.6 backend works identically with a NativeActivity
+///   subclass — the native Surface and android_main() entry point are unchanged.
+///   IDEActivity adds a transparent WebView overlay for Monaco + preview panels.
+///   See android/java/dev/androidide/IDEActivity.java for details.
 ///
 /// Android initialization order (enforced by android_main):
-///   1. Library loaded     → JNI_OnLoad fires       → SAF JavaVM stored
-///   2. android_main runs  → activity_ptr captured  (before slint init consumes app)
-///   3.                    → internal_data_path()    → settings dir set
-///   4.                    → saf::init_safe_bridge() → SafBridge.init(activity) called
-///   5.                    → slint::android::init()  → Slint Android backend ready
-///   6.                    → run_ui()                → subsystems created, event loop starts
+///   1. .so loaded         → JNI_OnLoad fires           → JavaVM stored in saf
+///   2. android_main runs  → activity_ptr captured       (before slint init consumes app)
+///   3.                    → internal_data_path()         → settings dir set
+///   4.                    → saf::init_safe_bridge()      → SafBridge.init(activity) via JNI
+///   5.                    → webview::init_webview_from_activity() → Monaco WebView registered
+///   6.                    → slint::android::init()       → Slint Android backend ready
+///   7.                    → run_ui()                     → subsystems created, event loop starts
 ///
-/// Steps 4 and 5 MUST be in this order: init_safe_bridge uses the JavaVM from step 1
+/// Step 5 ordering guarantee:
+///   IDEActivity.onCreate() runs on the Java main thread BEFORE onStart(). The
+///   native thread (which runs android_main) is only started by onStart(). Therefore
+///   by the time android_main reaches step 5, IDEActivity.onCreate() has completed
+///   and the Monaco WebView exists. No synchronization is needed.
+///
+/// Steps 4 and 6 MUST be in this order: init_safe_bridge uses the JavaVM from step 1
 /// (already set) and must happen before any filesystem operations in run_ui().
 /// slint::android::init() consumes the AndroidApp, so activity_ptr must be saved first.
 
@@ -65,7 +73,8 @@ mod android_entry {
     /// Called automatically by the Android runtime the moment the .so is loaded,
     /// before android_main and before any JNI method calls from Java.
     ///
-    /// Stores the JavaVM so the SAF bridge can attach from any thread.
+    /// Stores the JavaVM so the SAF bridge and WebView bridge can attach from
+    /// any thread throughout the app's lifetime.
     ///
     /// SAFETY: Android guarantees `vm` is valid and non-null for the process lifetime.
     #[no_mangle]
@@ -85,8 +94,9 @@ mod android_entry {
     ///   2. Capture activity_ptr BEFORE slint::android::init() consumes `app`
     ///   3. Settings data dir from internal_data_path()
     ///   4. SafBridge.init() via JNI — must precede any filesystem operations
-    ///   5. Slint Android backend — must precede MainWindow::new()
-    ///   6. UI event loop
+    ///   5. Monaco WebView — pull from IDEActivity, must precede run_ui()
+    ///   6. Slint Android backend — must precede MainWindow::new()
+    ///   7. UI event loop
     #[no_mangle]
     fn android_main(app: slint::android::AndroidApp) {
         android_logger::init_once(
@@ -126,14 +136,29 @@ mod android_entry {
                     "SafBridge.init() failed: {e} — \
                      all file operations will return errors on this session"
                 );
-                // Continue anyway: settings and Slint UI still work; the user
-                // will see errors when opening files rather than a silent crash.
+                // Continue: settings and Slint UI still work; user sees errors on file ops.
             } else {
                 info!("SafBridge initialized");
             }
         }
 
-        // ── Step 5: Slint Android backend ─────────────────────────────────────
+        // ── Step 5: Register Monaco WebView from IDEActivity ─────────────────
+        // IDEActivity.onCreate() has already run (it precedes onStart() which
+        // triggers this native thread), so the WebView exists. We pull it from
+        // Java rather than having Java push it — this eliminates all race conditions.
+        //
+        // If this fails, the Slint IDE chrome still works; the user just sees an
+        // empty editor area because send_to_editor() returns Err(WebViewNotRegistered).
+        if let Err(e) = android_ide_editor::webview::android::init_webview_from_activity() {
+            tracing::error!(
+                "WebView registration failed: {e} — \
+                 Monaco editor will not function on this session"
+            );
+        } else {
+            info!("Monaco WebView registered");
+        }
+
+        // ── Step 6: Slint Android backend ─────────────────────────────────────
         // Consumes `app`. Must happen after all reads from app above.
         // Must happen before MainWindow::new() or any Slint API call.
         if let Err(e) = slint::android::init(app) {
@@ -141,7 +166,7 @@ mod android_entry {
             return;
         }
 
-        // ── Step 6: UI event loop ──────────────────────────────────────────────
+        // ── Step 7: UI event loop ──────────────────────────────────────────────
         // Creates FilesystemManager, EditorManager, SettingsManager, wires all
         // Slint callbacks, registers save/cursor handlers, starts auto-save timer,
         // and blocks until the NativeActivity is destroyed.

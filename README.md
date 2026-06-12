@@ -297,7 +297,7 @@ Success Criteria: A third-party extension can be installed and executed without 
 
 | Phase | Status | Completion |
 |-------|--------|-----------|
-| Phase 1 — Foundation | **Complete** ✅ | 100% |
+| Phase 1 — Foundation | **Complete** ✅ | 100% (all deliverables verified 2026-06-11) |
 | Phase 2 — Linux Runtime | Not Started | 0% |
 | Phase 3 — Git | Not Started | 0% |
 | Phase 4 — Language Intelligence | Not Started | 0% |
@@ -329,4 +329,36 @@ Slint is split into two per-target dependency entries:
 
 The `backend-android-activity-06` suffix means the feature targets android-activity crate 0.6.x. This must be updated if android-activity is upgraded to 0.7+.
 
-Last updated: 2026-06-10
+---
+
+### AD-004 — IDEActivity extends NativeActivity for WebView overlay + edit+preview split
+
+**Date:** 2026-06-11
+
+**Problem:** Slint's android-activity backend renders the entire UI to NativeActivity's native Surface. The native Surface is at the bottom of Android's compositing stack — no `android.view.View` (including `WebView`) can be layered above it from the native/Rust side. This made Monaco (an HTML/JS editor embedded in a `WebView`) unreachable on Android when using plain `android.app.NativeActivity` as the Activity class.
+
+**Solution:** The manifest Activity class was changed from `android.app.NativeActivity` to `dev.androidide.IDEActivity`, a custom subclass:
+
+```
+dev.androidide.IDEActivity extends android.app.NativeActivity
+```
+
+Extending NativeActivity rather than replacing it preserves the android-activity 0.6 backend contract exactly — `android_main()` is still called in the same way, the native Surface is still created identically, and no Slint Rust code changes are needed.
+
+In `IDEActivity.onCreate()`, after `super.onCreate()` (which loads the `.so` and fires `JNI_OnLoad`), a transparent `FrameLayout` is attached via `getWindow().addContentView()`. Java `View`s attached this way always composite ABOVE the native Surface. The overlay contains a horizontal `LinearLayout` with two WebViews:
+
+- `mEditorWebView` — Monaco editor (always visible, full width by default)
+- `mPreviewWebView` — preview panel (hidden by default; shown via `IDEActivity.showPreview(url)`)
+
+When both are visible the layout is a 50/50 horizontal split — the user can edit code and preview output simultaneously.
+
+**Overlay positioning:** Margins are set so the WebView container reveals the Slint chrome in the uncovered areas:
+- `top = 84dp` (app bar 48dp + tab bar 35dp + 1dp separator)
+- `left = 0dp` (portrait) or `241dp` (landscape, sidebar 240dp + 1dp separator)
+- `bottom = 22dp` (status bar)
+
+**WebView registration (pull design):** Rust's `android_main()` calls `webview::android::init_webview_from_activity()` at step 5 of the init sequence (after `saf::init_safe_bridge`, before `slint::android::init`). This calls `IDEActivity.getInstance().getEditorWebView()` via JNI and stores the result as a `GlobalRef` in `WEBVIEW_SENDER`. This is race-free: the native thread starts in `onStart()`, which is called after `onCreate()` returns — the WebView is always created before `android_main()` runs.
+
+**Consequence:** `android/java/dev/androidide/IDEActivity.java` is now a required file. Any future developer switching Activity classes must preserve the WebView overlay and `getInstance()`/`getEditorWebView()` API so `init_webview_from_activity()` continues to work.
+
+Last updated: 2026-06-11

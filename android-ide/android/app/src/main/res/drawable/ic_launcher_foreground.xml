@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Foreground layer for the AndroidIDE adaptive launcher icon.
+
+    Viewport: 108×108 dp (standard adaptive icon canvas).
+    Safe zone: 72×72 dp centred (inner circle), so key artwork stays within
+    the circle on all launcher shapes. All strokes/fills are inside this zone.
+
+    Design: an "A" letterform in VS-Code blue (#007ACC) on a transparent
+    background (the background layer supplies the dark fill).
+
+    Path construction:
+      Outer "A" shell — pentagon with legs:
+        top centre (54,24) → bottom-left outer (22,88)
+        → bottom-left inner (35,88) → crotch-left (43,68)
+        → crotch-right (65,68) → bottom-right inner (73,88)
+        → bottom-right outer (86,88) → back to top
+      Inner triangle (even-odd rule punches a hole for the aperture):
+        apex (54,42) → bottom-left (46,63) → bottom-right (62,63)
+
+    fillType="evenOdd" creates the transparent aperture inside the "A".
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <path
+        android:fillColor="#007ACC"
+        android:fillType="evenOdd"
+        android:pathData="
+            M54,24
+            L22,88 L35,88 L43,68 L65,68 L73,88 L86,88
+            Z
+            M54,42 L46,63 L62,63 Z"/>
+
+</vector>

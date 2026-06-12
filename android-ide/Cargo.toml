@@ -4,11 +4,13 @@ members = [
     "modules/filesystem",
     "modules/terminal",
     "modules/linux-runtime",
-    "modules/git",
     "modules/lsp",
     "modules/extensions",
     "modules/settings",
     "modules/documentation",
+    # modules/git is planned (Phase 3) but not yet created.
+    # Do NOT add it back until the directory and Cargo.toml exist —
+    # a missing workspace member causes `cargo build` to abort.
 ]
 resolver = "2"
 
@@ -27,8 +29,10 @@ tracing = "0.1"
 tracing-subscriber = "0.3"
 # Android JNI bindings
 jni = "0.21"
-# Git
-git2 = "0.19"
+# git2 is reserved for modules/git (Phase 3). Re-enable when that module exists.
+# git2 = "0.19"
+# UUID v4 for collision-proof tab IDs in the editor module.
+uuid = { version = "1", features = ["v4"] }
 
 [package]
 name = "android-ide"

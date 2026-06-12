@@ -15,6 +15,10 @@
  *   { type: "contentChanged", path, content }
  *   { type: "cursorMoved",    line, column }
  *   { type: "fileSaved",      path }
+ *
+ * Monaco version: 0.52.0 (bundled — see scripts/fetch-monaco.sh).
+ * The require.config paths entry "vs" resolves to the local vs/ directory
+ * using a relative path. No CDN requests are made at runtime.
  */
 
 // ---------------------------------------------------------------------------
@@ -50,8 +54,12 @@ const CONTENT_CHANGE_DEBOUNCE_MS = 300;
 // Monaco loader
 // ---------------------------------------------------------------------------
 
+// "vs" resolves to the bundled vs/ directory relative to this file.
+// On Android: file:///android_asset/editor/vs
+// On desktop: file:///path/to/assets/editor/vs
+// No network requests are made — all files are served from APK assets.
 require.config({
-  paths: { vs: 'https://unpkg.com/monaco-editor@0.52.0/min/vs' }
+  paths: { vs: 'vs' }
 });
 
 require(['vs/editor/editor.main'], function () {

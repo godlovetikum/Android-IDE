@@ -1,6 +1,10 @@
 /// android-ide/modules/editor/src/tab.rs
 ///
 /// EditorTab — represents a single open file in the editor.
+///
+/// Tab IDs use UUID v4 (random, 128-bit). The `uuid` crate is used instead of a
+/// SystemTime-based stub because SystemTime is not monotonic and can produce
+/// duplicate IDs when two files are opened within the same nanosecond.
 
 use serde::{Deserialize, Serialize};
 
@@ -8,7 +12,7 @@ pub type TabId = String;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EditorTab {
-    /// Unique identifier for this tab
+    /// Unique identifier for this tab (UUID v4)
     pub id: TabId,
     /// Full path of the open file
     pub path: String,
@@ -31,7 +35,7 @@ impl EditorTab {
             .to_string();
 
         Self {
-            id: uuid_v4(),
+            id: uuid::Uuid::new_v4().to_string(),
             path: path.to_string(),
             name,
             is_dirty: false,
@@ -66,11 +70,4 @@ pub fn language_for_extension(ext: &str) -> &'static str {
         "xml" => "xml",
         _ => "plaintext",
     }
-}
-
-/// Simple UUID v4 stub (not cryptographically secure — use uuid crate when available).
-fn uuid_v4() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let t = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
-    format!("{:032x}", t)
 }
