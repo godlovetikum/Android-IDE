@@ -1,0 +1,283 @@
+// android-ide/android/java/dev/androidide/saf/SafRepository.kt
+//
+// Storage Access Framework operations — Kotlin coroutine-based.
+//
+// Migration note (2026-06-12):
+//   Replaces SafBridge.java.
+//   Key differences:
+//     - No Rust JNI init() call. Context is passed in the constructor.
+//     - All methods are suspend functions running on Dispatchers.IO.
+//     - Returns typed Kotlin objects instead of JSON strings.
+//   The underlying DocumentsContract API calls are identical to SafBridge.java.
+//
+// SAF URI shapes (unchanged):
+//   Tree URI:     content://com.android.externalstorage.documents/tree/primary%3AMyProject
+//   Document URI: content://com.android.externalstorage.documents/document/primary%3AMyProject%2FMain.kt
+//
+// Usage:
+//   Instantiate once in IdeViewModel (which holds Application context).
+//   All methods are safe to call concurrently from Dispatchers.IO.
+
+package dev.androidide.saf
+
+import android.content.Context
+import android.net.Uri
+import android.provider.DocumentsContract
+import android.util.Log
+import dev.androidide.viewmodel.model.FileNode
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.io.ByteArrayOutputStream
+import java.io.IOException
+import java.io.InputStream
+
+class SafRepository(private val context: Context) {
+
+    companion object {
+        private const val TAG = "SafRepository"
+        private const val MIME_DIR = "vnd.android.document/directory"
+    }
+
+    private val resolver get() = context.contentResolver
+
+    // ── Directory listing ──────────────────────────────────────────────────
+
+    /**
+     * List the immediate children of a SAF tree or document URI.
+     *
+     * Pass a tree URI (from Intent.ACTION_OPEN_DOCUMENT_TREE) to list the
+     * project root. Pass a child directory document URI to list subdirectories.
+     *
+     * @param parentUriString  SAF tree or document URI string
+     * @return                 List of [FileNode], sorted: directories first.
+     *                         Empty on failure.
+     */
+    suspend fun listChildren(parentUriString: String): List<FileNode> = withContext(Dispatchers.IO) {
+        try {
+            val parentUri = Uri.parse(parentUriString)
+
+            // Build the children URI. A tree URI needs getTreeDocumentId();
+            // a plain document URI may already be usable with buildChildDocumentsUri.
+            val treeUri: Uri
+            val docId: String
+            if (DocumentsContract.isTreeUri(parentUri)) {
+                treeUri = parentUri
+                docId = DocumentsContract.getTreeDocumentId(parentUri)
+            } else {
+                // For child directory URIs obtained from a previous listing,
+                // we use the document URI directly. We need a tree root too —
+                // reconstruct it from the document URI (same tree root).
+                treeUri = parentUri
+                docId = DocumentsContract.getDocumentId(parentUri)
+            }
+
+            val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, docId)
+
+            val projection = arrayOf(
+                DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                DocumentsContract.Document.COLUMN_MIME_TYPE,
+                DocumentsContract.Document.COLUMN_SIZE,
+            )
+
+            val nodes = mutableListOf<FileNode>()
+
+            resolver.query(childrenUri, projection, null, null, null)?.use { cursor ->
+                val idIdx   = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+                val nameIdx = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+                val mimeIdx = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_MIME_TYPE)
+                val sizeIdx = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_SIZE)
+
+                while (cursor.moveToNext()) {
+                    val childDocId  = cursor.getString(idIdx) ?: continue
+                    val displayName = cursor.getString(nameIdx) ?: ""
+                    val mimeType    = cursor.getString(mimeIdx) ?: "application/octet-stream"
+                    val size        = if (cursor.isNull(sizeIdx)) 0L else cursor.getLong(sizeIdx)
+
+                    // Build the full document URI for this child.
+                    val docUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, childDocId)
+
+                    nodes += FileNode(
+                        documentUri = docUri.toString(),
+                        displayName = displayName,
+                        mimeType    = mimeType,
+                        size        = size,
+                    )
+                }
+            } ?: Log.e(TAG, "listChildren: null cursor for $parentUriString")
+
+            // Sort: directories first, then files, both alphabetically.
+            nodes.sortedWith(compareByDescending<FileNode> { it.isDirectory }.thenBy { it.displayName.lowercase() })
+        } catch (e: Exception) {
+            Log.e(TAG, "listChildren failed for $parentUriString: ${e.message}", e)
+            emptyList()
+        }
+    }
+
+    // ── File reading ───────────────────────────────────────────────────────
+
+    /**
+     * Read the full content of a SAF document URI as a byte array.
+     *
+     * @param documentUriString  SAF document URI
+     * @return                   File bytes, or null on failure.
+     */
+    suspend fun readFile(documentUriString: String): ByteArray? = withContext(Dispatchers.IO) {
+        try {
+            resolver.openInputStream(Uri.parse(documentUriString))?.use { stream ->
+                stream.readAllBytesCompat()
+            } ?: run {
+                Log.e(TAG, "readFile: openInputStream returned null for $documentUriString")
+                null
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "readFile failed for $documentUriString: ${e.message}", e)
+            null
+        }
+    }
+
+    // ── File writing ───────────────────────────────────────────────────────
+
+    /**
+     * Write [data] to a SAF document, replacing its entire content.
+     *
+     * Uses open mode "wt" (write + truncate). The previous content is
+     * discarded before writing — same behaviour as SafBridge.java.
+     *
+     * @param documentUriString  SAF document URI
+     * @param data               Bytes to write
+     * @return                   true on success, false on failure.
+     */
+    suspend fun writeFile(documentUriString: String, data: ByteArray): Boolean = withContext(Dispatchers.IO) {
+        try {
+            resolver.openOutputStream(Uri.parse(documentUriString), "wt")?.use { stream ->
+                stream.write(data)
+                stream.flush()
+                true
+            } ?: run {
+                Log.e(TAG, "writeFile: openOutputStream returned null for $documentUriString")
+                false
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "writeFile failed for $documentUriString: ${e.message}", e)
+            false
+        }
+    }
+
+    // ── Document creation ──────────────────────────────────────────────────
+
+    /**
+     * Create a new document inside a SAF tree.
+     *
+     * Pass mimeType = "vnd.android.document/directory" to create a directory.
+     *
+     * @param parentTreeUriString  SAF tree URI of the parent directory
+     * @param displayName          Desired name (e.g. "Main.kt")
+     * @param mimeType             MIME type (e.g. "text/x-kotlin")
+     * @return                     Document URI of the new file, or null on failure.
+     */
+    suspend fun createFile(
+        parentTreeUriString: String,
+        displayName: String,
+        mimeType: String,
+    ): String? = withContext(Dispatchers.IO) {
+        try {
+            DocumentsContract.createDocument(
+                resolver,
+                Uri.parse(parentTreeUriString),
+                mimeType,
+                displayName,
+            )?.toString()
+        } catch (e: Exception) {
+            Log.e(TAG, "createFile failed (parent=$parentTreeUriString, name=$displayName): ${e.message}", e)
+            null
+        }
+    }
+
+    // ── Deletion ───────────────────────────────────────────────────────────
+
+    /**
+     * Delete a SAF document (file or empty directory).
+     *
+     * @param documentUriString  SAF document URI
+     * @return                   true if deleted, false on failure.
+     */
+    suspend fun deleteDocument(documentUriString: String): Boolean = withContext(Dispatchers.IO) {
+        try {
+            DocumentsContract.deleteDocument(resolver, Uri.parse(documentUriString))
+        } catch (e: Exception) {
+            Log.e(TAG, "deleteDocument failed for $documentUriString: ${e.message}", e)
+            false
+        }
+    }
+
+    // ── Rename ─────────────────────────────────────────────────────────────
+
+    /**
+     * Rename a SAF document.
+     *
+     * IMPORTANT: Android may assign a different URI after renaming. Always use
+     * the returned URI for subsequent operations, not the original — same
+     * caveat as in SafBridge.java.
+     *
+     * @param documentUriString  SAF document URI to rename
+     * @param newDisplayName     New display name
+     * @return                   New document URI, or null on failure.
+     */
+    suspend fun renameDocument(documentUriString: String, newDisplayName: String): String? =
+        withContext(Dispatchers.IO) {
+            try {
+                DocumentsContract.renameDocument(
+                    resolver,
+                    Uri.parse(documentUriString),
+                    newDisplayName,
+                )?.toString()
+            } catch (e: Exception) {
+                Log.e(TAG, "renameDocument failed for $documentUriString: ${e.message}", e)
+                null
+            }
+        }
+
+    // ── Metadata ───────────────────────────────────────────────────────────
+
+    /**
+     * Get the display name of a SAF document.
+     */
+    suspend fun getDisplayName(documentUriString: String): String? =
+        queryStringColumn(documentUriString, DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+
+    // ── Private helpers ────────────────────────────────────────────────────
+
+    private suspend fun queryStringColumn(documentUriString: String, column: String): String? =
+        withContext(Dispatchers.IO) {
+            try {
+                resolver.query(
+                    Uri.parse(documentUriString),
+                    arrayOf(column),
+                    null, null, null,
+                )?.use { cursor ->
+                    if (cursor.moveToFirst()) cursor.getString(0) else null
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "queryStringColumn($column) failed for $documentUriString: ${e.message}", e)
+                null
+            }
+        }
+}
+
+// ── InputStream extension ─────────────────────────────────────────────────────
+
+/**
+ * Read all bytes from the stream. Compatible with API 26+ (InputStream.readAllBytes
+ * requires API 33; this implementation works from API 26).
+ */
+@Throws(IOException::class)
+private fun InputStream.readAllBytesCompat(): ByteArray {
+    val buf = ByteArrayOutputStream(8192)
+    val chunk = ByteArray(8192)
+    var n: Int
+    while (read(chunk).also { n = it } != -1) {
+        buf.write(chunk, 0, n)
+    }
+    return buf.toByteArray()
+}

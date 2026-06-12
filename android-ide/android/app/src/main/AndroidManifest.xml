@@ -2,80 +2,34 @@
 <!--
     android-ide/android/app/src/main/AndroidManifest.xml
 
-    Android manifest for the IDE application.
+    Migration note (2026-06-12):
+      Replaced dev.androidide.IDEActivity (NativeActivity subclass, Slint-specific)
+      with dev.androidide.MainActivity (ComponentActivity, Kotlin/Jetpack Compose).
+      Removed android.app.lib_name meta-data (Rust .so NativeActivity lookup).
+      All other settings (permissions, configChanges, icons, SDK versions) unchanged.
 
     Activity model:
-      This app uses dev.androidide.IDEActivity, which extends
-      android.app.NativeActivity. Slint's android-activity 0.6 backend
-      works identically with a NativeActivity subclass — the native Surface
-      and android_main() entry point are unchanged.
+      MainActivity extends ComponentActivity. Jetpack Compose renders the full
+      IDE UI natively — no native Surface, no WebView overlay positioning needed.
+      The Monaco editor WebView is embedded directly as a Compose AndroidView.
 
-      IDEActivity adds a transparent WebView overlay on top of Slint's native
-      Surface to host the Monaco Editor (and an optional side-by-side preview
-      panel). The WebView layer sits ABOVE the Slint native Surface layer in
-      Android's compositing stack.
-
-      Cargo.toml:   [lib]  name = "android_ide_lib"
-      This file:    android:value="android_ide_lib"
-      On disk:      libandroid_ide_lib.so  (built by cargo-ndk)
-
-    Slint entry point:
-      The android-activity crate exports `android_main(app: AndroidApp)` from
-      the .so. NativeActivity (via IDEActivity) calls it on a dedicated thread
-      after the Activity reaches onStart() — guaranteeing the WebView created
-      in onCreate() is ready when android_main runs.
-
-    Launcher icon:
-      @mipmap/ic_launcher      — adaptive icon (API 26+, all shapes)
-      @mipmap/ic_launcher_round — adaptive round variant (API 26+)
-      Both reference res/mipmap-anydpi-v26/ which is used on all devices
-      since minSdk = 26. The foreground is an "A" monogram in #007ACC;
-      the background is the IDE's dark colour #1e1e1e.
-
-    Storage permission strategy:
-      The IDE reads AND writes project files via SAF (Storage Access Framework).
-      No permissions are required for SAF-granted URIs on API 29+.
-
-        API 26–28 (Android 8–9):
-          Scoped storage did not yet exist. READ + WRITE external storage
-          permissions are required for any access outside internal storage.
-
-        API 29+ (Android 10+):
-          Scoped storage. The app uses SAF exclusively — no manifest
-          permissions needed for SAF-granted tree URIs.
-
-        API 33+ (Android 13+):
-          READ_EXTERNAL_STORAGE is replaced by media-specific permissions.
-          For source code files, SAF is the only correct approach.
-
-      Summary: READ/WRITE permissions below cover API 26–28 only.
-      API 29+ relies entirely on SAF (Intent.ACTION_OPEN_DOCUMENT_TREE grant).
+    Storage permission strategy (unchanged from prior implementation):
+      API 26–28: READ + WRITE external storage required (scoped storage not yet
+                 available). Both declared with maxSdkVersion to cap exposure.
+      API 29+:   SAF (Intent.ACTION_OPEN_DOCUMENT_TREE) grants access without
+                 manifest permissions. No changes needed for API 29+.
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!--
-        INTERNET: Available for future network features (LSP, extensions, remote AI).
-        Monaco editor is bundled in APK assets — no internet required for editing.
-    -->
+    <!-- Available for future network features (LSP, remote AI, extension registry). -->
     <uses-permission android:name="android.permission.INTERNET" />
 
-    <!--
-        READ_EXTERNAL_STORAGE (API 26–32 only):
-        Needed for std::fs / java.io.File access to external storage on
-        Android 8–12. On API 33+ this is split into media-specific permissions
-        and ignored for source code; SAF handles access without it.
-    -->
+    <!-- API 26–32: required for std file access outside internal storage. -->
     <uses-permission
         android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
 
-    <!--
-        WRITE_EXTERNAL_STORAGE (API 26–28 only):
-        Needed to write files on external storage on Android 8–9.
-        Non-functional on API 29+ — SAF handles writes there.
-        The IDE writes project files, so this permission is required on
-        older devices (API 26–28).
-    -->
+    <!-- API 26–28: required to write files on external storage. -->
     <uses-permission
         android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="28" />
@@ -89,27 +43,21 @@
         android:hardwareAccelerated="true">
 
         <!--
-            IDEActivity extends NativeActivity.
-            Slint renders the IDE chrome via the native Surface (background layer).
-            The Monaco WebView overlay renders above it (Java View layer).
+            MainActivity — Kotlin/Jetpack Compose entry point.
 
-            configChanges: handled natively + in onConfigurationChanged() so
-              the Activity is not recreated on orientation change.
-              Slint re-layouts internally; IDEActivity recalculates WebView margins.
+            configChanges: handled in onConfigurationChanged() so the Activity
+              is not recreated on orientation change. Compose re-measures and
+              re-lays out automatically; the ViewModel retains state.
 
             android:exported="true": required for the LAUNCHER intent filter.
         -->
         <activity
-            android:name="dev.androidide.IDEActivity"
+            android:name="dev.androidide.MainActivity"
             android:label="Android IDE"
             android:exported="true"
             android:launchMode="singleTop"
+            android:windowSoftInputMode="adjustResize"
             android:configChanges="orientation|keyboardHidden|screenSize|screenLayout|uiMode|density">
-
-            <!-- MUST match [lib] name in android-ide/Cargo.toml -->
-            <meta-data
-                android:name="android.app.lib_name"
-                android:value="android_ide_lib" />
 
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

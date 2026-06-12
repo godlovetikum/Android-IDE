@@ -2,18 +2,22 @@
 //
 // Android application module.
 //
-// Source layout (relative to this file at android/app/):
-//   ../../java/dev/androidide/     — Java helper classes (SafBridge, EditorBridge)
-//   ../../assets/editor/           — Monaco editor HTML + JS assets
-//   src/main/jniLibs/<abi>/        — Compiled Rust .so (placed by cargo-ndk)
-//   src/main/AndroidManifest.xml   — Application manifest
+// Stack: Kotlin 1.9.22 + Jetpack Compose BOM 2024.02.00 + Material3
 //
-// The Rust library name is "android_ide_lib" (from [lib] name in Cargo.toml),
-// which maps to libandroid_ide_lib.so. NativeActivity finds it via
-// android.app.lib_name in AndroidManifest.xml.
+// Source layout (relative to android/app/):
+//   ../../java/dev/androidide/   — Kotlin source files (all .kt)
+//   ../../assets/editor/         — Monaco editor HTML + JS assets
+//   src/main/AndroidManifest.xml — Application manifest
+//   src/main/res/                — Launcher icon resources
+//
+// Migration note (2026-06-12):
+//   Migrated from Slint/Rust + JNI to Kotlin/Jetpack Compose.
+//   Removed: NDK ABI filters, jniLibs source set, no-op dependencies block.
+//   Added: Kotlin plugin, Compose build feature, Material3 + ViewModel deps.
 
 plugins {
     id("com.android.application")
+    id("org.jetbrains.kotlin.android")
 }
 
 android {
@@ -25,32 +29,40 @@ android {
         minSdk = 26
         targetSdk = 34
         versionCode = 1
-        versionName = "1.0.0-phase1"
-
-        // Only package the ABIs we build Rust for.
-        ndk {
-            abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
-        }
+        versionName = "1.0.0-alpha"
     }
 
-    // ---------------------------------------------------------------------------
-    // Source sets — reuse the shared java/ and assets/ from the android/ root,
-    // so they don't need to be duplicated under app/src/main/.
-    // ---------------------------------------------------------------------------
     sourceSets {
         named("main") {
-            // Java helper classes live at android/java/, one level above app/.
+            // Kotlin source files live at android/java/ (one level above app/).
+            // The Kotlin compiler picks up .kt files in java.srcDirs() by convention.
             java.srcDirs("../../java")
-            // Monaco editor assets live at android/assets/.
+            // Monaco editor assets at android/assets/.
             assets.srcDirs("../../assets")
-            // cargo-ndk places .so files at app/src/main/jniLibs/<abi>/.
-            jniLibs.srcDirs("src/main/jniLibs")
         }
     }
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = "17"
+        // Compose requires opt-in for some experimental APIs.
+        freeCompilerArgs += listOf("-opt-in=androidx.compose.material3.ExperimentalMaterial3Api")
+    }
+
+    buildFeatures {
+        // Enable Jetpack Compose code generation.
+        compose = true
+    }
+
+    composeOptions {
+        // Compose compiler extension version must match Kotlin version.
+        // Kotlin 1.9.22 → Compose Compiler 1.5.8
+        // Reference: https://developer.android.com/jetpack/androidx/releases/compose-kotlin
+        kotlinCompilerExtensionVersion = "1.5.8"
     }
 
     buildTypes {
@@ -60,20 +72,51 @@ android {
         }
         release {
             isMinifyEnabled = false
-            // Use debug signing for CI release builds until a production keystore
-            // is configured. Task: add release keystore to GitHub Secrets.
+            // Debug signing for CI. Add a production keystore via GitHub Secrets
+            // before shipping to the Play Store.
             signingConfig = signingConfigs.getByName("debug")
         }
     }
 
-    // Suppress the "debuggable release" lint warning — intentional for CI.
     lint {
+        // Suppress intentional debug-signed release warning during CI.
         disable += "SigningRelease"
     }
 }
 
 dependencies {
-    // No Java/Kotlin library dependencies — the app is driven entirely by the
-    // Rust + Slint native layer. SafBridge and EditorBridge only use the
-    // Android framework API (already available via compileSdk).
+    // ── Jetpack Compose BOM ────────────────────────────────────────────────
+    // The BOM pins all Compose library versions together.
+    // https://developer.android.com/jetpack/compose/setup#bom-version-mapping
+    val composeBom = platform("androidx.compose:compose-bom:2024.02.00")
+    implementation(composeBom)
+    androidTestImplementation(composeBom)
+
+    // Compose core
+    implementation("androidx.compose.ui:ui")
+    implementation("androidx.compose.ui:ui-graphics")
+    implementation("androidx.compose.ui:ui-tooling-preview")
+    implementation("androidx.compose.foundation:foundation")
+
+    // Material Design 3 — dark theme, navigation drawer, top app bar, tabs
+    implementation("androidx.compose.material3:material3")
+    implementation("androidx.compose.material:material-icons-extended")
+
+    // ── Activity ───────────────────────────────────────────────────────────
+    // ComponentActivity.setContent {} + rememberLauncherForActivityResult
+    implementation("androidx.activity:activity-compose:1.8.2")
+
+    // ── Lifecycle / ViewModel ──────────────────────────────────────────────
+    // viewModel() Compose integration + StateFlow.collectAsState()
+    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.7.0")
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.7.0")
+    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.7.0")
+
+    // ── Kotlin coroutines ──────────────────────────────────────────────────
+    // viewModelScope, Dispatchers.IO for SAF operations
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
+
+    // ── Debug tooling ──────────────────────────────────────────────────────
+    debugImplementation("androidx.compose.ui:ui-tooling")
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
 }
