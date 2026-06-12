@@ -40,7 +40,7 @@ import dev.androidide.viewmodel.model.EditorTab
 // SetJavaScriptEnabled: Monaco requires JS — this is intentional for a code editor.
 // WebViewClientOnReceivedSslError: default WebViewClient behaviour is appropriate
 //   for development; a production build should override onReceivedSslError.
-@SuppressLint("SetJavaScriptEnabled", "WebViewClientOnReceivedSslError")
+@SuppressLint("SetJavaScriptEnabled", "JavascriptInterface", "WebViewClientOnReceivedSslError")
 @Composable
 fun EditorPane(
     activeTab: EditorTab?,
