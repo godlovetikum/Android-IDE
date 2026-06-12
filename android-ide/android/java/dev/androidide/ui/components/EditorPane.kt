@@ -19,13 +19,13 @@
 
 package dev.androidide.ui.components
 
+import android.annotation.SuppressLint
 import android.webkit.WebChromeClient
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -37,6 +37,10 @@ import dev.androidide.ui.theme.IdeBackground
 import dev.androidide.ui.theme.IdeSeparator
 import dev.androidide.viewmodel.model.EditorTab
 
+// SetJavaScriptEnabled: Monaco requires JS — this is intentional for a code editor.
+// WebViewClientOnReceivedSslError: default WebViewClient behaviour is appropriate
+//   for development; a production build should override onReceivedSslError.
+@SuppressLint("SetJavaScriptEnabled", "WebViewClientOnReceivedSslError")
 @Composable
 fun EditorPane(
     activeTab: EditorTab?,
@@ -50,7 +54,10 @@ fun EditorPane(
     val context = LocalContext.current
 
     // ── EditorBridge — survives recompositions ─────────────────────────────
-    val editorBridge = remember { EditorBridge() }
+    // Explicit type annotation required: lint resolves addJavascriptInterface(obj, name)
+    // against the declared type of obj. Without it, lint sees the generic return type T
+    // of remember<T>{} and cannot find @JavascriptInterface on T.
+    val editorBridge: EditorBridge = remember { EditorBridge() }
 
     // Update the message listener when the callback reference changes.
     DisposableEffect(onEditorMessage) {
