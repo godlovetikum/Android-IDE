@@ -72,7 +72,25 @@ jobs:
       - name: Lint
         working-directory: android-ide/android
         run: ./gradlew lint
-
+        
+      # The debug keystore is used as a fallback when KEYSTORE_BASE64 is not set.
+      # It is created automatically by `assembleDebug` in the `check` job, but
+      # this job runs on a fresh runner — create it here if absent.
+      - name: Ensure debug keystore exists (fallback signing)
+        run: |
+          mkdir -p ~/.android
+          if [ ! -f ~/.android/debug.keystore ]; then
+            keytool -genkeypair -v \
+              -keystore ~/.android/debug.keystore \
+              -alias androiddebugkey \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass android -keypass android \
+              -dname "CN=Android Debug, O=Android, C=US"
+            echo "Created debug keystore (fallback for unsigned release)."
+          else
+            echo "Debug keystore already exists."
+          fi
+          
       - name: Build debug APK
         working-directory: android-ide/android
         run: ./gradlew assembleDebug
