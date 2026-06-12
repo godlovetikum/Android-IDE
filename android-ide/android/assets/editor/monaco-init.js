@@ -19,6 +19,15 @@
  * Monaco version: 0.52.0 (bundled — see scripts/fetch-monaco.sh).
  * The require.config paths entry "vs" resolves to the local vs/ directory
  * using a relative path. No CDN requests are made at runtime.
+ *
+ * Model URI scheme:
+ *   Monaco requires a URI to identify each model. The 'path' value coming from
+ *   Kotlin is a SAF content:// URI, which cannot be concatenated raw into another
+ *   URI (the result would be malformed and monaco.Uri.parse would throw).
+ *   We encode the path with encodeURIComponent so it becomes a safe URI segment:
+ *     androidide:///files/<encodeURIComponent(path)>
+ *   The 'currentPath' variable always stores the original SAF URI string, which
+ *   is what Kotlin expects in contentChanged / fileSaved bridge messages.
  */
 
 // ---------------------------------------------------------------------------
@@ -41,7 +50,7 @@ function postToNative(msg) {
 // ---------------------------------------------------------------------------
 
 let editor = null;          // monaco.editor.IStandaloneCodeEditor
-let currentPath = null;     // path of the currently loaded file
+let currentPath = null;     // SAF URI of the currently loaded file (original, un-encoded)
 let contentChangeTimer = null;
 const CONTENT_CHANGE_DEBOUNCE_MS = 300;
 
@@ -51,7 +60,6 @@ const CONTENT_CHANGE_DEBOUNCE_MS = 300;
 
 // "vs" resolves to the bundled vs/ directory relative to this file.
 // On Android: file:///android_asset/editor/vs
-// On desktop: file:///path/to/assets/editor/vs
 // No network requests are made — all files are served from APK assets.
 require.config({
   paths: { vs: 'vs' }
@@ -70,12 +78,33 @@ require(['vs/editor/editor.main'], function () {
       { token: 'type',     foreground: '4ec9b0' },
     ],
     colors: {
-      'editor.background':           '#1e1e1e',
-      'editor.foreground':           '#d4d4d4',
-      'editorLineNumber.foreground': '#858585',
+      'editor.background':              '#1e1e1e',
+      'editor.foreground':              '#d4d4d4',
+      'editorLineNumber.foreground':    '#858585',
       'editor.lineHighlightBackground': '#2d2d2d',
-      'editorCursor.foreground':     '#aeafad',
-      'editor.selectionBackground':  '#264f78',
+      'editorCursor.foreground':        '#aeafad',
+      'editor.selectionBackground':     '#264f78',
+    }
+  });
+
+  // Define AndroidIDE light theme
+  monaco.editor.defineTheme('androidide-light', {
+    base: 'vs',
+    inherit: true,
+    rules: [
+      { token: 'comment', foreground: '008000' },
+      { token: 'keyword', foreground: '0000ff', fontStyle: 'bold' },
+      { token: 'string',  foreground: 'a31515' },
+      { token: 'number',  foreground: '098658' },
+      { token: 'type',    foreground: '267f99' },
+    ],
+    colors: {
+      'editor.background':              '#ffffff',
+      'editor.foreground':              '#000000',
+      'editorLineNumber.foreground':    '#237893',
+      'editor.lineHighlightBackground': '#f0f0f0',
+      'editorCursor.foreground':        '#000000',
+      'editor.selectionBackground':     '#add6ff',
     }
   });
 
@@ -91,7 +120,7 @@ require(['vs/editor/editor.main'], function () {
     renderWhitespace: 'selection',
     automaticLayout: true,
     padding: { top: 8, bottom: 8 },
-    // Touch-friendly settings
+    // Touch-friendly scrollbars
     scrollbar: {
       vertical: 'auto',
       horizontal: 'auto',
@@ -131,17 +160,17 @@ require(['vs/editor/editor.main'], function () {
   // Hide loading indicator
   document.getElementById('loading').classList.add('hidden');
 
-  // Signal readiness to Rust
+  // Signal readiness to Kotlin
   postToNative({ type: 'ready' });
 });
 
 // ---------------------------------------------------------------------------
-// Public API — called by Rust via evaluateJavascript
+// Public API — called by Kotlin via evaluateJavascript
 // ---------------------------------------------------------------------------
 
 window.androidIDE = {
   /**
-   * Receive a message from the Rust layer.
+   * Receive a message from the Kotlin layer.
    * Called as: window.androidIDE.receiveMessage({type, ...})
    */
   receiveMessage: function (msg) {
@@ -156,7 +185,13 @@ window.androidIDE = {
 
       case 'setTheme':
         if (editor) {
-          monaco.editor.setTheme(msg.theme === 'vs-dark' ? 'androidide-dark' : msg.theme);
+          var theme = 'androidide-dark';
+          if (msg.theme === 'light' || msg.theme === 'vs') {
+            theme = 'androidide-light';
+          } else if (msg.theme !== 'dark' && msg.theme !== 'vs-dark') {
+            theme = msg.theme; // pass through custom theme names unchanged
+          }
+          monaco.editor.setTheme(theme);
         }
         break;
 
@@ -189,22 +224,38 @@ window.androidIDE = {
 // Internal helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * Load a file into the Monaco editor.
+ *
+ * @param {string} path     - Original SAF content:// URI. Stored as currentPath
+ *                            and echoed back in contentChanged/fileSaved messages.
+ * @param {string} content  - Full file text.
+ * @param {string} language - Monaco language ID (e.g. "kotlin", "java").
+ */
 function loadFile(path, content, language) {
   if (!editor) return;
 
+  // Keep the original SAF URI as currentPath — Kotlin identifies files by this URI.
   currentPath = path;
 
-  // Reuse or create a model for this path to preserve undo history
-  const uri = monaco.Uri.parse('androidide://file' + path);
-  let model = monaco.editor.getModel(uri);
+  // Build a well-formed Monaco model URI.
+  // path is a SAF content:// URI and cannot be concatenated raw into another URI
+  // (e.g. 'androidide://file' + 'content://...' produces 'androidide://filecontent://...'
+  // which monaco.Uri.parse rejects and throws, aborting the load silently).
+  // encodeURIComponent makes the SAF URI safe as a URI path segment.
+  var safeSegment = encodeURIComponent(path);
+  var uri = monaco.Uri.parse('androidide:///files/' + safeSegment);
+
+  // Reuse or create a model for this path to preserve undo history.
+  var model = monaco.editor.getModel(uri);
 
   if (model) {
-    // File already has a model — update its content if it changed
+    // File already has a model — update content if it changed.
     if (model.getValue() !== content) {
       model.pushEditOperations([], [{
         range: model.getFullModelRange(),
         text: content,
-      }], () => null);
+      }], function () { return null; });
     }
     if (model.getLanguageId() !== language) {
       monaco.editor.setModelLanguage(model, language);
@@ -216,6 +267,6 @@ function loadFile(path, content, language) {
   editor.setModel(model);
   editor.focus();
 
-  // Scroll to top when loading a new file
+  // Scroll to top when loading a new file.
   editor.setScrollPosition({ scrollTop: 0, scrollLeft: 0 });
 }

@@ -65,6 +65,20 @@ Future contributors must be able to understand previous mistakes without redisco
 
 ---
 
+### BUG-004 — `@SuppressLint("JavascriptInterface")` missing from EditorPane
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-06-12 |
+| **Subsystem** | editor |
+| **Issue** | Lint reported `[JavascriptInterface]` as a build-blocking error even after `@JavascriptInterface` was correctly applied to `EditorBridge.onMessage` and an explicit `: EditorBridge` type annotation was added to `editorBridge`. |
+| **Root Cause** | Android lint resolves the type of the object passed to `addJavascriptInterface(obj, name)` **statically**. `editorBridge` is initialised via `remember<T> { EditorBridge() }`. Even with an explicit variable type annotation, lint sees the type as the generic `T` (the return of `remember<T>`) at the call site inside the `apply {}` lambda and cannot find `@JavascriptInterface` on `T`. The annotation is correctly present at runtime — this is a lint static analysis limitation, not a functional bug. |
+| **Files Modified** | `ui/components/EditorPane.kt` |
+| **Solution** | Added `"JavascriptInterface"` to the existing `@SuppressLint(...)` on the `EditorPane` composable function: `@SuppressLint("SetJavaScriptEnabled", "JavascriptInterface", "WebViewClientOnReceivedSslError")`. A comment above the annotation documents that the `@JavascriptInterface` IS present on `EditorBridge.onMessage` — the suppression silences a false-positive. |
+| **Prevention** | Any time `addJavascriptInterface(obj, name)` is called where `obj` is produced by a generic function (e.g. `remember<T>{}`, `lazy<T>{}`, or any function returning a type parameter), lint cannot see through the generic and will report `[JavascriptInterface]` regardless of annotations on the concrete class. Always add `@SuppressLint("JavascriptInterface")` at the enclosing declaration level and document why. |
+
+---
+
 ## Architectural Corrections
 
 ### AC-001 — Tech Stack Migration: Slint/Rust → Kotlin/Jetpack Compose

@@ -1,10 +1,6 @@
 // android-ide/android/java/dev/androidide/ui/components/IdeStatusBar.kt
 //
-// Status bar shown at the bottom of the IDE screen.
-//
-// Migration note (2026-06-12):
-//   Replaces the StatusBar {} component in ui/main.slint.
-//   Height is 22dp — matches the Slint STATUS_BAR_HEIGHT constant.
+// Status bar shown at the bottom of the editor screen.
 
 package dev.androidide.ui.components
 
@@ -15,8 +11,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
-import dev.androidide.ui.theme.*
+import dev.androidide.ui.theme.LocalIdeColors
 
 @Composable
 fun IdeStatusBar(
@@ -27,45 +24,39 @@ fun IdeStatusBar(
     statusMessage: String,
     modifier: Modifier = Modifier,
 ) {
+    val colors = LocalIdeColors.current
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = modifier
             .fillMaxWidth()
-            .height(22.dp)  // STATUS_BAR_HEIGHT matches Slint constant
-            .background(IdeAccent)
+            .height(22.dp)
+            .background(colors.accent)
             .padding(horizontal = 8.dp),
     ) {
-        // Left: cursor position
-        StatusChip(text = "Ln $cursorLine, Col $cursorColumn")
+        StatusChip(text = "Ln $cursorLine, Col $cursorColumn", color = colors.onAccent)
 
         if (fileName.isNotEmpty()) {
             Spacer(Modifier.width(12.dp))
-            StatusChip(text = fileName)
+            StatusChip(text = fileName, color = colors.onAccent)
         }
 
         Spacer(Modifier.weight(1f))
 
-        // Centre: transient message (e.g. "Saved", "Save failed")
         if (statusMessage.isNotEmpty()) {
-            StatusChip(text = statusMessage, color = IdeTextPrimary)
+            StatusChip(text = statusMessage, color = colors.onAccent)
             Spacer(Modifier.weight(1f))
         }
 
-        // Right: language
         if (language.isNotEmpty()) {
-            StatusChip(text = language.replaceFirstChar { it.uppercase() })
+            StatusChip(
+                text  = language.replaceFirstChar { it.uppercase() },
+                color = colors.onAccent,
+            )
         }
     }
 }
 
 @Composable
-private fun StatusChip(
-    text: String,
-    color: androidx.compose.ui.graphics.Color = Md3OnPrimary,
-) {
-    Text(
-        text  = text,
-        style = MaterialTheme.typography.labelSmall,
-        color = color,
-    )
+private fun StatusChip(text: String, color: Color) {
+    Text(text = text, style = MaterialTheme.typography.labelSmall, color = color)
 }

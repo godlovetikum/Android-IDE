@@ -106,10 +106,11 @@ class SafRepository(private val context: Context) {
                     val docUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, childDocId)
 
                     nodes += FileNode(
-                        documentUri = docUri.toString(),
-                        displayName = displayName,
-                        mimeType    = mimeType,
-                        size        = size,
+                        documentUri      = docUri.toString(),
+                        displayName      = displayName,
+                        mimeType         = mimeType,
+                        size             = size,
+                        parentDocumentUri = parentUriString,
                     )
                 }
             } ?: Log.e(TAG, "listChildren: null cursor for $parentUriString")
@@ -175,29 +176,35 @@ class SafRepository(private val context: Context) {
     // ── Document creation ──────────────────────────────────────────────────
 
     /**
-     * Create a new document inside a SAF tree.
+     * Create a new document inside a SAF directory.
      *
-     * Pass mimeType = "vnd.android.document/directory" to create a directory.
+     * [parentUriString] may be either a plain tree URI (from ACTION_OPEN_DOCUMENT_TREE)
+     * or a document URI (from buildDocumentUriUsingTree). Both are handled correctly.
+     * Pass mimeType = "vnd.android.document/directory" to create a sub-folder.
      *
-     * @param parentTreeUriString  SAF tree URI of the parent directory
-     * @param displayName          Desired name (e.g. "Main.kt")
-     * @param mimeType             MIME type (e.g. "text/x-kotlin")
-     * @return                     Document URI of the new file, or null on failure.
+     * @return  Document URI of the created file, or null on failure.
      */
     suspend fun createFile(
-        parentTreeUriString: String,
+        parentUriString: String,
         displayName: String,
         mimeType: String,
     ): String? = withContext(Dispatchers.IO) {
         try {
-            DocumentsContract.createDocument(
-                resolver,
-                Uri.parse(parentTreeUriString),
-                mimeType,
-                displayName,
-            )?.toString()
+            val parentUri = Uri.parse(parentUriString)
+            // DocumentsContract.createDocument requires a document URI.
+            // A plain tree URI (/tree/<docId>) must be converted to the root
+            // document URI first; document-within-tree URIs are already correct.
+            val docUri = if (DocumentsContract.isTreeUri(parentUri) &&
+                !parentUri.pathSegments.contains("document")) {
+                DocumentsContract.buildDocumentUriUsingTree(
+                    parentUri, DocumentsContract.getTreeDocumentId(parentUri)
+                )
+            } else {
+                parentUri
+            }
+            DocumentsContract.createDocument(resolver, docUri, mimeType, displayName)?.toString()
         } catch (e: Exception) {
-            Log.e(TAG, "createFile failed (parent=$parentTreeUriString, name=$displayName): ${e.message}", e)
+            Log.e(TAG, "createFile failed (parent=$parentUriString, name=$displayName): ${e.message}", e)
             null
         }
     }

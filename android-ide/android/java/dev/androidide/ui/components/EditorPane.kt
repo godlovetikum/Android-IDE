@@ -2,11 +2,6 @@
 //
 // Monaco editor WebView + optional live-preview WebView side-by-side.
 //
-// Migration note (2026-06-12):
-//   Replaces the WebView placeholder in ui/main.slint and the IDEActivity
-//   overlay Java code that positioned the editor/preview WebViews.
-//   The Monaco WebView is now a first-class Compose AndroidView.
-//
 // Architecture decision MD-003:
 //   Both WebViews are wrapped in remember {} so they survive recompositions.
 //   The AndroidView update lambda is intentionally a no-op for the editor —
@@ -15,7 +10,12 @@
 // Bridge protocol (MD-004):
 //   Inbound  from Monaco: window.AndroidBridge.onMessage(json)
 //   Outbound to Monaco:   window.androidIDE.receiveMessage(obj)
-//   The JS files in android/assets/editor/ are NOT modified.
+//
+// URI encoding fix:
+//   monaco-init.js encodes the SAF content:// URI as encodeURIComponent(path)
+//   inside the Monaco model URI (androidide:///files/<encoded>) so that
+//   monaco.Uri.parse never receives a raw content:// string, which would
+//   produce a malformed URI and abort the loadFile call silently.
 
 package dev.androidide.ui.components
 
@@ -33,13 +33,15 @@ import androidx.compose.ui.viewinterop.AndroidView
 import dev.androidide.editor.EditorBridge
 import dev.androidide.editor.EditorInbound
 import dev.androidide.editor.EditorOutbound
-import dev.androidide.ui.theme.IdeBackground
-import dev.androidide.ui.theme.IdeSeparator
+import dev.androidide.ui.theme.LocalIdeColors
 import dev.androidide.viewmodel.model.EditorTab
 
-// SetJavaScriptEnabled: Monaco requires JS — this is intentional for a code editor.
-// WebViewClientOnReceivedSslError: default WebViewClient behaviour is appropriate
-//   for development; a production build should override onReceivedSslError.
+// SetJavaScriptEnabled: Monaco requires JS — intentional for a code editor.
+// JavascriptInterface: EditorBridge.onMessage IS annotated with @JavascriptInterface.
+//   Lint reports this as an error because it cannot resolve the concrete type of
+//   `editorBridge` through the generic remember<T>{} return — it sees T, not EditorBridge.
+//   The annotation IS present; this suppression silences the false-positive.
+// WebViewClientOnReceivedSslError: default behaviour is acceptable for a dev tool.
 @SuppressLint("SetJavaScriptEnabled", "JavascriptInterface", "WebViewClientOnReceivedSslError")
 @Composable
 fun EditorPane(
@@ -52,14 +54,11 @@ fun EditorPane(
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
+    val colors  = LocalIdeColors.current
 
     // ── EditorBridge — survives recompositions ─────────────────────────────
-    // Explicit type annotation required: lint resolves addJavascriptInterface(obj, name)
-    // against the declared type of obj. Without it, lint sees the generic return type T
-    // of remember<T>{} and cannot find @JavascriptInterface on T.
     val editorBridge: EditorBridge = remember { EditorBridge() }
 
-    // Update the message listener when the callback reference changes.
     DisposableEffect(onEditorMessage) {
         editorBridge.messageListener = { msg ->
             if (msg is EditorInbound.Ready) onEditorReady()
@@ -80,19 +79,17 @@ fun EditorPane(
                 loadWithOverviewMode             = true
                 setSupportZoom(false)
             }
-            isScrollbarFadingEnabled    = false
-            isVerticalScrollBarEnabled  = false
+            isScrollbarFadingEnabled     = false
+            isVerticalScrollBarEnabled   = false
             isHorizontalScrollBarEnabled = false
             addJavascriptInterface(editorBridge, "AndroidBridge")
             webChromeClient = WebChromeClient()
             webViewClient   = WebViewClient()
-            // Load the Monaco bundle from APK assets.
             loadUrl("file:///android_asset/editor/index.html")
         }
     }
 
     // ── Load active file into Monaco when tab or readiness changes ──────────
-    // Fires when: a new tab becomes active, or the editor signals ready.
     LaunchedEffect(activeTab?.id, activeTab?.content, isEditorReady) {
         if (isEditorReady && activeTab != null && activeTab.content != null) {
             editorBridge.send(
@@ -107,23 +104,19 @@ fun EditorPane(
     }
 
     // ── Layout ──────────────────────────────────────────────────────────────
-    Row(modifier = modifier.background(IdeBackground)) {
-        // Monaco editor
+    Row(modifier = modifier.background(colors.background)) {
         AndroidView(
             factory = { editorWebView },
             update  = { /* no-op — all updates via evaluateJavascript */ },
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxHeight(),
+            modifier = Modifier.weight(1f).fillMaxHeight(),
         )
 
-        // Live preview panel (conditionally visible)
         if (isPreviewVisible) {
             Box(
                 modifier = Modifier
                     .width(1.dp)
                     .fillMaxHeight()
-                    .background(IdeSeparator),
+                    .background(colors.separator),
             )
 
             val previewWebView = remember {
@@ -142,9 +135,7 @@ fun EditorPane(
             AndroidView(
                 factory  = { previewWebView },
                 update   = { /* no-op */ },
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxHeight(),
+                modifier = Modifier.weight(1f).fillMaxHeight(),
             )
         }
     }

@@ -1,24 +1,15 @@
 // android-ide/android/java/dev/androidide/ui/IdeScreen.kt
 //
-// Root IDE screen composable — adaptive layout.
-//
-// Migration note (2026-06-12):
-//   Replaces the root Slint layout in ui/main.slint.
-//   Same layout structure (app bar + sidebar + editor column + status bar);
-//   same adaptive threshold (600dp) from the Slint NARROW_THRESHOLD_DP constant.
+// Editor screen — adaptive layout with file tree and Monaco editor.
+// Theme colours are read from LocalIdeColors so dark/light switching
+// applies without restarting the activity.
 //
 // Layout:
-//   Wide (≥ 600dp):  [ TopBar                              ]  48dp
-//                    [ FileTree (240dp) │ Editor column     ]  flex
-//                    [ StatusBar                            ]  22dp
-//
-//   Narrow (< 600dp): TopBar with menu icon → opens ModalNavigationDrawer
-//                     Editor column fills the width
-//                     StatusBar at the bottom
+//   Wide (≥ 600dp): permanent sidebar (240dp) + editor column
+//   Narrow (< 600dp): ModalNavigationDrawer + editor column
 
 package dev.androidide.ui
 
-import android.content.Intent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
@@ -29,89 +20,71 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.viewmodel.compose.viewModel
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import dev.androidide.ui.components.EditorPane
 import dev.androidide.ui.components.EditorTabBar
 import dev.androidide.ui.components.FileTreePanel
 import dev.androidide.ui.components.IdeStatusBar
-import dev.androidide.ui.theme.*
+import dev.androidide.ui.theme.LocalIdeColors
 import dev.androidide.viewmodel.IdeViewModel
+import dev.androidide.viewmodel.model.FileNode
+import dev.androidide.viewmodel.model.FileOpDialog
+import dev.androidide.viewmodel.model.IdeUiState
 import kotlinx.coroutines.launch
 
 @Composable
-fun IdeScreen(ideViewModel: IdeViewModel = viewModel()) {
-    val uiState by ideViewModel.uiState.collectAsState()
-    val context = LocalContext.current
-    val screenWidthDp = LocalConfiguration.current.screenWidthDp
-    val isWide = screenWidthDp >= 600  // mirrors Slint NARROW_THRESHOLD_DP = 600
-
-    val openProjectLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.OpenDocumentTree()
-    ) { uri ->
-        if (uri != null) {
-            // Persist read + write access across device reboots.
-            context.contentResolver.takePersistableUriPermission(
-                uri,
-                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
-            )
-            ideViewModel.openProject(uri.toString())
-        }
-    }
-
-    val activeTab = uiState.openTabs.firstOrNull { it.isActive }
+fun IdeScreen(
+    ideViewModel: IdeViewModel,
+    uiState: IdeUiState,
+    onOpenProjectFolder: () -> Unit,
+) {
+    val colors         = LocalIdeColors.current
+    val screenWidthDp  = LocalConfiguration.current.screenWidthDp
+    val isWide         = screenWidthDp >= 600
+    val activeTab      = uiState.openTabs.firstOrNull { it.isActive }
 
     if (isWide) {
-        // ── Wide layout: permanent sidebar ─────────────────────────────────
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(IdeBackground)
-                .systemBarsPadding(),
-        ) {
+        Column(modifier = Modifier.fillMaxSize().background(colors.background)) {
             IdeTopBar(
-                projectName  = uiState.projectName,
-                onOpenProject = { openProjectLauncher.launch(null) },
-                onSave       = { ideViewModel.saveActiveFile() },
-                onMenuClick  = null,
+                projectName   = uiState.projectName,
+                onOpenProject = onOpenProjectFolder,
+                onSave        = ideViewModel::saveActiveFile,
+                onMenuClick   = null,
             )
-
             Row(modifier = Modifier.weight(1f).fillMaxWidth()) {
-                // Sidebar: 240dp — matches Slint sidebar width
                 FileTreePanel(
-                    nodes      = uiState.fileTree,
-                    onFileClick = ideViewModel::openFile,
-                    onDirToggle = ideViewModel::toggleDirectory,
-                    modifier   = Modifier.width(240.dp).fillMaxHeight().background(IdeSurface),
+                    nodes                    = uiState.fileTree,
+                    onFileClick              = ideViewModel::openFile,
+                    onDirToggle              = ideViewModel::toggleDirectory,
+                    onShowRenameDialog       = ideViewModel::showRenameDialog,
+                    onShowDeleteDialog       = ideViewModel::showDeleteDialog,
+                    onShowCreateFileDialog   = ideViewModel::showCreateFileDialog,
+                    onShowCreateFolderDialog = ideViewModel::showCreateFolderDialog,
+                    onShowDuplicateDialog    = ideViewModel::showDuplicateDialog,
+                    modifier                 = Modifier.width(240.dp).fillMaxHeight().background(colors.surface),
                 )
-                VerticalDivider(thickness = 1.dp, color = IdeSeparator)
-
-                // Editor column
+                VerticalDivider(thickness = 1.dp, color = colors.separator)
                 Column(modifier = Modifier.weight(1f).fillMaxHeight()) {
                     if (uiState.openTabs.isNotEmpty()) {
                         EditorTabBar(
-                            tabs         = uiState.openTabs,
+                            tabs          = uiState.openTabs,
                             onTabSelected = ideViewModel::selectTab,
-                            onTabClosed  = ideViewModel::closeTab,
+                            onTabClosed   = ideViewModel::closeTab,
                         )
-                        HorizontalDivider(thickness = 1.dp, color = IdeSeparator)
+                        HorizontalDivider(thickness = 1.dp, color = colors.separator)
                     }
                     EditorPane(
-                        activeTab          = activeTab,
-                        isEditorReady      = uiState.isEditorReady,
-                        isPreviewVisible   = uiState.isPreviewVisible,
-                        previewUrl         = uiState.previewUrl,
-                        onEditorReady      = ideViewModel::onEditorReady,
-                        onEditorMessage    = ideViewModel::onEditorMessage,
-                        modifier           = Modifier.weight(1f).fillMaxWidth(),
+                        activeTab        = activeTab,
+                        isEditorReady    = uiState.isEditorReady,
+                        isPreviewVisible = uiState.isPreviewVisible,
+                        previewUrl       = uiState.previewUrl,
+                        onEditorReady    = ideViewModel::onEditorReady,
+                        onEditorMessage  = ideViewModel::onEditorMessage,
+                        modifier         = Modifier.weight(1f).fillMaxWidth(),
                     )
                 }
             }
-
             IdeStatusBar(
                 cursorLine    = uiState.cursorLine,
                 cursorColumn  = uiState.cursorColumn,
@@ -121,49 +94,47 @@ fun IdeScreen(ideViewModel: IdeViewModel = viewModel()) {
             )
         }
     } else {
-        // ── Narrow layout: sidebar in modal drawer ──────────────────────────
         val drawerState = rememberDrawerState(DrawerValue.Closed)
         val scope = rememberCoroutineScope()
-
         ModalNavigationDrawer(
-            drawerState = drawerState,
+            drawerState   = drawerState,
             drawerContent = {
                 ModalDrawerSheet(
-                    modifier            = Modifier.width(280.dp),
-                    drawerContainerColor = IdeSurface,
+                    modifier             = Modifier.width(280.dp),
+                    drawerContainerColor = colors.surface,
                 ) {
                     FileTreePanel(
-                        nodes      = uiState.fileTree,
-                        onFileClick = { uri ->
+                        nodes                    = uiState.fileTree,
+                        onFileClick              = { uri ->
                             ideViewModel.openFile(uri)
                             scope.launch { drawerState.close() }
                         },
-                        onDirToggle = ideViewModel::toggleDirectory,
-                        modifier   = Modifier.fillMaxSize(),
+                        onDirToggle              = ideViewModel::toggleDirectory,
+                        onShowRenameDialog       = ideViewModel::showRenameDialog,
+                        onShowDeleteDialog       = ideViewModel::showDeleteDialog,
+                        onShowCreateFileDialog   = ideViewModel::showCreateFileDialog,
+                        onShowCreateFolderDialog = ideViewModel::showCreateFolderDialog,
+                        onShowDuplicateDialog    = ideViewModel::showDuplicateDialog,
+                        modifier                 = Modifier.fillMaxSize(),
                     )
                 }
             },
         ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(IdeBackground)
-                    .systemBarsPadding(),
-            ) {
+            Column(modifier = Modifier.fillMaxSize().background(colors.background)) {
                 IdeTopBar(
-                    projectName  = uiState.projectName,
-                    onOpenProject = { openProjectLauncher.launch(null) },
-                    onSave       = { ideViewModel.saveActiveFile() },
-                    onMenuClick  = { scope.launch { drawerState.open() } },
+                    projectName   = uiState.projectName,
+                    onOpenProject = onOpenProjectFolder,
+                    onSave        = ideViewModel::saveActiveFile,
+                    onMenuClick   = { scope.launch { drawerState.open() } },
                 )
                 Column(modifier = Modifier.weight(1f).fillMaxWidth()) {
                     if (uiState.openTabs.isNotEmpty()) {
                         EditorTabBar(
-                            tabs         = uiState.openTabs,
+                            tabs          = uiState.openTabs,
                             onTabSelected = ideViewModel::selectTab,
-                            onTabClosed  = ideViewModel::closeTab,
+                            onTabClosed   = ideViewModel::closeTab,
                         )
-                        HorizontalDivider(thickness = 1.dp, color = IdeSeparator)
+                        HorizontalDivider(thickness = 1.dp, color = colors.separator)
                     }
                     EditorPane(
                         activeTab        = activeTab,
@@ -185,6 +156,9 @@ fun IdeScreen(ideViewModel: IdeViewModel = viewModel()) {
             }
         }
     }
+
+    // File operation dialogs — driven by IdeUiState.fileOpDialog
+    FileOpDialogHost(dialog = uiState.fileOpDialog, ideViewModel = ideViewModel)
 }
 
 // ── Top app bar ────────────────────────────────────────────────────────────────
@@ -197,19 +171,20 @@ private fun IdeTopBar(
     onSave: () -> Unit,
     onMenuClick: (() -> Unit)?,
 ) {
+    val colors = LocalIdeColors.current
     TopAppBar(
         title = {
             Column(verticalArrangement = Arrangement.Center) {
                 Text(
                     text  = "Android IDE",
                     style = MaterialTheme.typography.titleMedium,
-                    color = IdeTextPrimary,
+                    color = colors.textPrimary,
                 )
                 if (projectName.isNotEmpty()) {
                     Text(
                         text     = projectName,
                         style    = MaterialTheme.typography.bodySmall,
-                        color    = IdeTextSecondary,
+                        color    = colors.textSecondary,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
@@ -222,7 +197,7 @@ private fun IdeTopBar(
                     Icon(
                         imageVector        = Icons.Default.Menu,
                         contentDescription = "Open file tree",
-                        tint               = IdeTextSecondary,
+                        tint               = colors.textSecondary,
                     )
                 }
             }
@@ -232,22 +207,145 @@ private fun IdeTopBar(
                 Icon(
                     imageVector        = Icons.Default.Save,
                     contentDescription = "Save file",
-                    tint               = IdeTextSecondary,
+                    tint               = colors.textSecondary,
                 )
             }
             IconButton(onClick = onOpenProject) {
                 Icon(
                     imageVector        = Icons.Default.FolderOpen,
                     contentDescription = "Open project folder",
-                    tint               = IdeTextSecondary,
+                    tint               = colors.textSecondary,
                 )
             }
         },
         colors = TopAppBarDefaults.topAppBarColors(
-            containerColor         = IdeSurface,
-            titleContentColor      = IdeTextPrimary,
-            actionIconContentColor = IdeTextSecondary,
+            containerColor         = colors.surface,
+            titleContentColor      = colors.textPrimary,
+            actionIconContentColor = colors.textSecondary,
         ),
         modifier = Modifier.height(48.dp),
+    )
+}
+
+// ── File operation dialogs ─────────────────────────────────────────────────────
+
+@Composable
+private fun FileOpDialogHost(
+    dialog: FileOpDialog?,
+    ideViewModel: IdeViewModel,
+) {
+    when (dialog) {
+        is FileOpDialog.Rename -> RenameDialog(
+            node      = dialog.node,
+            onConfirm = { name -> ideViewModel.renameNode(dialog.node, name) },
+            onDismiss = ideViewModel::dismissFileOpDialog,
+        )
+        is FileOpDialog.Delete -> DeleteConfirmDialog(
+            node      = dialog.node,
+            onConfirm = { ideViewModel.deleteNode(dialog.node) },
+            onDismiss = ideViewModel::dismissFileOpDialog,
+        )
+        is FileOpDialog.CreateFile -> NameInputDialog(
+            title        = "New File",
+            label        = "File name",
+            initialValue = "",
+            onConfirm    = { name -> ideViewModel.createFileInDirectory(dialog.parentNode, name) },
+            onDismiss    = ideViewModel::dismissFileOpDialog,
+        )
+        is FileOpDialog.CreateFolder -> NameInputDialog(
+            title        = "New Folder",
+            label        = "Folder name",
+            initialValue = "",
+            onConfirm    = { name -> ideViewModel.createFolderInDirectory(dialog.parentNode, name) },
+            onDismiss    = ideViewModel::dismissFileOpDialog,
+        )
+        is FileOpDialog.Duplicate -> NameInputDialog(
+            title        = "Duplicate",
+            label        = "New name",
+            initialValue = "Copy of ${dialog.node.displayName}",
+            onConfirm    = { name -> ideViewModel.duplicateFile(dialog.node, name) },
+            onDismiss    = ideViewModel::dismissFileOpDialog,
+        )
+        null -> Unit
+    }
+}
+
+@Composable
+private fun RenameDialog(
+    node: FileNode,
+    onConfirm: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var text by remember { mutableStateOf(node.displayName) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title   = { Text("Rename") },
+        text    = {
+            OutlinedTextField(
+                value        = text,
+                onValueChange = { text = it },
+                label        = { Text("New name") },
+                singleLine   = true,
+            )
+        },
+        confirmButton = {
+            TextButton(
+                onClick  = { if (text.isNotBlank()) onConfirm(text.trim()) },
+                enabled  = text.isNotBlank(),
+            ) { Text("Rename") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+@Composable
+private fun DeleteConfirmDialog(
+    node: FileNode,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title   = { Text("Delete") },
+        text    = {
+            Text(
+                "Permanently delete \"${node.displayName}\"?" +
+                if (node.isDirectory) "\n\nAll files inside will also be deleted." else ""
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = onConfirm) { Text("Delete", color = LocalIdeColors.current.error) }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+@Composable
+private fun NameInputDialog(
+    title: String,
+    label: String,
+    initialValue: String,
+    onConfirm: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var text by remember { mutableStateOf(initialValue) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title   = { Text(title) },
+        text    = {
+            OutlinedTextField(
+                value         = text,
+                onValueChange = { text = it },
+                label         = { Text(label) },
+                singleLine    = true,
+            )
+        },
+        confirmButton = {
+            TextButton(
+                onClick  = { if (text.isNotBlank()) onConfirm(text.trim()) },
+                enabled  = text.isNotBlank(),
+            ) { Text("OK") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }

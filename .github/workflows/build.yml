@@ -6,6 +6,21 @@ name: Android IDE Build
 #          "cargo ndk build" steps, GTK/WebKit2GTK system deps, x86 Rust job.
 # Preserved: JDK 17, Android SDK setup, Gradle wrapper generation,
 #            Monaco bundling (scripts/fetch-monaco.sh), APK upload.
+#
+# APK signing:
+#   Debug APK:   always signed with the auto-generated Android SDK debug keystore.
+#   Release APK: signed with a production keystore when the four KEYSTORE_*
+#                secrets are configured in repo Settings → Secrets → Actions.
+#                Falls back to the debug keystore automatically when secrets are
+#                absent (fork PRs, local dev — still produces an installable APK).
+#
+# Downloading the APK:
+#   GitHub Actions wraps uploaded artifacts in a zip archive.
+#   Download the artifact, unzip it, and install the .apk inside:
+#     adb install app-debug.apk          (USB / wireless debugging)
+#     adb install app-release.apk
+#   Or transfer the .apk to the device and open it with a file manager
+#   (requires "Install from unknown sources" enabled in Android settings).
 
 on:
   push:
@@ -18,9 +33,9 @@ env:
   ANDROID_TARGET_SDK: "34"
 
 jobs:
-  # ─────────────────────────────────────────────
-  # Job 1: Lint + Debug APK (fast feedback)
-  # ─────────────────────────────────────────────
+  # ─────────────────────────────────────────────────────────────
+  # Job 1: Lint + Debug APK (fast feedback on every push/PR)
+  # ─────────────────────────────────────────────────────────────
   check:
     name: Lint & Debug Build
     runs-on: ubuntu-latest
@@ -36,11 +51,9 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      # Install the Android platform package so aapt2 and compileSdk 34 work.
       - name: Install Android platform
         run: sdkmanager "platforms;android-${{ env.ANDROID_TARGET_SDK }}"
 
-      # Materialise the Gradle wrapper jar (gradle-wrapper.properties specifies 8.7).
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v3
         with:
@@ -71,9 +84,9 @@ jobs:
           path: android-ide/android/app/build/outputs/apk/debug/*.apk
           retention-days: 7
 
-  # ─────────────────────────────────────────────
-  # Job 2: Release APK
-  # ─────────────────────────────────────────────
+  # ─────────────────────────────────────────────────────────────
+  # Job 2: Release APK (runs after lint+debug passes)
+  # ─────────────────────────────────────────────────────────────
   build-release:
     name: Build Release APK
     runs-on: ubuntu-latest
@@ -106,8 +119,45 @@ jobs:
         working-directory: android-ide
         run: bash scripts/fetch-monaco.sh
 
+      # The debug keystore is used as a fallback when KEYSTORE_BASE64 is not set.
+      # It is created automatically by `assembleDebug` in the `check` job, but
+      # this job runs on a fresh runner — create it here if absent.
+      - name: Ensure debug keystore exists (fallback signing)
+        run: |
+          mkdir -p ~/.android
+          if [ ! -f ~/.android/debug.keystore ]; then
+            keytool -genkeypair -v \
+              -keystore ~/.android/debug.keystore \
+              -alias androiddebugkey \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass android -keypass android \
+              -dname "CN=Android Debug, O=Android, C=US"
+            echo "Created debug keystore (fallback for unsigned release)."
+          else
+            echo "Debug keystore already exists."
+          fi
+
+      # Show which signing path will be taken so the build log is unambiguous.
+      - name: Report signing mode
+        run: |
+          if [ -n "${{ secrets.KEYSTORE_BASE64 }}" ]; then
+            echo "Signing mode: RELEASE (production keystore from secrets)"
+          else
+            echo "Signing mode: FALLBACK (debug keystore — secrets not configured)"
+            echo "To enable release signing, add KEYSTORE_BASE64, KEYSTORE_PASSWORD,"
+            echo "KEY_ALIAS, and KEY_PASSWORD to repo Settings → Secrets → Actions."
+          fi
+
+      # Pass the four signing secrets as environment variables.
+      # Gradle's signingConfigs.release block reads these at configuration time.
+      # When any variable is empty/absent, Gradle falls back to the debug keystore.
       - name: Build release APK
         working-directory: android-ide/android
+        env:
+          KEYSTORE_BASE64:    ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD:  ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS:          ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD:       ${{ secrets.KEY_PASSWORD }}
         run: ./gradlew assembleRelease
 
       - name: Upload release APK

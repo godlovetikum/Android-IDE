@@ -1,32 +1,30 @@
 // android-ide/android/java/dev/androidide/viewmodel/model/FileNode.kt
 //
 // Represents a single node in the SAF-backed file tree.
-//
-// Migration note (2026-06-12):
-//   Replaces the Rust FileNode struct in modules/filesystem/src/tree.rs.
-//   Same fields; Kotlin data class instead of Rust struct.
 
 package dev.androidide.viewmodel.model
 
 /**
  * A file or directory entry in the project's SAF document tree.
  *
- * [documentUri]  Full SAF document URI — use as the stable identifier for all
- *                ContentResolver operations. NOTE: URIs can change after a
- *                rename (see SafRepository.renameDocument).
- * [displayName]  Human-readable name shown in the file tree.
- * [mimeType]     MIME type from DocumentsContract. Directory nodes have
- *                mimeType = "vnd.android.document/directory".
- * [size]         File size in bytes; 0 for directories.
- * [isDirectory]  Derived from mimeType. True for directory nodes.
- * [children]     Lazily loaded — empty until the node is expanded.
- * [isExpanded]   Whether the directory is open in the file tree UI.
+ * [documentUri]        Full SAF document URI — stable identifier for all ContentResolver ops.
+ *                      NOTE: URIs can change after a rename (see SafRepository.renameDocument).
+ * [displayName]        Human-readable name shown in the file tree.
+ * [mimeType]           MIME type from DocumentsContract.
+ *                      Directory nodes: "vnd.android.document/directory".
+ * [size]               File size in bytes; 0 for directories.
+ * [parentDocumentUri]  SAF URI of the parent directory. Used for create/duplicate operations.
+ *                      Null only for tree root nodes where the parent is the project root.
+ * [children]           Lazily loaded — empty until the node is expanded.
+ * [isExpanded]         Whether the directory is open in the file tree UI.
+ * [isDirectory]        Derived from mimeType.
  */
 data class FileNode(
     val documentUri: String,
     val displayName: String,
     val mimeType: String,
     val size: Long = 0L,
+    val parentDocumentUri: String? = null,
     val children: List<FileNode> = emptyList(),
     val isExpanded: Boolean = false,
 ) {
@@ -36,10 +34,6 @@ data class FileNode(
 
 // ── File tree manipulation helpers ────────────────────────────────────────────
 
-/**
- * Toggle the expanded state of the node with [documentUri].
- * Operates recursively through the entire tree.
- */
 fun List<FileNode>.toggleExpanded(documentUri: String): List<FileNode> = map { node ->
     when {
         node.documentUri == documentUri -> node.copy(isExpanded = !node.isExpanded)
@@ -48,10 +42,6 @@ fun List<FileNode>.toggleExpanded(documentUri: String): List<FileNode> = map { n
     }
 }
 
-/**
- * Set the children of the node with [documentUri].
- * Used when a directory is expanded and its children are loaded from SAF.
- */
 fun List<FileNode>.setChildren(documentUri: String, children: List<FileNode>): List<FileNode> = map { node ->
     when {
         node.documentUri == documentUri -> node.copy(children = children, isExpanded = true)
@@ -60,9 +50,6 @@ fun List<FileNode>.setChildren(documentUri: String, children: List<FileNode>): L
     }
 }
 
-/**
- * Find a node by [documentUri], searching recursively.
- */
 fun List<FileNode>.findNode(documentUri: String): FileNode? {
     for (node in this) {
         if (node.documentUri == documentUri) return node
@@ -73,8 +60,28 @@ fun List<FileNode>.findNode(documentUri: String): FileNode? {
 }
 
 /**
- * Sort nodes: directories first, then files, both alphabetically.
+ * Replace a node identified by [oldDocumentUri] with [updatedNode].
+ * Used after rename (the URI may change).
  */
+fun List<FileNode>.replaceNode(oldDocumentUri: String, updatedNode: FileNode): List<FileNode> = map { node ->
+    when {
+        node.documentUri == oldDocumentUri -> updatedNode
+        node.children.isNotEmpty() -> node.copy(children = node.children.replaceNode(oldDocumentUri, updatedNode))
+        else -> node
+    }
+}
+
+/**
+ * Remove the node with [documentUri] from the tree.
+ */
+fun List<FileNode>.removeNode(documentUri: String): List<FileNode> = mapNotNull { node ->
+    when {
+        node.documentUri == documentUri -> null
+        node.children.isNotEmpty() -> node.copy(children = node.children.removeNode(documentUri))
+        else -> node
+    }
+}
+
 fun List<FileNode>.sortedForTree(): List<FileNode> =
     sortedWith(compareByDescending<FileNode> { it.isDirectory }.thenBy { it.displayName.lowercase() })
         .map { if (it.isDirectory) it.copy(children = it.children.sortedForTree()) else it }

@@ -14,6 +14,13 @@
 //   Migrated from Slint/Rust + JNI to Kotlin/Jetpack Compose.
 //   Removed: NDK ABI filters, jniLibs source set, no-op dependencies block.
 //   Added: Kotlin plugin, Compose build feature, Material3 + ViewModel deps.
+//
+// APK signing:
+//   Debug:   auto-generated Android SDK debug keystore — always available.
+//   Release: reads four GitHub Secrets (KEYSTORE_BASE64, KEYSTORE_PASSWORD,
+//            KEY_ALIAS, KEY_PASSWORD). When any secret is absent (local dev,
+//            fork PRs), falls back to the debug keystore automatically.
+//   See the signingConfigs block below for setup instructions.
 
 plugins {
     id("com.android.application")
@@ -44,6 +51,72 @@ android {
         }
     }
 
+    // ── APK Signing ─────────────────────────────────────────────────────────
+    //
+    // Release signing setup (one-time, per project):
+    //
+    //   1. Generate a release keystore:
+    //        keytool -genkeypair -v \
+    //          -keystore release.keystore \
+    //          -alias android-ide-release \
+    //          -keyalg RSA -keysize 4096 -validity 10000 \
+    //          -storepass <storePassword> -keypass <keyPassword> \
+    //          -dname "CN=Android IDE, O=YourOrg, C=US"
+    //
+    //   2. Base64-encode the keystore file (no line wrapping):
+    //        base64 -w 0 release.keystore > release.keystore.b64
+    //        # macOS: base64 -i release.keystore -o release.keystore.b64
+    //
+    //   3. Add four GitHub repository secrets (Settings → Secrets → Actions):
+    //        KEYSTORE_BASE64     — contents of release.keystore.b64
+    //        KEYSTORE_PASSWORD   — storePassword used in step 1
+    //        KEY_ALIAS           — android-ide-release (or whatever alias you used)
+    //        KEY_PASSWORD        — keyPassword used in step 1
+    //
+    // When the four secrets are present, assembleRelease produces a
+    // production-signed APK. When they are absent (fork CI, local dev),
+    // the release build automatically falls back to the debug keystore so
+    // the pipeline does not fail.
+    signingConfigs {
+        getByName("debug") {
+            // Standard Android SDK debug keystore — created automatically on
+            // first build. Values are fixed by Android convention; do not change.
+            storeFile     = file("${System.getProperty("user.home")}/.android/debug.keystore")
+            storePassword = "android"
+            keyAlias      = "androiddebugkey"
+            keyPassword   = "android"
+        }
+
+        create("release") {
+            val b64   = System.getenv("KEYSTORE_BASE64")
+            val spwd  = System.getenv("KEYSTORE_PASSWORD")
+            val alias = System.getenv("KEY_ALIAS")
+            val kpwd  = System.getenv("KEY_PASSWORD")
+
+            if (b64 != null && spwd != null && alias != null && kpwd != null) {
+                // Decode the base64 keystore into the build directory.
+                // The build directory is .gitignored and cleaned by `clean`.
+                val ksFile = layout.buildDirectory.file("signing/release.keystore").get().asFile
+                ksFile.parentFile.mkdirs()
+                ksFile.writeBytes(java.util.Base64.getDecoder().decode(b64))
+                storeFile     = ksFile
+                storePassword = spwd
+                keyAlias      = alias
+                keyPassword   = kpwd
+            } else {
+                // ── Fallback: debug keystore ────────────────────────────────
+                // Release secrets not configured → sign with the debug keystore.
+                // The resulting APK is installable on any device with USB
+                // debugging or "Install from unknown sources" enabled.
+                // NOT suitable for Play Store submission.
+                storeFile     = file("${System.getProperty("user.home")}/.android/debug.keystore")
+                storePassword = "android"
+                keyAlias      = "androiddebugkey"
+                keyPassword   = "android"
+            }
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -69,19 +142,20 @@ android {
 
     buildTypes {
         debug {
-            isDebuggable = true
+            signingConfig  = signingConfigs.getByName("debug")
+            isDebuggable   = true
             isMinifyEnabled = false
         }
         release {
+            signingConfig  = signingConfigs.getByName("release")
             isMinifyEnabled = false
-            // Debug signing for CI. Add a production keystore via GitHub Secrets
-            // before shipping to the Play Store.
-            signingConfig = signingConfigs.getByName("debug")
         }
     }
 
     lint {
-        // Suppress intentional debug-signed release warning during CI.
+        // SigningRelease warns when a release build uses the debug keystore.
+        // Suppressed here because the debug-keystore fallback in signingConfigs
+        // is intentional (fires on fork PRs and local dev without secrets).
         disable += "SigningRelease"
     }
 }

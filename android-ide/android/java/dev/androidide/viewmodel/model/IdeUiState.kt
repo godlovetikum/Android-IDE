@@ -1,46 +1,59 @@
 // android-ide/android/java/dev/androidide/viewmodel/model/IdeUiState.kt
 //
-// Single source of truth for the IDE's observable UI state.
-// Emitted as a StateFlow from IdeViewModel and collected by IdeScreen.
+// Single source of truth for all observable IDE UI state.
 
 package dev.androidide.viewmodel.model
 
-/**
- * Complete UI state for the IDE screen.
- *
- * All fields are immutable; IdeViewModel emits a new copy for each change.
- */
+import dev.androidide.data.model.AppTheme
+import dev.androidide.data.model.Project
+
 data class IdeUiState(
-    /** Display name shown in the top app bar (extracted from the project root URI). */
+    // ── Navigation ─────────────────────────────────────────────────────────
+    /** Which top-level screen is visible. */
+    val currentScreen: AppScreen = AppScreen.PROJECTS,
+
+    // ── Project ────────────────────────────────────────────────────────────
+    /** Display name shown in the top app bar. */
     val projectName: String = "",
 
     /** SAF tree URI of the open project root; null if no project is open. */
     val projectRootUri: String? = null,
 
-    /** Root nodes of the file tree sidebar. Directories carry lazy-loaded children. */
+    /** Recently-opened project registry, most-recent first. */
+    val recentProjects: List<Project> = emptyList(),
+
+    // ── File tree ──────────────────────────────────────────────────────────
+    /** Root nodes of the file tree sidebar. */
     val fileTree: List<FileNode> = emptyList(),
 
-    /** All open editor tabs. Exactly one may have isActive = true. */
+    // ── Editor ─────────────────────────────────────────────────────────────
+    /** All open editor tabs. */
     val openTabs: List<EditorTab> = emptyList(),
 
-    /** ID of the currently active tab (mirrors openTabs.first { it.isActive }.id). */
+    /** ID of the currently active tab. */
     val activeTabId: String? = null,
 
-    /** True once Monaco sends the "ready" message after its first load. */
+    /** True once Monaco sends the "ready" message. */
     val isEditorReady: Boolean = false,
 
-    /** Whether the live-preview WebView panel is visible alongside the editor. */
+    /** Whether the live-preview WebView is visible. */
     val isPreviewVisible: Boolean = false,
 
     /** URL loaded in the preview WebView. */
     val previewUrl: String = "about:blank",
 
-    /** Current cursor line number (1-based); updated via cursorMoved messages. */
+    // ── Cursor ─────────────────────────────────────────────────────────────
     val cursorLine: Int = 1,
-
-    /** Current cursor column (1-based). */
     val cursorColumn: Int = 1,
 
-    /** Transient status message shown in the status bar (e.g. "Saved", "Save failed"). */
+    // ── Status ─────────────────────────────────────────────────────────────
+    /** Transient status bar message (e.g. "Saved", "Renamed"). */
     val statusMessage: String = "",
+
+    // ── File operation dialog ──────────────────────────────────────────────
+    /** Non-null when a file operation dialog (rename / delete / create) is visible. */
+    val fileOpDialog: FileOpDialog? = null,
+
+    // ── Theme ──────────────────────────────────────────────────────────────
+    val appTheme: AppTheme = AppTheme.DARK,
 )
