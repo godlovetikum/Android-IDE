@@ -2,21 +2,19 @@
 <!--
   android-ide/android/assets/editor/index.html
 
-  Monaco Editor shell loaded by the Android WebView and the desktop wry webview.
+  Monaco Editor shell loaded by the Android WebView.
 
   Bridge protocol:
-    Rust → JS:  window.androidIDE.receiveMessage({ type, ...payload })
-    JS → Native: window.AndroidBridge.onMessage(jsonString)   [Android]
-                 window.__WRY_IPC__.postMessage(jsonString)    [Desktop / wry]
+    Kotlin → JS: window.androidIDE.receiveMessage({ type, ...payload })
+    JS → Kotlin: window.AndroidBridge.onMessage(jsonString)
 
-  Message types (matching bridge.rs):
-    Rust → JS:  loadFile, setTheme, setFontSize, requestSave, closeTab
-    JS → Rust:  ready, contentChanged, cursorMoved, fileSaved
+  Message types:
+    Kotlin → JS: loadFile, setTheme, setFontSize, requestSave, closeTab
+    JS → Kotlin: ready, contentChanged, cursorMoved, fileSaved
 
   Monaco bundle:
     Loaded from vs/loader.js — the bundled AMD files in the same directory.
     On Android: file:///android_asset/editor/vs/loader.js
-    On desktop: file:///path/to/assets/editor/vs/loader.js
     Version: 0.52.0 (pinned in scripts/fetch-monaco.sh)
     To upgrade: update MONACO_VERSION in scripts/fetch-monaco.sh.
 -->

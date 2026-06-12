@@ -5,8 +5,8 @@
 // Stack: Kotlin 1.9.22 + Jetpack Compose BOM 2024.02.00 + Material3
 //
 // Source layout (relative to android/app/):
-//   ../../java/dev/androidide/   — Kotlin source files (all .kt)
-//   ../../assets/editor/         — Monaco editor HTML + JS assets
+//   ../java/dev/androidide/   — Kotlin source files (all .kt)
+//   ../assets/editor/         — Monaco editor HTML + JS assets
 //   src/main/AndroidManifest.xml — Application manifest
 //   src/main/res/                — Launcher icon resources
 //
@@ -34,11 +34,13 @@ android {
 
     sourceSets {
         named("main") {
-            // Kotlin source files live at android/java/ (one level above app/).
+            // Kotlin source files live at android/java/ — one level above app/.
+            // Path: app/ -> ../java = android/java/
             // The Kotlin compiler picks up .kt files in java.srcDirs() by convention.
-            java.srcDirs("../../java")
+            java.srcDirs("../java")
             // Monaco editor assets at android/assets/.
-            assets.srcDirs("../../assets")
+            // Path: app/ -> ../assets = android/assets/
+            assets.srcDirs("../assets")
         }
     }
 

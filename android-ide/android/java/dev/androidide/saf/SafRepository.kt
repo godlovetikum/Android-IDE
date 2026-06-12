@@ -62,11 +62,19 @@ class SafRepository(private val context: Context) {
             val docId: String
             if (DocumentsContract.isTreeUri(parentUri)) {
                 treeUri = parentUri
-                docId = DocumentsContract.getTreeDocumentId(parentUri)
+                // A plain tree URI (from ACTION_OPEN_DOCUMENT_TREE) has the path
+                //   /tree/<docId>
+                // A document URI built by buildDocumentUriUsingTree has the path
+                //   /tree/<treeDocId>/document/<docId>
+                // getTreeDocumentId() always returns the ROOT docId — wrong for subdirs.
+                // Use getDocumentId() when a "document" segment is present (child URIs),
+                // fall back to getTreeDocumentId() for the root tree URI.
+                docId = if (parentUri.pathSegments.contains("document")) {
+                    DocumentsContract.getDocumentId(parentUri)
+                } else {
+                    DocumentsContract.getTreeDocumentId(parentUri)
+                }
             } else {
-                // For child directory URIs obtained from a previous listing,
-                // we use the document URI directly. We need a tree root too —
-                // reconstruct it from the document URI (same tree root).
                 treeUri = parentUri
                 docId = DocumentsContract.getDocumentId(parentUri)
             }

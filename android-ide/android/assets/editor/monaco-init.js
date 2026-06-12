@@ -1,16 +1,16 @@
 /**
  * android-ide/android/assets/editor/monaco-init.js
  *
- * Monaco Editor initialisation and bidirectional bridge to the Rust layer.
+ * Monaco Editor initialisation and bidirectional bridge to the Kotlin layer.
  *
- * Inbound protocol  (Rust → JS via evaluateJavascript / wry IPC):
+ * Inbound protocol  (Kotlin → JS via WebView.evaluateJavascript):
  *   { type: "loadFile",    path, content, language }
  *   { type: "setTheme",    theme }
  *   { type: "setFontSize", size }
  *   { type: "requestSave", path }
  *   { type: "closeTab",    path }
  *
- * Outbound protocol (JS → Rust via AndroidBridge or wry):
+ * Outbound protocol (JS → Kotlin via AndroidBridge.onMessage):
  *   { type: "ready" }
  *   { type: "contentChanged", path, content }
  *   { type: "cursorMoved",    line, column }
@@ -22,21 +22,16 @@
  */
 
 // ---------------------------------------------------------------------------
-// Platform detection
+// Bridge
 // ---------------------------------------------------------------------------
-
-const IS_ANDROID = typeof window.AndroidBridge !== 'undefined';
 
 function postToNative(msg) {
   const json = JSON.stringify(msg);
-  if (IS_ANDROID) {
-    // Java @JavascriptInterface — synchronous call
+  if (typeof window.AndroidBridge !== 'undefined') {
+    // Kotlin @JavascriptInterface — synchronous call from the WebView JS thread
     window.AndroidBridge.onMessage(json);
-  } else if (window.__WRY_IPC__) {
-    // wry desktop IPC
-    window.__WRY_IPC__.postMessage(json);
   } else {
-    // Fallback: postMessage to parent frame (useful for development in a browser)
+    // Fallback for browser-based development
     window.parent.postMessage(json, '*');
   }
 }

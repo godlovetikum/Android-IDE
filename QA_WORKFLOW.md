@@ -20,18 +20,20 @@ The purpose of this workflow is to:
 At the beginning of every development session:
 
 1. Read `STATUS_TRACKER.md` — understand current project state
-2. Read `PROJECT_PLAN.md` — confirm the active phase and next task
+2. Read `README.md` (PROJECT_PLAN.md) — confirm the active phase and next task
 3. Identify **exactly one** target subsystem to work on
 
-**Allowed subsystem targets (examples):**
-- `filesystem` — file tree refresh
-- `editor` — Monaco theme switching
-- `terminal` — scrollback buffer
-- `git` — clone dialog
-- `linux-runtime` — proot bootstrap
-- `lsp` — diagnostic rendering
-- `extensions` — extension loader
-- `settings` — TOML serialization
+**Allowed subsystem targets:**
+- `saf` — SAF file operations (`saf/SafRepository.kt`)
+- `editor` — Monaco bridge (`editor/EditorBridge.kt`, `editor/EditorMessage.kt`)
+- `viewmodel` — IDE state management (`viewmodel/IdeViewModel.kt`, `viewmodel/model/`)
+- `ui` — Compose screens and components (`ui/IdeScreen.kt`, `ui/components/`)
+- `ui/theme` — Colors, typography, Material3 theme (`ui/theme/`)
+- `terminal` — Terminal UI + PTY (Phase 2, not yet started)
+- `linux-runtime` — proot environment (Phase 2, not yet started)
+- `git` — Git operations (Phase 3, not yet started)
+- `lsp` — Language server client (Phase 4, not yet started)
+- `extensions` — Extension loader (Phase 5, not yet started)
 
 **Do NOT:**
 - Select multiple subsystems simultaneously
@@ -44,9 +46,8 @@ At the beginning of every development session:
 
 Read **only** the files directly related to the active subsystem:
 
-- The subsystem's `src/modules/<subsystem>/mod.rs`
-- The subsystem's `README.md`
-- Any files in `DEBUG_LOG.md` pertaining to this subsystem
+- The subsystem's main Kotlin file(s)
+- Any entries in `DEBUG_LOG.md` pertaining to this subsystem
 - The current `STATUS_TRACKER.md` task entry
 
 **Never:**
@@ -55,7 +56,7 @@ Read **only** the files directly related to the active subsystem:
 - Perform full-project reviews (unless explicitly requested by the project owner)
 - Read files from unrelated subsystems
 
-If a dependency on another subsystem is encountered, read only that subsystem's **public API surface** (its `mod.rs` exports), not its internal implementation.
+If a dependency on another subsystem is encountered, read only that subsystem's **public API surface** (its exported types and functions), not its internal implementation.
 
 ---
 
@@ -91,9 +92,9 @@ Rules during execution:
 After implementation:
 
 1. If a bug was fixed: add an entry to `DEBUG_LOG.md`
-2. If an architectural decision was made: add it to `PROJECT_PLAN.md` under Architecture Decisions
-3. If a new file was created: document its purpose in the relevant module's `README.md`
-4. If a new dependency was added: record the justification in the module's `README.md`
+2. If an architectural decision was made: add it to `README.md` under Architecture Decisions
+3. If a new file was created: add a header comment to the file explaining its purpose
+4. If a new dependency was added: add it to `app/build.gradle.kts` with a comment explaining the reason
 
 ---
 
@@ -102,8 +103,7 @@ After implementation:
 1. Update `STATUS_TRACKER.md`:
    - Move the completed task from "In Progress" to "Completed"
    - Move the next task to "In Progress"
-   - Update phase completion percentage
-2. Update `PROJECT_PLAN.md` progress table if a phase milestone was reached
+2. Update `README.md` progress table if a phase milestone was reached
 
 ---
 
@@ -125,32 +125,24 @@ Never implement multiple major subsystems simultaneously. Only one subsystem may
 Never rewrite large sections of the codebase without explicit justification documented in the change plan.
 
 ### Rule 3 — No Broad Refactors
-Refactors must be isolated, scoped to a single module, and documented.
+Refactors must be isolated, scoped to a single package, and documented.
 
 ### Rule 4 — Document Every Decision
-Every architectural decision must be recorded before implementation begins.
+Every architectural decision must be recorded in `README.md` before implementation begins.
 
 ### Rule 5 — Justify Every Dependency
-Every new `Cargo.toml` dependency requires a written justification in the relevant module's `README.md`.
+Every new `implementation()` dependency in `app/build.gradle.kts` requires a comment explaining the reason.
 
-### Rule 6 — Document Every File
-Every new file must have a header comment stating its purpose.
+### Rule 6 — Header Comment on Every File
+Every new Kotlin file must have a header comment stating its purpose, what it replaces (if anything), and key design decisions.
 
-### Rule 7 — Module READMEs
-Every module must maintain a `README.md` explaining:
-- Purpose
-- Responsibilities
-- Public API surface
-- Dependencies (and why)
-- Known limitations
+### Rule 7 — No Placeholder Code
+Do not create stub implementations intended to be rewritten. If a production implementation is not yet feasible, document the architectural interface and leave the body with a clear `TODO("link to STATUS_TRACKER task #N")` comment.
 
-### Rule 8 — No Placeholder Code
-Do not create stub implementations intended to be rewritten. If a production implementation is not yet feasible, document the architectural interface and leave the body unimplemented with a clear `todo!()` macro and a comment linking to the relevant task in `STATUS_TRACKER.md`.
-
-### Rule 9 — No Mock Implementations
+### Rule 8 — No Mock Implementations
 Avoid mock implementations except when explicitly requested by the project owner.
 
-### Rule 10 — Assume Continuation
+### Rule 9 — Assume Continuation
 All work must be self-documenting. Assume another engineer (or AI session) may continue development at any point with no context from previous sessions other than the documentation in this repository.
 
 ---
@@ -171,11 +163,10 @@ Exceptions (require explicit project owner approval):
 | Operation | Allowed |
 |-----------|---------|
 | Read STATUS_TRACKER.md | Always |
-| Read PROJECT_PLAN.md | Always |
-| Read active subsystem mod.rs | Always |
-| Read active subsystem README.md | Always |
+| Read README.md | Always |
+| Read active subsystem Kotlin file(s) | Always |
 | Read dependency subsystem public API | When needed |
 | Read DEBUG_LOG.md for active subsystem | When debugging |
 | Read all files in repository | Prohibited without explicit approval |
 
-Last updated: 2026-06-10
+Last updated: 2026-06-12

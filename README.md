@@ -10,184 +10,146 @@ The IDE combines VS Code-style project management, Monaco Editor, an integrated 
 
 ---
 
+## Current Stack
+
+| Layer | Technology |
+|-------|------------|
+| Language | Kotlin 1.9.22 |
+| UI | Jetpack Compose + Material3 |
+| Activity | `ComponentActivity` (`setContent {}`) |
+| Editor | Monaco 0.52.0 in `WebView` (Compose `AndroidView`) |
+| File I/O | Android Storage Access Framework (SAF) via `SafRepository.kt` |
+| State | `AndroidViewModel` + `StateFlow` |
+| Build | Gradle 8.7 + AGP 8.3.2 + Kotlin DSL |
+| CI | GitHub Actions — lint + debug APK, release APK |
+
+---
+
 ## Architecture Overview
 
 ```
 android-ide/
-├── src/
-│   ├── main.rs              — Application entry point
-│   └── lib.rs               — Library root / public API surface
-├── modules/
-│   ├── editor/              — Monaco editor integration via WebView
-│   ├── filesystem/          — Android Storage Access Framework bridge
-│   ├── terminal/            — PTY management and terminal UI
-│   ├── linux-runtime/       — Embedded Linux environment (proot/chroot)
-│   ├── git/                 — Git operations via git2-rs
-│   ├── lsp/                 — Language Server Protocol client
-│   ├── extensions/          — Extension loader and lifecycle manager
-│   ├── settings/            — Persistent user/project settings
-│   └── documentation/       — In-app documentation viewer
-├── ui/
-│   └── *.slint              — Slint UI component definitions
 ├── android/
-│   ├── AndroidManifest.xml
-│   └── build.gradle.kts
-├── .github/
-│   └── workflows/           — GitHub Actions build pipelines
-└── docs/                    — Developer documentation
+│   ├── app/
+│   │   ├── build.gradle.kts          — App module build config
+│   │   └── src/main/
+│   │       ├── AndroidManifest.xml   — Permissions, MainActivity declaration
+│   │       └── res/                  — Launcher icon resources
+│   ├── build.gradle.kts              — Root build file (plugin declarations)
+│   ├── settings.gradle.kts           — Project structure
+│   └── gradle.properties             — Gradle daemon settings
+├── java/dev/androidide/              — All Kotlin source files
+│   ├── MainActivity.kt               — ComponentActivity entry point
+│   ├── ui/
+│   │   ├── IdeScreen.kt              — Root adaptive layout composable
+│   │   ├── theme/                    — Color, typography, Material3 theme
+│   │   └── components/
+│   │       ├── EditorPane.kt         — Monaco WebView + optional preview WebView
+│   │       ├── EditorTabBar.kt       — Open-file tab row
+│   │       ├── FileTreePanel.kt      — SAF file tree sidebar
+│   │       └── IdeStatusBar.kt       — Cursor position + language status bar
+│   ├── editor/
+│   │   ├── EditorBridge.kt           — @JavascriptInterface bridge (Monaco ↔ Kotlin)
+│   │   └── EditorMessage.kt          — EditorInbound / EditorOutbound sealed classes
+│   ├── saf/
+│   │   └── SafRepository.kt          — SAF ContentResolver operations (coroutines)
+│   └── viewmodel/
+│       ├── IdeViewModel.kt            — AndroidViewModel — IDE state + coordination
+│       └── model/
+│           ├── IdeUiState.kt         — Complete observable UI state
+│           ├── EditorTab.kt          — Open file tab state
+│           └── FileNode.kt           — File tree node + tree manipulation helpers
+├── assets/editor/
+│   ├── index.html                    — Monaco shell page (loaded by WebView)
+│   ├── monaco-init.js                — Monaco init + Kotlin bridge protocol
+│   └── vs/                           — Monaco AMD bundle (git-ignored; fetched by script)
+├── scripts/
+│   └── fetch-monaco.sh               — Downloads Monaco 0.52.0 into assets/editor/vs/
+└── .github/workflows/build.yml       — CI: lint + debug APK, release APK
 ```
 
 ### Communication Contract
 
-All inter-module communication is via **explicit typed interfaces** only. No module may access another module's internal types, functions, or state directly. Each module exposes a public API in its `mod.rs` that is the sole communication surface.
+All inter-module communication is via **explicit typed interfaces** only. No module may access another module's internal types or state directly. Each package exposes a public API that is the sole communication surface.
+
+### Monaco ↔ Kotlin Bridge Protocol
+
+```
+Kotlin → JS (via WebView.evaluateJavascript):
+  window.androidIDE.receiveMessage({ type, ...payload })
+
+JS → Kotlin (via @JavascriptInterface):
+  window.AndroidBridge.onMessage(jsonString)
+```
+
+Message types:
+
+| Direction | Type | Fields |
+|-----------|------|--------|
+| Kotlin → JS | `loadFile` | path, content, language |
+| Kotlin → JS | `setTheme` | theme |
+| Kotlin → JS | `setFontSize` | size |
+| Kotlin → JS | `requestSave` | path |
+| Kotlin → JS | `closeTab` | path |
+| JS → Kotlin | `ready` | — |
+| JS → Kotlin | `contentChanged` | path, content |
+| JS → Kotlin | `cursorMoved` | line, column |
+| JS → Kotlin | `fileSaved` | path |
 
 ---
 
 ## Subsystem Descriptions
 
-### `/editor`
-**Purpose:** Embeds Monaco Editor inside an Android WebView, manages editor state, themes, file open/close lifecycle, and communicates edits to the filesystem module.
+### `editor/` — Monaco Editor Bridge
+**Purpose:** Bidirectional bridge between the Monaco editor WebView and Kotlin. Manages editor state, file open/close lifecycle, and communicates edits to the ViewModel.
 
 **Responsibilities:**
-- Monaco WebView lifecycle management
-- File load/save orchestration with filesystem
-- Theme application and synchronization
-- Editor configuration (indentation, font size, word wrap)
+- `@JavascriptInterface` reception of Monaco messages
+- Outbound JS evaluation via `WebView.evaluateJavascript()`
+- Typed message protocol (`EditorInbound` / `EditorOutbound`)
 - Tab management (multiple open files)
 
-**Dependencies:** `filesystem`, `settings`
+**Dependencies:** `viewmodel/`
 
 ---
 
-### `/filesystem`
-**Purpose:** Bridges Android Storage Access Framework (SAF) to the rest of the IDE. Manages project directory trees, file read/write, and file watching.
+### `saf/` — Storage Access Framework
+**Purpose:** All project file access uses SAF (Storage Access Framework) via `SafRepository`. Manages project directory trees, file read/write, and document URIs.
 
 **Responsibilities:**
 - SAF URI resolution and content provider access
-- Directory tree construction and caching
-- File CRUD operations (create, read, update, delete, rename, move)
-- File watching / change detection
-- Project root management
+- Directory tree listing (children of tree/document URIs)
+- File CRUD operations (create, read, write, delete, rename)
+- Coroutine-based I/O on `Dispatchers.IO`
 
 **Dependencies:** None (foundation layer)
 
 ---
 
-### `/terminal`
-**Purpose:** Provides a terminal emulator UI backed by a real PTY, connected to the embedded Linux runtime.
+### `viewmodel/` — IDE State Management
+**Purpose:** Single source of truth for IDE state. Bridges SAF file operations, editor bridge events, and Compose UI updates.
 
 **Responsibilities:**
-- Slint terminal UI widget
-- PTY creation and management (via `nix` or `libc` bindings)
-- Terminal emulation (VT100/ANSI)
-- Session management (multiple terminal tabs)
-- Process lifecycle (spawn, kill, resize)
+- Project open / file tree population
+- Directory expand/collapse with lazy SAF loading
+- Editor tab lifecycle (open, select, close)
+- File save (explicit and Ctrl+S triggered)
+- Cursor position and language state
 
-**Dependencies:** `linux-runtime`
+**Dependencies:** `editor/`, `saf/`
 
 ---
 
-### `/linux-runtime`
-**Purpose:** Manages the embedded Linux environment on Android (proot-based). Provides shell access, package management, and process isolation.
+### `ui/` — Jetpack Compose UI
+**Purpose:** All UI composables — adaptive layout (wide/narrow), file tree sidebar, tab bar, Monaco WebView host, status bar.
 
 **Responsibilities:**
-- proot/chroot environment setup and teardown
-- Filesystem overlay management
-- Package manager integration (apt/pkg for Termux-style environment)
-- Environment variable management
-- Binary/library path configuration
+- Adaptive layout (wide ≥ 600dp, narrow < 600dp)
+- SAF picker integration (`rememberLauncherForActivityResult`)
+- Monaco `WebView` lifecycle via `remember {}` in `EditorPane`
+- Live preview WebView (conditionally shown alongside editor)
 
-**Dependencies:** `filesystem`
-
----
-
-### `/git`
-**Purpose:** Full Git workflow integration using `git2-rs`.
-
-**Responsibilities:**
-- Clone, init repositories
-- Stage, commit, amend
-- Branch create/switch/merge/delete
-- Push, pull, fetch
-- Status, diff, log
-- Credential management (SSH key, HTTPS token)
-
-**Dependencies:** `filesystem`, `settings`
-
----
-
-### `/lsp`
-**Purpose:** Language Server Protocol client that spawns and manages language servers inside the Linux runtime, communicating via JSON-RPC.
-
-**Responsibilities:**
-- LSP server process lifecycle (start, stop, restart)
-- JSON-RPC transport (stdin/stdout)
-- Capability negotiation
-- Diagnostics (errors/warnings)
-- Completion requests
-- Go-to-definition, hover, references
-- Code actions
-
-**Dependencies:** `linux-runtime`, `editor`, `filesystem`
-
----
-
-### `/extensions`
-**Purpose:** Extension loading, sandboxing, permission management, and lifecycle.
-
-**Responsibilities:**
-- Extension package format definition
-- Extension discovery and loading
-- Permission grant/revoke
-- Extension enable/disable/uninstall
-- Extension-to-IDE API bridge
-
-**Dependencies:** `settings`
-
----
-
-### `/settings`
-**Purpose:** Persistent settings storage for user preferences and per-project configuration.
-
-**Responsibilities:**
-- Settings schema definition (typed)
-- Serialization/deserialization (TOML)
-- Default values
-- Settings change notification
-- Per-project settings override
-
-**Dependencies:** `filesystem`
-
----
-
-### `/documentation`
-**Purpose:** In-app documentation viewer for built-in docs and project-specific READMEs.
-
-**Responsibilities:**
-- Markdown rendering
-- Documentation navigation
-- Search within documentation
-- Link handling
-
-**Dependencies:** `filesystem`
-
----
-
-## Dependency Map
-
-```
-filesystem ─────────────────────────────────────┐
-                                                 │
-settings ──────────────────────────────────────┐│
-                                               ││
-editor ───── filesystem, settings              ││
-terminal ─── linux-runtime                     ││
-linux-runtime ─── filesystem                 ◄─┘│
-git ──────── filesystem, settings            ◄──┘
-lsp ──────── linux-runtime, editor, filesystem
-extensions ─ settings
-documentation ─ filesystem
-```
+**Dependencies:** `viewmodel/`, `editor/`
 
 ---
 
@@ -195,7 +157,7 @@ documentation ─ filesystem
 
 | Milestone | Description | Target Phase |
 |-----------|-------------|-------------|
-| M1 | App shell launches, Slint UI renders | Phase 1 |
+| M1 | App shell launches, Compose UI renders | Phase 1 |
 | M2 | User can open a directory and browse files | Phase 1 |
 | M3 | User can open a file in Monaco and edit it | Phase 1 |
 | M4 | User can save file changes | Phase 1 |
@@ -213,18 +175,19 @@ documentation ─ filesystem
 ### Phase 1 — Foundation
 **Goal:** User can create projects, open projects, browse files, and edit files.
 
-Deliverables:
-- [ ] Slint application shell (main window, sidebar, editor area, status bar)
-- [ ] Filesystem module — SAF bridge, directory tree, file read/write
-- [ ] Monaco Editor WebView integration
-- [ ] Project creation workflow (new project dialog, directory selection)
-- [ ] Project opening workflow (recent projects, open directory)
-- [ ] File tree explorer (expand/collapse, file open on tap)
-- [ ] File save (explicit save, auto-save option)
-- [ ] Settings module (basic schema, TOML persistence)
-- [ ] Project tracking documents
+**Status: COMPLETE ✅**
 
-Success Criteria: User can create a project, open files, edit them in Monaco, and save changes.
+Deliverables:
+- [x] Compose application shell (MainActivity, IdeScreen, adaptive layout)
+- [x] SAF bridge — directory tree, file read/write (`SafRepository.kt`)
+- [x] Monaco Editor WebView integration (`EditorPane.kt`, `EditorBridge.kt`)
+- [x] File tree explorer (expand/collapse, file open on tap)
+- [x] Tab management (open, select, close, dirty indicator)
+- [x] File save (Ctrl+S + toolbar save button)
+- [x] Cursor position + language in status bar
+- [x] Launcher icon (adaptive icon, API 26+)
+- [x] GitHub Actions CI (lint + debug APK, release APK)
+- [x] Monaco offline bundle (`fetch-monaco.sh`, git-ignored `vs/`)
 
 ---
 
@@ -232,12 +195,10 @@ Success Criteria: User can create a project, open files, edit them in Monaco, an
 **Goal:** User can run commands and install packages.
 
 Deliverables:
-- [ ] Terminal UI widget (Slint)
-- [ ] PTY management layer
+- [ ] Terminal UI (Compose)
+- [ ] PTY creation and management
 - [ ] Linux runtime setup (proot environment bootstrap)
 - [ ] Package manager bridge (apt/pkg)
-- [ ] Command execution pipeline
-- [ ] Process lifecycle management (spawn, signal, kill)
 - [ ] Terminal session persistence
 
 Success Criteria: User can open a terminal, run shell commands, and install packages.
@@ -254,10 +215,8 @@ Deliverables:
 - [ ] Branch list and create/switch
 - [ ] Push/pull operations
 - [ ] Clone repository dialog
-- [ ] Diff viewer (inline or side-by-side)
+- [ ] Diff viewer
 - [ ] Credential storage (SSH key manager, HTTPS token)
-
-Success Criteria: User can clone, commit, branch, push, and pull entirely within the IDE.
 
 ---
 
@@ -267,14 +226,11 @@ Success Criteria: User can clone, commit, branch, push, and pull entirely within
 Deliverables:
 - [ ] LSP server lifecycle management
 - [ ] Diagnostics display (squiggles + problem panel)
-- [ ] Autocomplete (triggered on keypress)
+- [ ] Autocomplete
 - [ ] Go-to-definition
 - [ ] Hover documentation
 - [ ] Find references
 - [ ] Code actions (quick fixes)
-- [ ] Language server presets (Rust Analyzer, TypeScript, Python LSP)
-
-Success Criteria: Editor provides real-time diagnostics, completion, and navigation for at least two languages.
 
 ---
 
@@ -289,76 +245,58 @@ Deliverables:
 - [ ] Extension manager UI
 - [ ] Example extension (hello-world)
 
-Success Criteria: A third-party extension can be installed and executed without compromising IDE stability.
-
 ---
 
 ## Progress Tracking
 
 | Phase | Status | Completion |
 |-------|--------|-----------|
-| Phase 1 — Foundation | **Complete** ✅ | 100% (all deliverables verified 2026-06-11) |
+| Phase 1 — Foundation | **Complete** ✅ | 100% |
 | Phase 2 — Linux Runtime | Not Started | 0% |
 | Phase 3 — Git | Not Started | 0% |
 | Phase 4 — Language Intelligence | Not Started | 0% |
 | Phase 5 — Extensions | Not Started | 0% |
 
+---
+
 ## Architecture Decisions
 
-### AD-001 — NativeActivity over custom Activity for Slint Android host
+### MD-001 — ComponentActivity over AppCompatActivity
 
-**Date:** 2026-06-10
+**Date:** 2026-06-12
 
-Slint 1.16.1's `backend-android-activity-06` targets `android.app.NativeActivity` (NDK-provided) rather than a custom Java Activity subclass. The entry point is `android_main(app: AndroidApp)`, not a JNI method on a custom Activity. This removes the need for any Java code in the app's Activity layer.
-
-**Consequence:** `SafBridge.init(context)` can no longer be called from `Activity.onCreate()`. Instead it is called from `android_main()` via `saf::init_safe_bridge(app.activity_as_ptr())`, which reads `ANativeActivity.clazz` — the Activity `jobject` — using a stable NDK ABI layout.
-
-### AD-002 — SAF for all external storage; internal storage for settings
-
-**Date:** 2026-06-10
-
-All project file access uses the Android Storage Access Framework (SAF) via `SafBridge`. Settings TOML is stored in `getFilesDir()` (internal storage — no permission required). External storage permissions (`READ_EXTERNAL_STORAGE`, `WRITE_EXTERNAL_STORAGE`) are declared only for API 26–28; API 29+ relies entirely on SAF URI grants from `Intent.ACTION_OPEN_DOCUMENT_TREE`.
-
-### AD-003 — Slint version pinned at 1.16.1 with backend-android-activity-06
-
-**Date:** 2026-06-10
-
-Slint is split into two per-target dependency entries:
-- Desktop: `features = ["backend-winit"]`
-- Android: `features = ["backend-android-activity-06"]`
-
-The `backend-android-activity-06` suffix means the feature targets android-activity crate 0.6.x. This must be updated if android-activity is upgraded to 0.7+.
+`MainActivity` extends `ComponentActivity` (from `androidx.activity:activity-compose`) rather than `AppCompatActivity`. `ComponentActivity` is the minimal Activity for Compose and is the recommended baseline. `AppCompatActivity` provides backwards-compatible Material components that are redundant when using Material3 Compose directly.
 
 ---
 
-### AD-004 — IDEActivity extends NativeActivity for WebView overlay + edit+preview split
+### MD-002 — AndroidViewModel receives Application for SAF Context
 
-**Date:** 2026-06-11
+**Date:** 2026-06-12
 
-**Problem:** Slint's android-activity backend renders the entire UI to NativeActivity's native Surface. The native Surface is at the bottom of Android's compositing stack — no `android.view.View` (including `WebView`) can be layered above it from the native/Rust side. This made Monaco (an HTML/JS editor embedded in a `WebView`) unreachable on Android when using plain `android.app.NativeActivity` as the Activity class.
+`IdeViewModel` extends `AndroidViewModel(application)` so it can hold an `Application` reference for SAF operations (`ContentResolver`) without leaking an `Activity` reference. `SafRepository` is instantiated once in the ViewModel constructor with the Application context.
 
-**Solution:** The manifest Activity class was changed from `android.app.NativeActivity` to `dev.androidide.IDEActivity`, a custom subclass:
+---
 
-```
-dev.androidide.IDEActivity extends android.app.NativeActivity
-```
+### MD-003 — Monaco WebView remembered across recompositions
 
-Extending NativeActivity rather than replacing it preserves the android-activity 0.6 backend contract exactly — `android_main()` is still called in the same way, the native Surface is still created identically, and no Slint Rust code changes are needed.
+**Date:** 2026-06-12
 
-In `IDEActivity.onCreate()`, after `super.onCreate()` (which loads the `.so` and fires `JNI_OnLoad`), a transparent `FrameLayout` is attached via `getWindow().addContentView()`. Java `View`s attached this way always composite ABOVE the native Surface. The overlay contains a horizontal `LinearLayout` with two WebViews:
+The Monaco `WebView` in `EditorPane.kt` is wrapped in `remember {}`. This prevents the WebView from being destroyed and re-created on every recomposition (which would reset Monaco's editor state). The `AndroidView` update lambda is intentionally a no-op — all editor updates are driven via `evaluateJavascript()` from `EditorBridge.kt`.
 
-- `mEditorWebView` — Monaco editor (always visible, full width by default)
-- `mPreviewWebView` — preview panel (hidden by default; shown via `IDEActivity.showPreview(url)`)
+---
 
-When both are visible the layout is a 50/50 horizontal split — the user can edit code and preview output simultaneously.
+### MD-004 — JS bridge protocol unchanged from prior design
 
-**Overlay positioning:** Margins are set so the WebView container reveals the Slint chrome in the uncovered areas:
-- `top = 84dp` (app bar 48dp + tab bar 35dp + 1dp separator)
-- `left = 0dp` (portrait) or `241dp` (landscape, sidebar 240dp + 1dp separator)
-- `bottom = 22dp` (status bar)
+**Date:** 2026-06-12
 
-**WebView registration (pull design):** Rust's `android_main()` calls `webview::android::init_webview_from_activity()` at step 5 of the init sequence (after `saf::init_safe_bridge`, before `slint::android::init`). This calls `IDEActivity.getInstance().getEditorWebView()` via JNI and stores the result as a `GlobalRef` in `WEBVIEW_SENDER`. This is race-free: the native thread starts in `onStart()`, which is called after `onCreate()` returns — the WebView is always created before `android_main()` runs.
+`monaco-init.js` and `index.html` define a stable wire protocol. The Kotlin `EditorBridge.kt` produces the exact same `window.androidIDE.receiveMessage({type, ...})` JS call format. This protocol must not be changed without updating both sides simultaneously.
 
-**Consequence:** `android/java/dev/androidide/IDEActivity.java` is now a required file. Any future developer switching Activity classes must preserve the WebView overlay and `getInstance()`/`getEditorWebView()` API so `init_webview_from_activity()` continues to work.
+---
 
-Last updated: 2026-06-11
+### MD-005 — SAF child URI docId extraction
+
+**Date:** 2026-06-12
+
+`DocumentsContract.getTreeDocumentId()` returns the **root** document ID for all tree URIs, including child document URIs (which have the form `/tree/<treeDocId>/document/<docId>`). When listing children of a subdirectory, `getDocumentId()` must be used instead — it returns the actual subdirectory's document ID. `SafRepository.listChildren()` detects which to use by checking for the "document" path segment.
+
+Last updated: 2026-06-12

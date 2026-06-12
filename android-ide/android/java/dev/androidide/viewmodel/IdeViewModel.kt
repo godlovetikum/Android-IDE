@@ -17,9 +17,7 @@ import android.app.Application
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import dev.androidide.editor.EditorBridge
 import dev.androidide.editor.EditorInbound
-import dev.androidide.editor.EditorOutbound
 import dev.androidide.saf.SafRepository
 import dev.androidide.viewmodel.model.EditorTab
 import dev.androidide.viewmodel.model.FileNode
