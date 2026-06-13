@@ -14,8 +14,12 @@
 // *Paste reads from the Android ClipboardManager via Kotlin (onPasteFromClipboard)
 //  instead of the WebView clipboard API, which is slow and permission-gated.
 //
-// Preview crash safety:
-//   WebViewClient.onRenderProcessGone returns true to prevent app termination.
+// Crash safety:
+//   Both the editor WebView and the preview WebView override onRenderProcessGone
+//   and return true to prevent app termination (default returns false = app killed).
+//   If the editor renderer crashes, an EditorCrashedBox is shown with a Reload
+//   button; tapping Reload calls loadUrl() to start a new renderer process.
+//   If the preview renderer crashes, a PreviewErrorBox placeholder is shown.
 //   Preview content is loaded via loadDataWithBaseURL (no URL-length limit issues
 //   that affect data: scheme URLs with large base64 payloads).
 //
@@ -51,6 +55,7 @@ import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.KeyboardHide
 import androidx.compose.material.icons.filled.Redo
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material.icons.filled.Undo
 import androidx.compose.material3.*
@@ -105,6 +110,13 @@ fun EditorPane(
         onDispose { editorBridge.messageListener = null }
     }
 
+    // ── Editor crash state ─────────────────────────────────────────────────
+    // True when the Monaco render process terminates unexpectedly.
+    // onRenderProcessGone sets this flag (returning true prevents app termination).
+    // The EditorCrashedBox shown when true has a Reload button that calls
+    // loadUrl() to start a fresh renderer — the WebView object itself stays valid.
+    var editorCrashed by remember { mutableStateOf(false) }
+
     // ── Monaco WebView — created once, never recreated ─────────────────────
     val editorWebView = remember {
         WebView(context).apply {
@@ -127,7 +139,19 @@ fun EditorPane(
             isHorizontalScrollBarEnabled = false
             addJavascriptInterface(editorBridge, "AndroidBridge")
             webChromeClient = WebChromeClient()
-            webViewClient   = WebViewClient()
+            webViewClient   = object : WebViewClient() {
+                // API 26+ — return true to prevent app termination when the Monaco
+                // render process crashes (e.g. heavy syntax highlighting, large file, OOM).
+                // After returning true the WebView object is still valid; loadUrl() starts
+                // a new renderer process, restoring the editor without killing the app.
+                override fun onRenderProcessGone(
+                    view: WebView,
+                    detail: android.webkit.RenderProcessGoneDetail,
+                ): Boolean {
+                    editorCrashed = true
+                    return true
+                }
+            }
             setOnTouchListener { v, _ ->
                 v.requestFocus()
                 false   // do not consume the event — let WebView handle it
@@ -161,6 +185,27 @@ fun EditorPane(
                     return true
                 }
             }
+        }
+    }
+
+    // ── Editor view helper — shows editor WebView or crash placeholder ──────
+    //
+    // When editorCrashed is true, the Monaco renderer has terminated. The app
+    // remains alive (onRenderProcessGone returned true), and the WebView object
+    // is still valid. Tapping Reload calls loadUrl() to start a fresh renderer.
+    val editorView: @Composable (Modifier) -> Unit = { mod ->
+        if (editorCrashed) {
+            EditorCrashedBox(
+                modifier = mod,
+                onReload = {
+                    editorCrashed = false
+                    editorWebView.post {
+                        editorWebView.loadUrl("file:///android_asset/editor/index.html")
+                    }
+                },
+            )
+        } else {
+            AndroidView(factory = { editorWebView }, update = {}, modifier = mod)
         }
     }
 
@@ -211,20 +256,12 @@ fun EditorPane(
 
         when {
             !isPreviewVisible -> {
-                AndroidView(
-                    factory  = { editorWebView },
-                    update   = { },
-                    modifier = Modifier.weight(1f).fillMaxWidth(),
-                )
+                editorView(Modifier.weight(1f).fillMaxWidth())
             }
 
             isLandscape -> {
                 Row(modifier = Modifier.weight(1f).fillMaxWidth()) {
-                    AndroidView(
-                        factory  = { editorWebView },
-                        update   = { },
-                        modifier = Modifier.weight(1f).fillMaxHeight(),
-                    )
+                    editorView(Modifier.weight(1f).fillMaxHeight())
                     Box(modifier = Modifier.width(1.dp).fillMaxHeight().background(colors.separator))
                     if (previewCrashed) {
                         PreviewErrorBox(modifier = Modifier.weight(1f).fillMaxHeight())
@@ -241,11 +278,7 @@ fun EditorPane(
             else -> {
                 Column(modifier = Modifier.weight(1f).fillMaxSize()) {
                     if (previewLayout == PreviewLayout.EDITOR_ABOVE) {
-                        AndroidView(
-                            factory  = { editorWebView },
-                            update   = { },
-                            modifier = Modifier.weight(1f).fillMaxWidth(),
-                        )
+                        editorView(Modifier.weight(1f).fillMaxWidth())
                         Box(modifier = Modifier.height(1.dp).fillMaxWidth().background(colors.separator))
                         if (previewCrashed) {
                             PreviewErrorBox(modifier = Modifier.weight(1f).fillMaxWidth())
@@ -267,11 +300,7 @@ fun EditorPane(
                             )
                         }
                         Box(modifier = Modifier.height(1.dp).fillMaxWidth().background(colors.separator))
-                        AndroidView(
-                            factory  = { editorWebView },
-                            update   = { },
-                            modifier = Modifier.weight(1f).fillMaxWidth(),
-                        )
+                        editorView(Modifier.weight(1f).fillMaxWidth())
                     }
                 }
             }
@@ -291,6 +320,38 @@ fun EditorPane(
                 onExecuteCommand     = onExecuteCommand,
                 onPasteFromClipboard = onPasteFromClipboard,
             )
+        }
+    }
+}
+
+// ── Editor crash placeholder ──────────────────────────────────────────────────
+//
+// Shown in place of the Monaco WebView when its renderer process has terminated.
+// The Reload button calls loadUrl() on the existing WebView object to start a
+// fresh renderer — the app remains alive throughout.
+
+@Composable
+private fun EditorCrashedBox(modifier: Modifier = Modifier, onReload: () -> Unit) {
+    val colors = LocalIdeColors.current
+    Column(
+        modifier         = modifier.background(colors.background),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Text(
+            text  = "Editor unavailable.\nThe render process terminated.",
+            style = MaterialTheme.typography.bodySmall,
+            color = colors.textDisabled,
+        )
+        Spacer(Modifier.height(12.dp))
+        FilledTonalButton(onClick = onReload) {
+            Icon(
+                imageVector        = Icons.Default.Refresh,
+                contentDescription = null,
+                modifier           = Modifier.size(16.dp),
+            )
+            Spacer(Modifier.width(6.dp))
+            Text("Reload Editor")
         }
     }
 }

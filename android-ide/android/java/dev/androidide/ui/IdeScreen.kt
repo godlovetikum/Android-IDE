@@ -751,13 +751,13 @@ private fun FileOpDialogHost(
             onDismiss = ideViewModel::dismissFileOpDialog,
         )
         is FileOpDialog.CreateFile -> CreateFileDialog(
-            parent    = dialog.parent,
-            onConfirm = { ideViewModel.createFileInDirectory(dialog.parent, it) },
+            parent    = dialog.parentNode,
+            onConfirm = { ideViewModel.createFileInDirectory(dialog.parentNode, it) },
             onDismiss = ideViewModel::dismissFileOpDialog,
         )
         is FileOpDialog.CreateFolder -> CreateFolderDialog(
-            parent    = dialog.parent,
-            onConfirm = { ideViewModel.createFolderInDirectory(dialog.parent, it) },
+            parent    = dialog.parentNode,
+            onConfirm = { ideViewModel.createFolderInDirectory(dialog.parentNode, it) },
             onDismiss = ideViewModel::dismissFileOpDialog,
         )
         is FileOpDialog.Duplicate -> DuplicateDialog(

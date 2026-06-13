@@ -277,44 +277,46 @@ Last updated: 2026-06-13
 
 ---
 
-## Architectural Corrections
+### BUG-016 — `Unresolved reference: dp` in AppRoot.kt
 
-### AC-001 — Tech Stack Migration: Slint/Rust → Kotlin/Jetpack Compose
-
-**Date:** 2026-06-12
-
-**Original design:**
-- Rust application with Slint UI framework
-- JNI bridge for SAF and WebView
-- NativeActivity entry point via `android_main()`
-- `IDEActivity extends NativeActivity` to layer Monaco WebView above native Surface
-
-**Migrated design:**
-- Kotlin + Jetpack Compose
-- `ComponentActivity.setContent {}` entry point
-- Monaco WebView as a Compose `AndroidView` inside `EditorPane.kt`
-- SAF accessed directly via `ContentResolver` in `SafRepository.kt`
-- No JNI, no NDK, no native code
-
-**Consequence:** All Rust/Slint source files removed. Build pipeline simplified to standard `./gradlew assembleRelease`. See TECH_STACK_MIGRATION.md for the full migration record.
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-06-13 |
+| **Subsystem** | ui |
+| **Issue** | `compileDebugKotlin` failed with `Unresolved reference: dp` at `AppRoot.kt:144`. |
+| **Root Cause** | `AppRoot.kt` imported `androidx.compose.ui.unit.Density` (needed for the `LocalDensity` font-scale override) but not `androidx.compose.ui.unit.dp`. One import from a package does not auto-import sibling extensions. |
+| **Files Modified** | `ui/AppRoot.kt` |
+| **Solution** | Added `import androidx.compose.ui.unit.dp` alongside the existing `Density` import. |
+| **Prevention** | When a file already imports something from `androidx.compose.ui.unit`, each additional member (`.dp`, `.sp`, etc.) must still be listed explicitly — having one import from a package does not pull in sibling extensions. |
 
 ---
 
-### AC-002 — Navigation refactor: bottom NavigationBar removed, sidebar-only navigation
+### BUG-017 — `Unresolved reference: parent` in `FileOpDialogHost` (IdeScreen.kt)
 
-**Date:** 2026-06-13
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-06-13 |
+| **Subsystem** | ui |
+| **Issue** | `compileDebugKotlin` failed with `Unresolved reference: parent` at four call sites in `FileOpDialogHost` — the `CreateFile` branch (two references) and the `CreateFolder` branch (two references). |
+| **Root Cause** | `FileOpDialog.CreateFile` and `FileOpDialog.CreateFolder` both declare their field as `parentNode: FileNode`, but `FileOpDialogHost` accessed `dialog.parent` (missing the `Node` suffix) at all four call sites. |
+| **Files Modified** | `ui/IdeScreen.kt` |
+| **Solution** | Replaced all four `dialog.parent` references with `dialog.parentNode` to match the property name in `FileOpDialog.kt`. |
+| **Prevention** | When calling into sealed-class variants, always verify property names against the variant's declaration. A name-mismatch is caught at compile time but not by the editor unless type-checking is live. |
 
-**Original design:**
-- Bottom `NavigationBar` with Projects / Editor / Settings tabs
-- `AppRoot` switched between `ProjectsScreen`, `IdeScreen`, `SettingsScreen` at the top level
-- Sidebar existed only within `IdeScreen` (editor screen only)
+---
 
-**New design:**
-- `IdeScreen` is always the root screen — `AppRoot` renders nothing else
-- A persistent sidebar (always accessible via drawer or permanent column on wide screens) handles all navigation
-- Navigation buttons in the sidebar: Projects, Editor, Git (Phase 2), Terminal (Phase 2), Settings
-- No bottom `NavigationBar`
+### BUG-018 — Monaco editor WebView crash terminates the app (missing `onRenderProcessGone`)
 
-**Rationale:** On mobile developer tools, bottom tabs consume vertical space needed for code. A sidebar keeps navigation reachable via one tap from any screen while maximising editor real estate. The drawer gesture (`gesturesEnabled = false`) prevents accidental opens from editor swipes.
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-06-13 |
+| **Subsystem** | editor |
+| **Issue** | App terminates without a Java stack trace when the Monaco editor WebView's renderer process crashes (e.g. under memory pressure, large file, or complex syntax highlighting). The entire app session is lost. |
+| **Root Cause** | `EditorPane.kt` created the Monaco `WebView` with the default `WebViewClient()`. The default `onRenderProcessGone` returns `false`, signalling to Android that the crash was unhandled — Android then kills the application process. BUG-006 applied the same fix to the preview WebView but the editor WebView was missed. |
+| **Files Modified** | `ui/components/EditorPane.kt` |
+| **Solution** | Replaced `webViewClient = WebViewClient()` with a custom `WebViewClient` that overrides `onRenderProcessGone` to set `editorCrashed = true` and return `true`. Added a `var editorCrashed by remember { mutableStateOf(false) }` Compose state flag before the WebView `remember` block. When `editorCrashed` is true, a `val editorView: @Composable (Modifier) -> Unit` lambda shows an `EditorCrashedBox` (error message + "Reload Editor" button) instead of the `AndroidView`. Tapping Reload calls `loadUrl("file:///android_asset/editor/index.html")` on the existing WebView object (valid after a renderer crash on API 26+ = `minSdk`) to start a fresh renderer. The `editorView` lambda is used in all four layout branches (no-preview, landscape, portrait-editor-above, portrait-preview-above) to avoid duplicating the conditional. |
+| **Prevention** | Every production `WebView` that loads arbitrary content MUST override `onRenderProcessGone` and return `true`. Apply this to all WebViews simultaneously — the BUG-006 fix should have covered both WebViews. |
+
+---
 
 Last updated: 2026-06-13
