@@ -92,7 +92,7 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
     // ── Theme helpers ───────────────────────────────────────────────────────
 
     private fun isSystemDark(): Boolean =
-        (application.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
+        (getApplication<Application>().resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
             Configuration.UI_MODE_NIGHT_YES
 
     /**
