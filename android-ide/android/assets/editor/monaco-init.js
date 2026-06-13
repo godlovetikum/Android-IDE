@@ -199,6 +199,24 @@ require(['vs/editor/editor.main'], function () {
 
     // Bracket pair colorization is purely cosmetic — disable for less render work.
     'bracketPairColorization.enabled': false,
+
+    // ── C015: targeted performance and correctness fixes ─────────────────
+    // formatOnPaste: true (default) passes pasted content through the language
+    // formatter, which can silently corrupt indentation. Disabled here.
+    formatOnPaste: false,
+
+    // autoIndent 'advanced' runs expensive token-based analysis on every Enter
+    // key press. 'brackets' is lightweight and handles 95% of real-world cases
+    // (matching open/close brackets) without the overhead.
+    autoIndent: 'brackets',
+
+    // Glyph margin (left gutter for breakpoints, fold arrows etc.) allocates
+    // a DOM element per visible line. Not needed without a debugger in Phase 1.
+    glyphMargin: false,
+
+    // Minimise the line-decoration column width; 5px provides visual separation
+    // next to line numbers without spending DOM/paint budget.
+    lineDecorationsWidth: 5,
   });
 
   // Initial layout — best-effort.
@@ -242,8 +260,15 @@ require(['vs/editor/editor.main'], function () {
     }, { passive: true });
 
     editorDom.addEventListener('touchend', function () {
-      // Small delay allows the tap selection to settle before requesting focus.
-      setTimeout(function () { editor.focus(); }, 50);
+      // C016: delay allows Monaco to process the tap/selection before we call
+      // focus(). Do NOT request focus if the user has made a text selection —
+      // that would dismiss the selection handles on Android.
+      setTimeout(function () {
+        var sel = editor.getSelection();
+        if (!sel || sel.isEmpty()) {
+          editor.focus();
+        }
+      }, 50);
     }, { passive: true });
   }
 
@@ -288,11 +313,19 @@ window.androidIDE = {
       case 'setEditorOptions':
         if (editor) {
           var opts = {};
-          if (msg.tabSize     != null) opts.tabSize     = msg.tabSize;
-          if (msg.wordWrap    != null) opts.wordWrap    = msg.wordWrap;    // "on" / "off"
-          if (msg.lineNumbers != null) opts.lineNumbers = msg.lineNumbers; // "on" / "off"
-          if (msg.fontSize    != null) opts.fontSize    = msg.fontSize;
-          if (Object.keys(opts).length > 0) editor.updateOptions(opts);
+          var wrapChanged = false;
+          if (msg.tabSize          != null) opts.tabSize          = msg.tabSize;
+          if (msg.wordWrap         != null) { opts.wordWrap        = msg.wordWrap; wrapChanged = true; } // "on" / "off"
+          if (msg.lineNumbers      != null) opts.lineNumbers       = msg.lineNumbers; // "on" / "off"
+          if (msg.fontSize         != null) opts.fontSize          = msg.fontSize;
+          // C014: render whitespace — "none" | "selection" | "all" | "boundary"
+          if (msg.renderWhitespace != null) opts.renderWhitespace  = msg.renderWhitespace;
+          if (Object.keys(opts).length > 0) {
+            editor.updateOptions(opts);
+            // C015: wordWrap changes alter line-height and column count — must
+            // re-layout immediately or Monaco displays broken wrapped lines.
+            if (wrapChanged) { applyLayout(); requestAnimationFrame(applyLayout); }
+          }
         }
         break;
 
@@ -333,6 +366,48 @@ window.androidIDE = {
         }
         if (msg.command === 'blurEditor') {
           window.androidIDE.blurEditor();
+          break;
+        }
+        // C017: smart indent — insert tab-width spaces when no selection,
+        // indent selected lines when a selection exists.
+        if (msg.command === 'smartIndent') {
+          var sel = editor.getSelection();
+          if (sel && !sel.isEmpty()) {
+            var indentAction = editor.getAction('editor.action.indentLines');
+            if (indentAction) {
+              indentAction.run().catch(function (e) {
+                console.warn('[androidIDE] indentLines failed:', e);
+              });
+            }
+          } else {
+            var tabSize = editor.getModel()
+              ? editor.getModel().getOptions().tabSize
+              : 4;
+            var spaces = '';
+            for (var i = 0; i < tabSize; i++) spaces += ' ';
+            var pos = editor.getPosition();
+            editor.executeEdits('smartIndent', [{
+              range: new monaco.Range(pos.lineNumber, pos.column, pos.lineNumber, pos.column),
+              text: spaces,
+              forceMoveMarkers: true,
+            }]);
+          }
+          break;
+        }
+        // C017: smart outdent — remove leading indent from selected lines, or
+        // remove tab-width spaces behind cursor when no selection.
+        if (msg.command === 'smartOutdent') {
+          var sel2 = editor.getSelection();
+          if (sel2 && !sel2.isEmpty()) {
+            var outdentAction = editor.getAction('editor.action.outdentLines');
+            if (outdentAction) {
+              outdentAction.run().catch(function (e) {
+                console.warn('[androidIDE] outdentLines failed:', e);
+              });
+            }
+          } else {
+            editor.trigger('keyboard', 'outdent', null);
+          }
           break;
         }
         var action = editor.getAction(msg.command);

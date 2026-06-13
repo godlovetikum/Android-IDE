@@ -8,8 +8,8 @@
 //   KeyboardToolbar (optional, 2-page pager of icon buttons, NO horizontal scroll)
 //
 // Keyboard toolbar pages:
-//   Page 1: Indent, ↑, ↓, ←, →, Undo, Redo       (7 actions)
-//   Page 2: Cut, Copy, Paste*, Select All, Show KB, Hide KB  (6 actions)
+//   Page 1: Indent, Outdent, ↑, ↓, ←, →, Undo, Redo   (8 actions; C017)
+//   Page 2: Cut, Copy, Paste*, Select All, Toggle KB    (5 actions; C017)
 //
 // *Paste reads from the Android ClipboardManager via Kotlin (onPasteFromClipboard)
 //  instead of the WebView clipboard API, which is slow and permission-gated.
@@ -30,7 +30,10 @@
 package dev.androidide.ui.components
 
 import android.annotation.SuppressLint
+import android.content.Context
+import android.view.MotionEvent
 import android.view.View
+import android.view.inputmethod.InputMethodManager
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
@@ -47,6 +50,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.ContentCut
 import androidx.compose.material.icons.filled.ContentPaste
+import androidx.compose.material.icons.filled.FormatIndentDecrease
 import androidx.compose.material.icons.filled.FormatIndentIncrease
 import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material.icons.filled.KeyboardArrowDown
@@ -152,8 +156,16 @@ fun EditorPane(
                     return true
                 }
             }
-            setOnTouchListener { v, _ ->
-                v.requestFocus()
+            setOnTouchListener { v, event ->
+                // C008: On finger-lift, request native focus AND explicitly show the IME.
+                // requestFocus() alone is insufficient inside a Compose layout — the IME
+                // window is not always raised until showSoftInput is called directly.
+                if (event.actionMasked == MotionEvent.ACTION_UP) {
+                    v.requestFocus()
+                    val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE)
+                            as InputMethodManager
+                    imm.showSoftInput(v, InputMethodManager.SHOW_IMPLICIT)
+                }
                 false   // do not consume the event — let WebView handle it
             }
             loadUrl("file:///android_asset/editor/index.html")
@@ -412,13 +424,17 @@ private fun SymbolBar(
 private data class KeyboardAction(
     val icon: ImageVector,
     val label: String,
-    val commandId: String?,         // null for special Kotlin-side actions
-    val isPaste: Boolean = false,   // triggers onPasteFromClipboard instead of executeCommand
+    val commandId: String?,            // null for special Kotlin-side actions
+    val isPaste: Boolean = false,      // triggers onPasteFromClipboard instead of executeCommand
+    /** C017: replaced "Show Keyboard"+"Hide Keyboard" with a single stateful toggle. */
+    val isKeyboardToggle: Boolean = false,
 )
 
-// Page 1: navigation + undo/redo (7 actions)
+// Page 1: navigation + indent/outdent + undo/redo (8 actions)
 private val TOOLBAR_PAGE_1 = listOf(
-    KeyboardAction(Icons.Default.FormatIndentIncrease, "Indent",       "editor.action.indentLines"),
+    // C017: smartIndent — inserts tab-width spaces when no selection; indents lines when selection exists.
+    KeyboardAction(Icons.Default.FormatIndentIncrease, "Indent",       "smartIndent"),
+    KeyboardAction(Icons.Default.FormatIndentDecrease, "Outdent",      "smartOutdent"),
     KeyboardAction(Icons.Default.KeyboardArrowUp,      "Cursor Up",    "cursorUp"),
     KeyboardAction(Icons.Default.KeyboardArrowDown,    "Cursor Down",  "cursorDown"),
     KeyboardAction(Icons.Default.KeyboardArrowLeft,    "Cursor Left",  "cursorLeft"),
@@ -427,14 +443,14 @@ private val TOOLBAR_PAGE_1 = listOf(
     KeyboardAction(Icons.Default.Redo,                 "Redo",         "redo"),
 )
 
-// Page 2: clipboard + selection + keyboard (6 actions)
+// Page 2: clipboard + selection + keyboard toggle (5 actions)
 private val TOOLBAR_PAGE_2 = listOf(
-    KeyboardAction(Icons.Default.ContentCut,    "Cut",          "editor.action.clipboardCutAction"),
-    KeyboardAction(Icons.Default.ContentCopy,   "Copy",         "editor.action.clipboardCopyAction"),
-    KeyboardAction(Icons.Default.ContentPaste,  "Paste",        null, isPaste = true),
-    KeyboardAction(Icons.Default.SelectAll,     "Select All",   "editor.action.selectAll"),
-    KeyboardAction(Icons.Default.Keyboard,      "Show Keyboard","focusEditor"),
-    KeyboardAction(Icons.Default.KeyboardHide,  "Hide Keyboard","blurEditor"),
+    KeyboardAction(Icons.Default.ContentCut,    "Cut",              "editor.action.clipboardCutAction"),
+    KeyboardAction(Icons.Default.ContentCopy,   "Copy",             "editor.action.clipboardCopyAction"),
+    KeyboardAction(Icons.Default.ContentPaste,  "Paste",            null, isPaste = true),
+    KeyboardAction(Icons.Default.SelectAll,     "Select All",       "editor.action.selectAll"),
+    // C017: single toggle replaces the former "Show Keyboard" + "Hide Keyboard" pair.
+    KeyboardAction(Icons.Default.Keyboard,      "Toggle Keyboard",  null, isKeyboardToggle = true),
 )
 
 private val TOOLBAR_PAGES = listOf(TOOLBAR_PAGE_1, TOOLBAR_PAGE_2)
@@ -448,6 +464,8 @@ private fun KeyboardToolbar(
 ) {
     val colors     = LocalIdeColors.current
     val pagerState = rememberPagerState(pageCount = { TOOLBAR_PAGES.size })
+    // C017: single keyboard toggle button tracks its own shown/hidden state.
+    var keyboardShowing by remember { mutableStateOf(true) }
 
     Column(
         modifier = Modifier
@@ -464,12 +482,24 @@ private fun KeyboardToolbar(
             ) {
                 TOOLBAR_PAGES[pageIndex].forEach { action ->
                     ToolbarIconButton(
-                        icon             = action.icon,
+                        icon             = if (action.isKeyboardToggle && !keyboardShowing)
+                                               Icons.Default.KeyboardHide
+                                           else action.icon,
                         label            = action.label,
                         isPaste          = action.isPaste,
                         commandId        = action.commandId,
                         onExecuteCommand = onExecuteCommand,
                         onPaste          = onPasteFromClipboard,
+                        onCustomClick    = if (action.isKeyboardToggle) {
+                            {
+                                if (keyboardShowing) {
+                                    onExecuteCommand("blurEditor")
+                                } else {
+                                    onExecuteCommand("focusEditor")
+                                }
+                                keyboardShowing = !keyboardShowing
+                            }
+                        } else null,
                     )
                 }
             }
@@ -505,6 +535,8 @@ private fun ToolbarIconButton(
     isPaste: Boolean,
     onExecuteCommand: (String) -> Unit,
     onPaste: () -> Unit,
+    /** C017: optional override used by the keyboard-toggle button. */
+    onCustomClick: (() -> Unit)? = null,
 ) {
     val colors       = LocalIdeColors.current
     val tooltipState = rememberTooltipState()
@@ -520,8 +552,9 @@ private fun ToolbarIconButton(
         IconButton(
             onClick  = {
                 when {
-                    isPaste    -> onPaste()
-                    commandId != null -> onExecuteCommand(commandId)
+                    onCustomClick != null -> onCustomClick()
+                    isPaste               -> onPaste()
+                    commandId != null     -> onExecuteCommand(commandId)
                 }
             },
             modifier = Modifier.size(44.dp),

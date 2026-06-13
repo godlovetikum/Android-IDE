@@ -46,7 +46,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.UUID
 
@@ -216,10 +218,11 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
         editorSettingsRepo.setEditorSettings(settings)
         _uiState.update { it.copy(editorSettings = settings) }
         sendEditorCommand(EditorOutbound.SetEditorOptions(
-            tabSize     = settings.tabSize,
-            wordWrap    = settings.wordWrap,
-            lineNumbers = settings.lineNumbers,
-            fontSize    = settings.fontSize,
+            tabSize          = settings.tabSize,
+            wordWrap         = settings.wordWrap,
+            lineNumbers      = settings.lineNumbers,
+            fontSize         = settings.fontSize,
+            renderWhitespace = settings.renderWhitespace,
         ))
         if (_uiState.value.isEditorReady && settings.editorTheme != previousTheme) {
             sendEditorCommand(EditorOutbound.SetTheme(resolveMonacoTheme()))
@@ -533,15 +536,44 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun openFile(documentUri: String) {
-        viewModelScope.launch { openFileInternal(documentUri, markActive = true) }
+        // C011: single-tap opens a temporary (preview) tab.
+        viewModelScope.launch { openFileInternal(documentUri, markActive = true, temporary = true) }
     }
 
-    private suspend fun openFileInternal(documentUri: String, markActive: Boolean) {
+    /** C011: double-tap on a file tree item opens (or upgrades) a permanent tab. */
+    fun openFilePermanent(documentUri: String) {
+        viewModelScope.launch { openFileInternal(documentUri, markActive = true, temporary = false) }
+    }
+
+    private suspend fun openFileInternal(
+        documentUri: String,
+        markActive: Boolean,
+        temporary: Boolean = false,
+    ) {
         val existing = _uiState.value.openTabs.find { it.documentUri == documentUri }
         if (existing != null) {
+            // C011: pinning action (temporary=false) upgrades a preview tab to permanent.
+            if (!temporary && existing.isTemporary) pinTab(existing.id)
             if (markActive) selectTab(existing.id)
             return
         }
+
+        // C011: single-tap replaces any existing temporary (preview) tab before opening a new one.
+        if (temporary) {
+            val oldTemp = _uiState.value.openTabs.firstOrNull { it.isTemporary }
+            if (oldTemp != null) {
+                pendingContent.remove(oldTemp.id)
+                _uiState.update { state ->
+                    val remaining  = state.openTabs.filter { it.id != oldTemp.id }
+                    val newActive  = if (state.activeTabId == oldTemp.id) remaining.lastOrNull()?.id else state.activeTabId
+                    state.copy(
+                        openTabs    = remaining.map { it.copy(isActive = it.id == newActive) },
+                        activeTabId = newActive,
+                    )
+                }
+            }
+        }
+
         val bytes = safRepository.readFile(documentUri) ?: return
         val content = String(bytes, Charsets.UTF_8)
         val displayName = _uiState.value.fileTree.findNode(documentUri)?.displayName
@@ -555,6 +587,7 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
             language    = language,
             content     = content,
             isActive    = markActive,
+            isTemporary = temporary,
         )
         _uiState.update { state ->
             val tabs = if (markActive) {
@@ -576,6 +609,15 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
                 openTabs    = state.openTabs.map { it.copy(isActive = it.id == tabId) },
                 activeTabId = tabId,
             )
+        }
+    }
+
+    /** C011: make a preview tab permanent so it survives the next single-tap. */
+    fun pinTab(tabId: String) {
+        _uiState.update { state ->
+            state.copy(openTabs = state.openTabs.map {
+                if (it.id == tabId) it.copy(isTemporary = false) else it
+            })
         }
     }
 
@@ -665,10 +707,11 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update { it.copy(isEditorReady = true) }
         val settings = _uiState.value.editorSettings
         sendEditorCommand(EditorOutbound.SetEditorOptions(
-            tabSize     = settings.tabSize,
-            wordWrap    = settings.wordWrap,
-            lineNumbers = settings.lineNumbers,
-            fontSize    = settings.fontSize,
+            tabSize          = settings.tabSize,
+            wordWrap         = settings.wordWrap,
+            lineNumbers      = settings.lineNumbers,
+            fontSize         = settings.fontSize,
+            renderWhitespace = settings.renderWhitespace,
         ))
         sendEditorCommand(EditorOutbound.SetTheme(resolveMonacoTheme()))
         sendEditorCommand(EditorOutbound.ForceLayout)
@@ -683,7 +726,8 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
                 pendingContent[tab.id] = message.content
                 _uiState.update { state ->
                     state.copy(openTabs = state.openTabs.map {
-                        if (it.id == tab.id) it.copy(isDirty = true) else it
+                        // C011: first edit pins the preview tab permanently
+                        if (it.id == tab.id) it.copy(isDirty = true, isTemporary = false) else it
                     })
                 }
                 crashRecovery.saveUnsavedContent(tab.id, tab.documentUri, tab.displayName, message.content)
@@ -776,26 +820,76 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
 
     // ── Preview / Run ──────────────────────────────────────────────────────
 
-    fun togglePreview() {
+    // ── Run — project-scoped entry point ──────────────────────────────────
+    //
+    // requestRun is the single entry point for the Run action.
+    // It is PROJECT-scoped, not file-scoped.
+    //
+    // Phase 1 dispatch:
+    //   HTML and Markdown files → preview provider (togglePreview).
+    //   All other file types   → status message; no crash.
+    //
+    // Phase 2+ extensibility:
+    //   Add new when-branches here for live server, terminal execution, etc.
+    //   Each branch should launch its provider safely (coroutine + runCatching).
+    //   The Run action must never terminate the application under any failure.
+    fun requestRun() {
         val active = _uiState.value.openTabs.firstOrNull { it.isActive }
         if (active == null) {
-            _uiState.update { it.copy(statusMessage = "No active file to preview") }
+            _uiState.update { it.copy(statusMessage = "Open a file to run or preview") }
             return
         }
-        val supportedLanguages = setOf("html", "markdown")
-        if (active.language !in supportedLanguages) {
-            _uiState.update { it.copy(statusMessage = "Preview not supported for ${active.language} files") }
-            return
-        }
-        if (_uiState.value.isPreviewVisible) {
-            _uiState.update { it.copy(isPreviewVisible = false) }
-        } else {
-            val content = pendingContent[active.id] ?: active.content.orEmpty()
-            val htmlContent = when (active.language) {
-                "html"     -> content
-                "markdown" -> markdownToPreviewHtml(content)
-                else       -> return
+        when (active.language) {
+            "html", "markdown" -> togglePreview()
+            else -> _uiState.update {
+                it.copy(statusMessage = "No run provider for ${active.language} files")
             }
+        }
+    }
+
+    // ── Preview provider ───────────────────────────────────────────────────
+    //
+    // Called by requestRun for HTML and Markdown files.
+    // Runs in a viewModelScope coroutine so the main thread is never blocked.
+    // Markdown rendering is offloaded to Dispatchers.Default.
+    // All failure paths surface a user-facing statusMessage — the app never
+    // crashes due to an exception inside this function.
+    fun togglePreview() {
+        viewModelScope.launch {
+            // Hide preview if already visible.
+            if (_uiState.value.isPreviewVisible) {
+                _uiState.update { it.copy(isPreviewVisible = false) }
+                return@launch
+            }
+            val active = _uiState.value.openTabs.firstOrNull { it.isActive }
+            if (active == null) {
+                _uiState.update { it.copy(statusMessage = "No active file to preview") }
+                return@launch
+            }
+            val content = pendingContent[active.id] ?: active.content.orEmpty()
+
+            // Generate HTML on the Default dispatcher — never blocks the main thread.
+            // runCatching contains any exception from markdownToPreviewHtml or any
+            // future provider; the user sees a status message instead of a crash.
+            val htmlResult = runCatching {
+                withContext(Dispatchers.Default) {
+                    when (active.language) {
+                        "html"     -> content
+                        "markdown" -> markdownToPreviewHtml(content)
+                        else       -> null
+                    }
+                }
+            }
+
+            val htmlContent = htmlResult.getOrElse { error ->
+                _uiState.update {
+                    it.copy(
+                        statusMessage = "Preview failed: ${error.message ?: error.javaClass.simpleName}"
+                    )
+                }
+                return@launch
+            } ?: return@launch   // null = unsupported language (already handled by requestRun)
+
             _uiState.update { it.copy(isPreviewVisible = true, previewHtmlContent = htmlContent) }
         }
     }

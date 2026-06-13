@@ -93,10 +93,12 @@ sealed class EditorOutbound {
      * to sync the persisted settings into Monaco.
      */
     data class SetEditorOptions(
-        val tabSize: Int?      = null,
-        val wordWrap: Boolean? = null,
-        val lineNumbers: Boolean? = null,
-        val fontSize: Int?     = null,
+        val tabSize: Int?           = null,
+        val wordWrap: Boolean?      = null,
+        val lineNumbers: Boolean?   = null,
+        val fontSize: Int?          = null,
+        /** C014: "none" | "selection" | "all" | "boundary" */
+        val renderWhitespace: String? = null,
     ) : EditorOutbound()
 
     // ── Layout ─────────────────────────────────────────────────────────────
@@ -162,10 +164,12 @@ sealed class EditorOutbound {
             is SetFontSize     -> { put("type", "setFontSize"); put("size", msg.size) }
             is SetEditorOptions-> {
                 put("type", "setEditorOptions")
-                msg.tabSize?.let    { put("tabSize", it) }
-                msg.wordWrap?.let   { put("wordWrap", if (it) "on" else "off") }
-                msg.lineNumbers?.let{ put("lineNumbers", if (it) "on" else "off") }
-                msg.fontSize?.let   { put("fontSize", it) }
+                msg.tabSize?.let          { put("tabSize", it) }
+                msg.wordWrap?.let         { put("wordWrap", if (it) "on" else "off") }
+                msg.lineNumbers?.let      { put("lineNumbers", if (it) "on" else "off") }
+                msg.fontSize?.let         { put("fontSize", it) }
+                // C014: expose renderWhitespace to Monaco
+                msg.renderWhitespace?.let { put("renderWhitespace", it) }
             }
             is ForceLayout     -> put("type", "forceLayout")
             is ExecuteCommand  -> { put("type", "executeCommand"); put("command", msg.command) }

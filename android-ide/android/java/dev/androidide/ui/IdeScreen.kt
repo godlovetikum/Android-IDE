@@ -125,6 +125,12 @@ fun IdeScreen(
                         onCloseDrawer?.invoke()
                     }
                 },
+                onFileDoubleClick        = { uri ->
+                    // C011: double-tap opens a permanent (non-preview) tab
+                    ideViewModel.openFilePermanent(uri)
+                    ideViewModel.navigateTo(AppScreen.EDITOR)
+                    onCloseDrawer?.invoke()
+                },
                 onDirToggle              = { uri ->
                     if (uiState.isMultiSelectMode) ideViewModel.toggleNodeSelection(uri)
                     else ideViewModel.toggleDirectory(uri)
@@ -177,23 +183,36 @@ fun IdeScreen(
                     onNavigateSettings = { ideViewModel.navigateTo(AppScreen.SETTINGS) },
                 )
                 HorizontalDivider(thickness = 1.dp, color = colors.separator)
-                if (uiState.projectRootUri != null) {
-                    FilesHeader(
-                        isSearchVisible    = uiState.isSearchVisible,
-                        onShowFileSearch   = ideViewModel::showFileSearch,
-                        onHideFileSearch   = ideViewModel::hideFileSearch,
-                        onRevealActiveFile = ideViewModel::revealActiveFile,
-                        onNewFile          = { ideViewModel.showCreateFileDialog(rootNode) },
-                        onNewFolder        = { ideViewModel.showCreateFolderDialog(rootNode) },
-                        onImportFiles      = onImportFilesAtRoot,
-                        onRefresh          = ideViewModel::refreshProject,
-                        onExportProject    = ideViewModel::exportProject,
-                        onRenameProject    = { /* TODO Phase 2 */ },
-                        onRemoveProject    = {
-                            uiState.projectRootUri?.let { ideViewModel.requestRemoveProject(it) }
-                        },
-                    )
-                    fileTreePanelContent(Modifier.fillMaxSize(), onCloseDrawer)
+                // C003: Sidebar content is screen-aware.
+                // The file tree is only relevant when the Editor is the active screen.
+                // Projects and Settings manage their own content in the main area.
+                when (uiState.currentScreen) {
+                    AppScreen.EDITOR -> {
+                        if (uiState.projectRootUri != null) {
+                            FilesHeader(
+                                isSearchVisible    = uiState.isSearchVisible,
+                                onShowFileSearch   = ideViewModel::showFileSearch,
+                                onHideFileSearch   = ideViewModel::hideFileSearch,
+                                onRevealActiveFile = ideViewModel::revealActiveFile,
+                                onNewFile          = { ideViewModel.showCreateFileDialog(rootNode) },
+                                onNewFolder        = { ideViewModel.showCreateFolderDialog(rootNode) },
+                                onImportFiles      = onImportFilesAtRoot,
+                                onRefresh          = ideViewModel::refreshProject,
+                                onExportProject    = ideViewModel::exportProject,
+                                onRenameProject    = { /* TODO Phase 2 */ },
+                                onRemoveProject    = {
+                                    uiState.projectRootUri?.let { ideViewModel.requestRemoveProject(it) }
+                                },
+                            )
+                            fileTreePanelContent(Modifier.fillMaxSize(), onCloseDrawer)
+                        } else {
+                            SidebarNoProjectHint(onOpenProject = onOpenProjectFolder)
+                        }
+                    }
+                    AppScreen.PROJECTS, AppScreen.SETTINGS -> {
+                        // These screens own their content in the main area.
+                        // Sidebar shows only the compact nav strip above.
+                    }
                 }
             }
         }
@@ -214,7 +233,7 @@ fun IdeScreen(
                             onSaveAs         = onSaveAs,
                             onFind           = { ideViewModel.sendEditorCommand(EditorOutbound.ShowFind) },
                             onReplace        = { ideViewModel.sendEditorCommand(EditorOutbound.ShowReplace) },
-                            onTogglePreview  = ideViewModel::togglePreview,
+                            onTogglePreview  = ideViewModel::requestRun,
                             onOpenFile       = { uri -> ideViewModel.openFile(uri) },
                             onRevealInTree   = { uri ->
                                 ideViewModel.revealActiveFile()
@@ -331,6 +350,7 @@ private fun EditorContent(
                 onTabSelected  = ideViewModel::selectTab,
                 onTabCloseSafe = ideViewModel::closeTabSafe,
                 onTabSave      = ideViewModel::saveTabById,
+                onTabPin       = ideViewModel::pinTab,
                 onCloseOthers  = ideViewModel::closeOtherTabs,
                 onCloseAll     = ideViewModel::closeAllTabs,
                 onNewBlankTab  = ideViewModel::newBlankTab,
@@ -433,8 +453,37 @@ private fun NavIconButton(
             imageVector        = icon,
             contentDescription = label,
             tint               = tint,
-            modifier           = Modifier.size(22.dp),
+            modifier           = Modifier.size(24.dp),
         )
+    }
+}
+
+// ── Sidebar no-project hint ───────────────────────────────────────────────────
+//
+// Shown in the Editor-screen sidebar when no project is open.
+// Gives a quick path to open a project without navigating away.
+@Composable
+private fun SidebarNoProjectHint(onOpenProject: () -> Unit) {
+    val colors = LocalIdeColors.current
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(
+            text  = "No project open",
+            style = MaterialTheme.typography.bodySmall,
+            color = colors.textDisabled,
+        )
+        TextButton(onClick = onOpenProject) {
+            Text(
+                text  = "Open Project",
+                style = MaterialTheme.typography.labelSmall,
+                color = colors.accent,
+            )
+        }
     }
 }
 
@@ -553,7 +602,7 @@ private fun FilesHeader(
 //
 // Layout:
 //   Left:  Sidebar toggle (hamburger) | breadcrumb file path
-//   Right: Save (when autoSave off) | Find/Replace overflow | Run/Preview
+//   Right: Save (when autoSave off) | Search | Run/Preview | overflow (Find & Replace, Save As)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -582,7 +631,7 @@ private fun IdeTopBar(
         activeTab != null -> fileTree.pathTo(activeTab.documentUri)
             ?: if (projectName.isNotEmpty()) "/$projectName/${activeTab.displayName}" else activeTab.displayName
         projectName.isNotEmpty() -> projectName
-        else -> "Android IDE"
+        else -> ""   // C006: no application title when nothing is open
     }
 
     // Ancestors of the active file (for breadcrumb tap → reveal in tree).
@@ -617,44 +666,51 @@ private fun IdeTopBar(
                     color    = colors.textPrimary,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.run {
-                        if (siblings.isNotEmpty() || ancestors.isNotEmpty()) {
-                            clickable { pathDropdownOpen = true }
-                        } else this
-                    },
+                    // C007: path is always tappable when a file is active — independent of
+                    // whether siblings/ancestors are visible in the currently expanded tree.
+                    modifier = if (activeTab != null) Modifier.clickable { pathDropdownOpen = true }
+                               else Modifier,
                 )
                 if (pathDropdownOpen) {
                     DropdownMenu(
                         expanded         = pathDropdownOpen,
                         onDismissRequest = { pathDropdownOpen = false },
                     ) {
-                        // Parent directories — navigating up the path hierarchy
+                        // Parent directories — C007: ancestor taps close the navigator only.
+                        // Sidebar is NOT opened (path navigator is independent of sidebar).
+                        // Full in-navigator folder browsing is a Phase 2 enhancement.
                         if (ancestors.isNotEmpty()) {
                             ancestors.forEach { ancestor ->
                                 DropdownMenuItem(
                                     text    = { Text("\u25B8 ${ancestor.displayName}/", color = colors.textSecondary) },
-                                    onClick = {
-                                        pathDropdownOpen = false
-                                        onRevealInTree(ancestor.documentUri)
-                                    },
+                                    onClick = { pathDropdownOpen = false },
                                 )
                             }
                             HorizontalDivider()
                         }
                         // Siblings — switch to a file at the same level
-                        siblings.forEach { sibling ->
+                        if (siblings.isNotEmpty()) {
+                            siblings.forEach { sibling ->
+                                DropdownMenuItem(
+                                    text    = {
+                                        val isActive = sibling.documentUri == activeTab?.documentUri
+                                        Text(
+                                            sibling.displayName,
+                                            color = if (isActive) colors.accent else colors.textPrimary,
+                                        )
+                                    },
+                                    onClick = {
+                                        pathDropdownOpen = false
+                                        if (!sibling.isDirectory) onOpenFile(sibling.documentUri)
+                                    },
+                                )
+                            }
+                        } else if (ancestors.isEmpty()) {
+                            // C007: siblings unavailable — parent folder not expanded in tree yet
                             DropdownMenuItem(
-                                text    = {
-                                    val isActive = sibling.documentUri == activeTab?.documentUri
-                                    Text(
-                                        sibling.displayName,
-                                        color = if (isActive) colors.accent else colors.textPrimary,
-                                    )
-                                },
-                                onClick = {
-                                    pathDropdownOpen = false
-                                    if (!sibling.isDirectory) onOpenFile(sibling.documentUri)
-                                },
+                                text    = { Text("Expand parent folder in sidebar to navigate", color = colors.textDisabled) },
+                                onClick = { pathDropdownOpen = false },
+                                enabled = false,
                             )
                         }
                     }
@@ -684,6 +740,14 @@ private fun IdeTopBar(
                     )
                 }
             }
+            // Search — promotes Find to a first-class action (C006)
+            IconButton(onClick = onFind) {
+                Icon(
+                    imageVector        = Icons.Default.Search,
+                    contentDescription = "Search",
+                    tint               = colors.textSecondary,
+                )
+            }
             // Run / Preview — always visible
             IconButton(onClick = onTogglePreview) {
                 Icon(
@@ -692,7 +756,7 @@ private fun IdeTopBar(
                     tint               = if (isPreviewVisible) colors.accent else colors.textSecondary,
                 )
             }
-            // Overflow: Find, Find & Replace, Save As
+            // Overflow: less-frequent actions (Find & Replace, Save As)
             Box {
                 IconButton(onClick = { overflowOpen = true }) {
                     Icon(
@@ -705,11 +769,6 @@ private fun IdeTopBar(
                     expanded         = overflowOpen,
                     onDismissRequest = { overflowOpen = false },
                 ) {
-                    DropdownMenuItem(
-                        text        = { Text("Find") },
-                        leadingIcon = { Icon(Icons.Default.FindInPage, contentDescription = null, modifier = Modifier.size(18.dp)) },
-                        onClick     = { overflowOpen = false; onFind() },
-                    )
                     DropdownMenuItem(
                         text        = { Text("Find & Replace") },
                         leadingIcon = { Icon(Icons.Default.FindInPage, contentDescription = null, modifier = Modifier.size(18.dp)) },

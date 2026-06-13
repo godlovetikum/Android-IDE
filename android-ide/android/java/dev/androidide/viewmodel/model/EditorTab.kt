@@ -18,6 +18,12 @@ import java.util.UUID
  * [isBlank]        True for a "new blank" tab that has never been saved to a real file.
  *                  Blank tabs have a synthetic documentUri and do not correspond to a
  *                  SAF document until the user performs "Save As".
+ * [isTemporary]    True for a "preview" tab opened by a single-tap in the file tree.
+ *                  A temporary tab is replaced by the next single-tapped file instead
+ *                  of accumulating in the tab bar. It becomes permanent on: first edit
+ *                  (any keystroke), explicit pin action (double-tap file tree item or
+ *                  "Keep Open" from the tab overflow menu), or "Save As".
+ *                  Temporary tabs are rendered with an italic display name.
  */
 data class EditorTab(
     val id: String = UUID.randomUUID().toString(),
@@ -29,4 +35,5 @@ data class EditorTab(
     val isActive: Boolean = false,
     val isSaving: Boolean = false,
     val isBlank: Boolean = false,
+    val isTemporary: Boolean = false,
 )

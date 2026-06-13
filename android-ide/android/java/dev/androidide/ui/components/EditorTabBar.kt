@@ -18,6 +18,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.androidide.ui.theme.LocalIdeColors
@@ -29,6 +30,7 @@ fun EditorTabBar(
     onTabSelected: (String) -> Unit,
     onTabCloseSafe: (String) -> Unit,
     onTabSave: (String) -> Unit,
+    onTabPin: (String) -> Unit,
     onCloseOthers: (String) -> Unit,
     onCloseAll: () -> Unit,
     onNewBlankTab: () -> Unit,
@@ -56,6 +58,7 @@ fun EditorTabBar(
                     onSelected   = { onTabSelected(tab.id) },
                     onCloseSafe  = { onTabCloseSafe(tab.id) },
                     onSave       = { onTabSave(tab.id) },
+                    onPin        = { onTabPin(tab.id) },
                     onCloseOthers = { onCloseOthers(tab.id) },
                     onCloseAll   = onCloseAll,
                 )
@@ -91,6 +94,7 @@ private fun EditorTabItem(
     onSelected: () -> Unit,
     onCloseSafe: () -> Unit,
     onSave: () -> Unit,
+    onPin: () -> Unit,
     onCloseOthers: () -> Unit,
     onCloseAll: () -> Unit,
 ) {
@@ -127,7 +131,10 @@ private fun EditorTabItem(
 
             Text(
                 text     = tab.displayName,
-                style    = MaterialTheme.typography.labelMedium,
+                // C011: temporary (preview) tabs shown in italic
+                style    = MaterialTheme.typography.labelMedium.copy(
+                    fontStyle = if (tab.isTemporary) FontStyle.Italic else FontStyle.Normal,
+                ),
                 color    = if (tab.isActive) colors.textPrimary else colors.textSecondary,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -154,6 +161,13 @@ private fun EditorTabItem(
                     expanded         = menuOpen,
                     onDismissRequest = { menuOpen = false },
                 ) {
+                    // C011: pin the preview tab to make it permanent
+                    if (tab.isTemporary) {
+                        DropdownMenuItem(
+                            text    = { Text("Keep Open") },
+                            onClick = { menuOpen = false; onPin() },
+                        )
+                    }
                     if (!tab.isBlank) {
                         DropdownMenuItem(
                             text    = { Text("Save") },

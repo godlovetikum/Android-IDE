@@ -13,6 +13,14 @@ data class EditorSettings(
     val autoSave: Boolean      = false,
     /** Monaco theme: "dark" | "light" | "system" (follows app theme). */
     val editorTheme: String    = "system",
+    /**
+     * C014: Monaco renderWhitespace option.
+     * "none"      — whitespace never highlighted
+     * "selection" — whitespace highlighted in selected text (default)
+     * "all"       — all whitespace always highlighted
+     * "boundary"  — whitespace at block boundaries
+     */
+    val renderWhitespace: String = "selection",
     /** Portrait-mode stacking order for the preview panel. */
     val previewLayout: PreviewLayout = PreviewLayout.PREVIEW_ABOVE,
 

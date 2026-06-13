@@ -72,12 +72,42 @@
 | 045 | Fix BUG-017: `Unresolved reference: parent` in FileOpDialogHost — `dialog.parent` → `dialog.parentNode` at all 4 call sites | ui | 2026-06-13 |
 | 046 | Fix BUG-018: Monaco editor WebView crash terminates app — override `onRenderProcessGone` on editor WebView to return `true`; add `EditorCrashedBox` with Reload button; `editorView` lambda shared across all 4 layout branches | editor | 2026-06-13 |
 | 047 | CI: split `build.yml` → `build-debug.yml` (push/PR/dispatch, debug APK) + `build-release.yml` (dispatch-only, release APK with keystore signing); `build.yml` retired to redirect comment | ci | 2026-06-13 |
+| C001 | BUG-019: `togglePreview()` ran on main thread with no error handling → app crash on Run. Added `requestRun()` project-scoped entry point; moved `togglePreview()` into `viewModelScope.launch { runCatching { withContext(Dispatchers.Default) { … } } }`; wired Run button to `::requestRun` | viewmodel + ui | 2026-06-13 |
+| C002 | Sidebar nav icons 22dp → 24dp (larger touch targets) | ui | 2026-06-13 |
+| C003 | Sidebar content is now screen-aware: file tree + FilesHeader visible only on Editor screen; Projects + Settings screens show only nav strip; added `SidebarNoProjectHint` when on Editor with no project open | ui | 2026-06-13 |
+| C004 | Verified: file-open → close-drawer already wired (`onCloseDrawer?.invoke()` in `onFileClick`); tap-outside closes via ModalNavigationDrawer scrim; Monaco focus/keyboard documented as C004b (editor subsystem) | ui | 2026-06-13 |
+| C005 | Verified already complete: `uiFontScale` in `EditorSettings`, applied via `LocalDensity` in `AppRoot.kt`, slider + reset in `SettingsScreen` — all text in the app scales globally | ui + theme | 2026-06-13 |
+| C006 | Top bar: `"Android IDE"` fallback → `""` (no app title); promoted Find to dedicated Search button (Save → Search → Run); removed Find from overflow; kept Find & Replace + Save As in overflow | ui | 2026-06-13 |
+| C007 | Path navigation: removed sibling-count gate (path always tappable for active tab); ancestor clicks no longer open sidebar; empty-siblings hint shown when parent folder not expanded | ui | 2026-06-13 |
+| C009 | Verified already complete: session saved/restored per project URI via `sessionRepository.saveTabsForProject` / `getOpenTabUrisForProject`; `saveCurrentProjectSession` called before switching projects | viewmodel + data | 2026-06-13 |
+| C010 | Verified already complete: `openFileInternal` checks `find { it.documentUri == documentUri }` before creating a tab — existing tab is activated, never duplicated | viewmodel | 2026-06-13 |
+| C011 | Temporary tab (preview) behavior: single-tap → isTemporary tab replacing previous preview; first edit → pin (isTemporary=false); double-tap file tree → openFilePermanent; "Keep Open" in tab overflow; italic title for temporary tabs | viewmodel + ui | 2026-06-13 |
+| C012 | Verified already complete: copyFileNode/cutFileNode both set isMultiSelectMode=false; pasteFileNode accepts root dir with no restriction | viewmodel + ui | 2026-06-13 |
+| C013 | Verified already complete: copyPathToClipboard uses pathTo (leading-slash) + "/$raw" fallback — all copied paths start with "/" | viewmodel | 2026-06-13 |
+| C014 | Editor customization: renderWhitespace (None/Selection/All) exposed in Settings + persisted through EditorSettings/SetEditorOptions/Monaco; disabled Phase-4 placeholders for Code Completion and Code Folding in Settings screen | ui/editor | 2026-06-13 |
+| C008 | Editor focus: setOnTouchListener on ACTION_UP calls requestFocus() + InputMethodManager.showSoftInput(SHOW_IMPLICIT) — reliably shows keyboard on first tap inside Compose layout | ui/editor | 2026-06-13 |
+| C015 | Monaco performance: formatOnPaste=false (paste corruption); autoIndent=brackets (slow advanced); glyphMargin=false; lineDecorationsWidth=5; re-layout after wordWrap toggle | editor | 2026-06-13 |
+| C016 | Text selection: touchend focus call now skips focus() when Monaco has a non-empty selection — prevents dismissing Android selection handles mid-gesture | editor | 2026-06-13 |
+| C017 | Keyboard toolbar: smartIndent/smartOutdent JS commands (check selection → indent lines vs insert spaces); "Show KB"+"Hide KB" replaced with single stateful Toggle Keyboard button; added Outdent button to page 1 | ui/editor | 2026-06-13 |
+| C018 | Verified already complete: ShowFind/ShowReplace messages → JS getAction("actions.find") / getAction("editor.action.startFindReplaceAction"); wired in IdeScreen.kt top bar onFind/onReplace callbacks | editor | 2026-06-13 |
 
 ---
 
 ## In Progress Tasks
 
-None. Phase 1 complete (including compile error and crash fix pass). Ready to begin Phase 2.
+| ID | Task | Subsystem | Started |
+|----|------|-----------|---------|
+| — | All Phase 1 C-series tasks complete as of 2026-06-13 — no items in progress | — | — |
+
+---
+
+## Phase 1 Correction Pass — Pending Tasks
+
+All Phase 1 C-series items are now complete. See the Completed table above for implementation notes.
+
+Original spec items C001–C018 were all addressed in two sessions (2026-06-13):
+- C001–C007: completed in first session
+- C008–C018: completed / verified in second session
 
 ---
 

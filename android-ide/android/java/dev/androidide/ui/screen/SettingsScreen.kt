@@ -249,6 +249,25 @@ fun SettingsScreen(
 
                     HorizontalDivider(color = colors.separator)
 
+                    // C014: Render whitespace (exposes Monaco's renderWhitespace option)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Render Whitespace", color = colors.textPrimary, style = MaterialTheme.typography.bodyMedium)
+                            Text("Highlight space / tab characters", color = colors.textSecondary, style = MaterialTheme.typography.bodySmall)
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            listOf("None" to "none", "Selection" to "selection", "All" to "all").forEach { (label, value) ->
+                                FilterChip(
+                                    selected = s.renderWhitespace == value,
+                                    onClick  = { ideViewModel.setEditorSettings(s.copy(renderWhitespace = value)) },
+                                    label    = { Text(label) },
+                                )
+                            }
+                        }
+                    }
+
+                    HorizontalDivider(color = colors.separator)
+
                     // Auto save
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -299,6 +318,32 @@ fun SettingsScreen(
                             Text("Show one-tap common character shortcuts above the keyboard", color = colors.textSecondary, style = MaterialTheme.typography.bodySmall)
                         }
                         Switch(checked = s.showSymbolBar, onCheckedChange = { ideViewModel.setEditorSettings(s.copy(showSymbolBar = it)) })
+                    }
+
+                    // C014: disabled placeholder — code completion (Phase 4)
+                    HorizontalDivider(color = colors.separator)
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Code Completion", color = colors.textDisabled, style = MaterialTheme.typography.bodyMedium)
+                            Text("Requires Language Server — Phase 4", color = colors.textDisabled, style = MaterialTheme.typography.bodySmall)
+                        }
+                        Switch(checked = false, onCheckedChange = null, enabled = false)
+                    }
+
+                    // C014: disabled placeholder — code folding (Phase 4)
+                    HorizontalDivider(color = colors.separator)
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Code Folding", color = colors.textDisabled, style = MaterialTheme.typography.bodyMedium)
+                            Text("Requires Language Server — Phase 4", color = colors.textDisabled, style = MaterialTheme.typography.bodySmall)
+                        }
+                        Switch(checked = false, onCheckedChange = null, enabled = false)
                     }
                 }
             }

@@ -319,4 +319,114 @@ Last updated: 2026-06-13
 
 ---
 
+### BUG-026 — Monaco renderWhitespace hardcoded; no disabled placeholders for Phase-4 options (C014)
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-06-13 |
+| **Subsystem** | ui/editor |
+| **Issue** | `renderWhitespace: 'selection'` was hardcoded in `monaco-init.js`. Users had no way to change it. Phase-4 features (code completion, code folding) had no visible placeholder in Settings, so users could not tell whether they were missing or simply not yet available. |
+| **Root Cause** | `EditorSettings` and `SetEditorOptions` only exposed `tabSize`, `wordWrap`, `lineNumbers`, and `fontSize`. `renderWhitespace` was baked into the Monaco creation call and never piped through the settings pipeline. |
+| **Files Modified** | `data/model/EditorSettings.kt`, `editor/EditorMessage.kt`, `viewmodel/IdeViewModel.kt`, `assets/editor/monaco-init.js`, `ui/screen/SettingsScreen.kt` |
+| **Solution** | Added `renderWhitespace: String = "selection"` to `EditorSettings`. Added `renderWhitespace: String?` to `SetEditorOptions`. Both `setEditorSettings` and `onEditorReady` now pass `renderWhitespace` through the chain. JS `setEditorOptions` handler applies it to Monaco. Settings screen gained a "Render Whitespace" row with None/Selection/All `FilterChip` selectors. Two disabled `Switch` rows for "Code Completion" and "Code Folding" (labeled "Phase 4") were added as placeholders. |
+| **Prevention** | Any Monaco option that affects the user's writing experience must be piped through the `EditorSettings → SetEditorOptions → JS` pipeline from day one, not hardcoded. |
+
+---
+
+### BUG-025 — Editor single-tap does not reliably show the soft keyboard (C008)
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-06-13 |
+| **Subsystem** | ui/editor |
+| **Issue** | Tapping the Monaco editor area sometimes required two taps to show the soft keyboard — one to focus the WebView natively, then another to trigger Monaco's own focus. On many Android versions, `WebView.requestFocus()` alone does not raise the IME when the WebView is embedded inside a Compose tree. |
+| **Root Cause** | `setOnTouchListener` called `v.requestFocus()` on every touch event but never called `InputMethodManager.showSoftInput`. The JS-side `editor.focus()` (triggered 50 ms after touchend) causes Monaco's textarea to receive focus, but this JS call happens after the Android IME decision window closes — the IME had already decided not to show because the Android-level focus request was not paired with an explicit `showSoftInput` call. |
+| **Files Modified** | `ui/components/EditorPane.kt` |
+| **Solution** | On `ACTION_UP` (finger lift), call both `v.requestFocus()` and `imm.showSoftInput(v, SHOW_IMPLICIT)`. `SHOW_IMPLICIT` respects the user's keyboard preference but raises it when appropriate. Added imports: `MotionEvent`, `InputMethodManager`, `Context`. |
+| **Prevention** | Any `WebView` inside a Compose tree that needs the IME must call `showSoftInput` explicitly after `requestFocus`. Relying on `requestFocus` alone is insufficient in Compose because Compose manages focus through its own FocusRequester system, which does not automatically bridge to the IME. |
+
+---
+
+### BUG-024 — Keyboard toolbar: indent broken without selection; two redundant keyboard toggle buttons (C017)
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-06-13 |
+| **Subsystem** | ui/editor |
+| **Issue** | (1) The "Indent" toolbar button called `editor.action.indentLines`, which is a no-op when there is no text selection — pressing Indent with the cursor on a blank line did nothing. (2) Two separate "Show Keyboard" and "Hide Keyboard" buttons occupied page 2, consuming 2 of 6 slots for redundant actions and confusing users who only needed one toggle. |
+| **Root Cause** | `TOOLBAR_PAGE_1` hardcoded `"editor.action.indentLines"` without a selection check. `TOOLBAR_PAGE_2` registered two separate `KeyboardAction` entries with independent command IDs instead of one stateful toggle. |
+| **Files Modified** | `ui/components/EditorPane.kt`, `assets/editor/monaco-init.js` |
+| **Solution** | (JS) Added `smartIndent` and `smartOutdent` command handlers: both check `editor.getSelection().isEmpty()` — if no selection, `smartIndent` inserts tab-width spaces at cursor; `smartOutdent` triggers the keyboard `outdent` handler. If a selection exists, they run `editor.action.indentLines` / `editor.action.outdentLines`. (Kotlin) Changed `TOOLBAR_PAGE_1` indent commandId to `"smartIndent"` and added a new `"Outdent"` button with `"smartOutdent"`. Removed `"Show Keyboard"` + `"Hide Keyboard"` from `TOOLBAR_PAGE_2`; replaced with one `KeyboardAction(isKeyboardToggle=true)`. `KeyboardToolbar` tracks `keyboardShowing` state and passes an `onCustomClick` lambda that sends `"blurEditor"` or `"focusEditor"` and flips the state. `ToolbarIconButton` gained an `onCustomClick: (() -> Unit)?` override param. |
+| **Prevention** | Monaco action IDs like `indentLines` must be tested with and without a selection before shipping. State-ful UI interactions (toggle buttons) must track their own state in Compose rather than duplicating the action as two buttons. |
+
+---
+
+### BUG-023 — No temporary (preview) tab behavior; all files opened as permanent tabs (C011)
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-06-13 |
+| **Subsystem** | viewmodel + ui |
+| **Issue** | Every file opened from the file tree immediately became a permanent tab. Browsing many files in sequence filled the tab bar with files the user never intended to keep open. There was no way to "peek" at a file without permanently docking it. |
+| **Root Cause** | `EditorTab` had no `isTemporary` flag. `openFileInternal` always created permanent tabs. The tab bar UI showed all tabs in normal (non-italic) weight with no visual distinction between reviewed and working files. |
+| **Files Modified** | `viewmodel/model/EditorTab.kt`, `viewmodel/IdeViewModel.kt`, `ui/components/EditorTabBar.kt`, `ui/components/FileTreePanel.kt`, `ui/IdeScreen.kt` |
+| **Solution** | Added `isTemporary: Boolean = false` to `EditorTab`. `openFile` (single-tap) creates temporary tabs and closes the previous temporary tab before opening a new one. `openFilePermanent` (double-tap) creates permanent tabs. First edit (`ContentChanged`) sets `isTemporary = false`. `pinTab(tabId)` and "Keep Open" in the tab overflow menu pin a preview tab. `FileTreePanel.FileTreeRow` uses `combinedClickable.onDoubleClick` for pinning. `EditorTabItem` renders temporary tabs with italic `FontStyle`. |
+| **Prevention** | File-open actions must always distinguish between "preview" (single-tap, replace existing preview) and "pin" (double-tap or first edit). This distinction is industry-standard IDE behavior (VSCode, IntelliJ). |
+
+---
+
+### BUG-022 — Path navigator opens sidebar; unavailable for single-child folders (C007)
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-06-13 |
+| **Subsystem** | ui |
+| **Issue** | (1) The path text in the top bar was only made `clickable` when `siblings.isNotEmpty() || ancestors.isNotEmpty()`. If the parent folder was not expanded in the tree (or had only one child), both lists were empty and the path became non-interactive — path navigation was silently lost. (2) Clicking an ancestor in the dropdown called `onRevealInTree(ancestor.documentUri)` which triggered `ideViewModel.revealActiveFile() + onToggleSidebar?.invoke()` — opening the sidebar instead of staying in the dropdown navigator. |
+| **Files Modified** | `ui/IdeScreen.kt` |
+| **Solution** | (1) Replaced the sibling/ancestor guard with `if (activeTab != null) Modifier.clickable { pathDropdownOpen = true } else Modifier` — path is always tappable when a file is open. (2) Ancestor `onClick` now only calls `pathDropdownOpen = false` — sidebar is not touched. (3) Added a disabled hint item "Expand parent folder in sidebar to navigate" when the dropdown opens with no siblings and no ancestors (parent not yet expanded). |
+| **Prevention** | Path navigation composables must not gate their clickability on the content they would show — that creates invisible interaction dead zones. Path navigation and sidebar state must be kept orthogonal. |
+
+---
+
+### BUG-021 — Top bar: app title fallback + Search hidden in overflow (C006)
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-06-13 |
+| **Subsystem** | ui |
+| **Issue** | (1) When no project and no tab was open, the breadcrumb text fell back to the hard-coded string `"Android IDE"`, effectively showing an app title that the spec explicitly prohibits. (2) The Find action was hidden inside the overflow menu, requiring two taps. The top-bar action order didn't match the spec's required layout: Save → Search → Run. |
+| **Files Modified** | `ui/IdeScreen.kt` |
+| **Solution** | Changed `filePath` fallback from `"Android IDE"` to `""` — the title slot is empty when nothing is open. Added a dedicated `IconButton(onClick = onFind)` with `Icons.Default.Search` between Save and Run. Removed the redundant `Find` `DropdownMenuItem` from the overflow. Overflow now contains only Find & Replace and Save As. Action order: Save (if !autoSave) → Search → Run → overflow. |
+| **Prevention** | Hardcoded application name strings in UI composables must be replaced with empty strings or `stringResource` — never a raw English literal that appears as a "title." Frequently used editor actions (Find, Run) must be first-class icon buttons, not buried in overflow menus. |
+
+---
+
+### BUG-020 — Sidebar shows file tree on Projects and Settings screens (context leak)
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-06-13 |
+| **Subsystem** | ui |
+| **Issue** | When a project was open, the sidebar displayed FilesHeader + FileTreePanel on ALL active screens (Projects, Settings, Editor). The file tree on non-Editor screens was irrelevant and consumed vertical space in the sidebar. Nav icons (22dp) were slightly small for reliable mobile touch targets. |
+| **Root Cause** | The `sidebarContent` lambda used a simple `if (uiState.projectRootUri != null)` guard. This guard checked only whether a project was open — it did not consider which screen was active. Changing to the Projects or Settings screen did not remove the file tree from the sidebar. |
+| **Files Modified** | `ui/IdeScreen.kt` |
+| **Solution** | Replaced the `if (uiState.projectRootUri != null)` block with `when (uiState.currentScreen)` in the `sidebarContent` lambda. `AppScreen.EDITOR` shows FilesHeader + FileTreePanel (when project open) or a `SidebarNoProjectHint` (when no project). `AppScreen.PROJECTS` and `AppScreen.SETTINGS` show only the nav strip — those screens own their content in the main area. Nav icon size increased from 22dp to 24dp. |
+| **Prevention** | Any sidebar content decision must consider `currentScreen` alongside project state. Sidebar components must never assume they are always shown in the context of the Editor screen. |
+
+---
+
+### BUG-019 — `togglePreview()` / Run crashes the app: main-thread execution + no error handling
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-06-13 |
+| **Subsystem** | viewmodel |
+| **Issue** | Pressing Run (the PlayArrow button in the top bar) crashes the application. Android reports an application failure and the process terminates. |
+| **Root Cause** | Three compounding problems in `IdeViewModel.togglePreview()`: (1) It is a plain `fun`, not a coroutine — called directly from the Compose click handler on the main thread. (2) `markdownToPreviewHtml(content)` executes synchronously on the main thread; for large Markdown files this risks an ANR, and any exception (`OutOfMemoryError`, `StackOverflowError`, future provider failure) propagates uncaught. (3) There is no `try-catch` or `runCatching` anywhere in the function — an uncaught exception thrown from a ViewModel fun called on the main thread terminates the app process. The WebView renderer crash path (BUG-006, BUG-018) was addressed separately; this is a distinct code-path crash that precedes WebView involvement. Additionally, Run was wired directly to `::togglePreview` (file-scoped), violating the project-scoped contract required for Phase 2 extensibility. |
+| **Files Modified** | `viewmodel/IdeViewModel.kt`, `ui/IdeScreen.kt` |
+| **Solution** | (1) Added `requestRun()` as the project-scoped Run entry point. It reads the active tab's language, dispatches to the preview provider for `html`/`markdown`, and shows a `statusMessage` for all other file types — no crash for any input. (2) Converted `togglePreview()` to `viewModelScope.launch { … }` so it always runs in the ViewModel coroutine scope and never blocks the main thread. (3) Moved `markdownToPreviewHtml()` call inside `withContext(Dispatchers.Default)` so Markdown rendering is offloaded from the main thread. (4) Wrapped the entire content-generation block in `runCatching { }` — any exception surfaces as `statusMessage = "Preview failed: …"` instead of propagating. (5) Wired the Run button in `IdeScreen.kt` to `ideViewModel::requestRun` instead of `ideViewModel::togglePreview`. |
+| **Prevention** | ViewModel functions called from Compose click handlers must either be safe `fun`s with no failure paths, or use `viewModelScope.launch { runCatching { … } }`. Pure computation on non-trivial input (Markdown→HTML, JSON parsing, etc.) must always be dispatched to `Dispatchers.Default`, never executed synchronously on the main thread. The Run action entry point must always be a named project-scoped function, not a direct reference to a provider-specific internal. |
+
+---
+
 Last updated: 2026-06-13

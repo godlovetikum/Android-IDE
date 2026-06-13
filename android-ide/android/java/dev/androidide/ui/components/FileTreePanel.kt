@@ -64,6 +64,8 @@ fun FileTreePanel(
     fileSearchResults: List<FileSearchResult>,
     // ── File-level callbacks ───────────────────────────────────────────────
     onFileClick: (String) -> Unit,
+    /** C011: double-tap opens a permanent (non-preview) tab. */
+    onFileDoubleClick: (String) -> Unit,
     onDirToggle: (String) -> Unit,
     onShowRenameDialog: (FileNode) -> Unit,
     onShowDeleteDialog: (FileNode) -> Unit,
@@ -200,6 +202,7 @@ fun FileTreePanel(
                         isSelected               = node.documentUri in selectedUris,
                         isMultiSelectMode        = isMultiSelectMode,
                         onFileClick              = onFileClick,
+                        onFileDoubleClick        = onFileDoubleClick,
                         onDirToggle              = onDirToggle,
                         onShowRenameDialog       = onShowRenameDialog,
                         onShowDeleteDialog       = onShowDeleteDialog,
@@ -354,6 +357,7 @@ private fun FileTreeRow(
     isSelected: Boolean,
     isMultiSelectMode: Boolean,
     onFileClick: (String) -> Unit,
+    onFileDoubleClick: (String) -> Unit,
     onDirToggle: (String) -> Unit,
     onShowRenameDialog: (FileNode) -> Unit,
     onShowDeleteDialog: (FileNode) -> Unit,
@@ -389,6 +393,10 @@ private fun FileTreeRow(
                     if (isMultiSelectMode) onSelect(node.documentUri)
                     else if (node.isDirectory) onDirToggle(node.documentUri)
                     else onFileClick(node.documentUri)
+                },
+                onDoubleClick = {
+                    // C011: double-tap opens a permanent (non-preview) tab
+                    if (!isMultiSelectMode && !node.isDirectory) onFileDoubleClick(node.documentUri)
                 },
                 onLongClick = { menuOpen = true },
             )
