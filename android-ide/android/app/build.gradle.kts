@@ -88,12 +88,18 @@ android {
         }
 
         create("release") {
-            val spwd  = System.getenv("KEYSTORE_PASSWORD")
-            val alias = System.getenv("KEY_ALIAS")
-            val kpwd  = System.getenv("KEY_PASSWORD")
-        
+            // Use takeIf { isNotBlank() } on every env var so that an unset
+            // GitHub Actions secret (which expands to "", not null) is treated
+            // as absent and the build falls back to the debug keystore.
+            // Without this guard, an empty KEY_PASSWORD causes Gradle to call
+            // KeyStore.getKey(alias, charArrayOf()) which throws
+            // KeytoolException("Failed to read key … : null") at packageRelease.
+            val spwd  = System.getenv("KEYSTORE_PASSWORD")?.takeIf { it.isNotBlank() }
+            val alias = System.getenv("KEY_ALIAS")?.takeIf { it.isNotBlank() }
+            val kpwd  = System.getenv("KEY_PASSWORD")?.takeIf { it.isNotBlank() }
+
             val releaseKeystore = file("${rootDir}/release.keystore")
-        
+
             if (
                 releaseKeystore.exists() &&
                 spwd != null &&

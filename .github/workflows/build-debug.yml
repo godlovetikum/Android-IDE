@@ -56,6 +56,32 @@ jobs:
         working-directory: android-ide
         run: bash scripts/fetch-monaco.sh
 
+      # Gradle signs debug APKs with the Android SDK debug keystore.
+      # On a fresh GitHub Actions runner ~/.android/debug.keystore does not exist;
+      # this step provisions it so assembleDebug has a valid signing resource.
+      - name: Provision debug keystore
+        run: |
+          mkdir -p ~/.android
+          if [ ! -f ~/.android/debug.keystore ]; then
+            keytool -genkeypair -v \
+              -keystore ~/.android/debug.keystore \
+              -alias androiddebugkey \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass android -keypass android \
+              -dname "CN=Android Debug, O=Android, C=US"
+            echo "Debug keystore created."
+          else
+            echo "Debug keystore already present."
+          fi
+
+      - name: Validate debug keystore
+        run: |
+          keytool -list \
+            -keystore ~/.android/debug.keystore \
+            -storepass android \
+            -alias androiddebugkey
+          echo "Debug keystore validated."
+
       - name: Lint
         working-directory: android-ide/android
         run: ./gradlew lint

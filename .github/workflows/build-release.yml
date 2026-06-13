@@ -118,6 +118,76 @@ jobs:
             echo "No release keystore configured. Using debug signing fallback."
           fi
 
+      # Two-stage keystore validation — runs entirely before Gradle starts.
+      #
+      # Stage 1 (keytool -list): confirms the file is a valid JKS/PKCS12 store,
+      #   the store password is correct, and the key alias exists.
+      #   This is cheap and catches decode or password errors early.
+      #
+      # Stage 2 (jarsigner): actually unlocks the private key using KEY_PASSWORD.
+      #   keytool -list only checks the store password; it never touches the key
+      #   password. Gradle's packageRelease is the first place that calls
+      #   KeyStore.getKey(alias, keyPassword), and when KEY_PASSWORD is wrong or
+      #   blank it throws KeytoolException("Failed to read key … : null") with no
+      #   useful context. jarsigner reproduces that exact code path on a throw-away
+      #   JAR so the failure is caught here with an actionable error message.
+      #
+      # If KEYSTORE_BASE64 is absent both stages run against the fallback debug
+      # keystore so the build always has a fully validated signing resource.
+      - name: Validate keystore (store password + key password)
+        working-directory: android-ide/android
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS:         ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD:      ${{ secrets.KEY_PASSWORD }}
+        run: |
+          if [ -f release.keystore ]; then
+            KS_FILE=release.keystore
+            KS_PASS="$KEYSTORE_PASSWORD"
+            KS_ALIAS="$KEY_ALIAS"
+            KS_KEY_PASS="$KEY_PASSWORD"
+            LABEL="release"
+          else
+            echo "No release keystore on disk — validating fallback debug keystore..."
+            KS_FILE="$HOME/.android/debug.keystore"
+            KS_PASS="android"
+            KS_ALIAS="androiddebugkey"
+            KS_KEY_PASS="android"
+            LABEL="debug (fallback)"
+          fi
+
+          # ── Stage 1: store password + alias ─────────────────────────────
+          echo "Stage 1: checking store password and alias for $LABEL keystore..."
+          if ! keytool -list \
+              -keystore "$KS_FILE" \
+              -storepass "$KS_PASS" \
+              -alias "$KS_ALIAS" 2>&1; then
+            echo "::error::Keystore stage-1 validation failed for $LABEL keystore." \
+                 "Check KEYSTORE_BASE64, KEYSTORE_PASSWORD, and KEY_ALIAS secrets."
+            exit 1
+          fi
+          echo "Stage 1 passed."
+
+          # ── Stage 2: key password (via jarsigner on a throw-away JAR) ───
+          # jarsigner calls KeyStore.getKey(alias, keyPassword) — the exact
+          # same path that packageRelease uses — so a bad KEY_PASSWORD fails
+          # here instead of deep inside Gradle with a cryptic null message.
+          echo "Stage 2: checking key password for alias '$KS_ALIAS'..."
+          echo "placeholder" > /tmp/ks_dummy.txt
+          jar cf /tmp/ks_dummy.jar -C /tmp ks_dummy.txt
+          if ! jarsigner \
+              -keystore "$KS_FILE" \
+              -storepass "$KS_PASS" \
+              -keypass "$KS_KEY_PASS" \
+              /tmp/ks_dummy.jar "$KS_ALIAS" 2>&1; then
+            echo "::error::Keystore stage-2 validation failed — key password" \
+                 "rejected for alias '$KS_ALIAS' in $LABEL keystore." \
+                 "Check the KEY_PASSWORD secret."
+            exit 1
+          fi
+          rm -f /tmp/ks_dummy.txt /tmp/ks_dummy.jar
+          echo "Stage 2 passed. $LABEL keystore fully validated."
+
       - name: Build release APK
         working-directory: android-ide/android
         env:
