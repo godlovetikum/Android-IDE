@@ -5,7 +5,10 @@
 package dev.androidide.viewmodel.model
 
 import dev.androidide.data.model.AppTheme
+import dev.androidide.data.model.EditorSettings
 import dev.androidide.data.model.Project
+import dev.androidide.data.model.RecoveryEntry
+import dev.androidide.data.model.VolumeKeyMode
 
 data class IdeUiState(
     // ── Navigation ─────────────────────────────────────────────────────────
@@ -51,9 +54,38 @@ data class IdeUiState(
     val statusMessage: String = "",
 
     // ── File operation dialog ──────────────────────────────────────────────
-    /** Non-null when a file operation dialog (rename / delete / create) is visible. */
+    /** Non-null when a file operation dialog is visible. */
     val fileOpDialog: FileOpDialog? = null,
 
     // ── Theme ──────────────────────────────────────────────────────────────
     val appTheme: AppTheme = AppTheme.DARK,
+
+    // ── Editor settings ────────────────────────────────────────────────────
+    /** Persisted editor display and behaviour settings. */
+    val editorSettings: EditorSettings = EditorSettings(),
+
+    // ── Volume keys ─────────────────────────────────────────────────────────
+    /** Controls how hardware volume keys behave when the editor is focused. */
+    val volumeKeyMode: VolumeKeyMode = VolumeKeyMode.HORIZONTAL,
+
+    // ── File tree clipboard ─────────────────────────────────────────────────
+    /** FileNode pending a paste operation; null when the clipboard is empty. */
+    val clipboard: FileNode? = null,
+
+    /** True when [clipboard] was cut (will be moved); false for copy. */
+    val clipboardIsCut: Boolean = false,
+
+    // ── Exit confirmation ───────────────────────────────────────────────────
+    /**
+     * True when the user pressed Back while at least one tab has unsaved changes.
+     * Triggers the "You have unsaved changes. Exit anyway?" dialog.
+     */
+    val showExitConfirmation: Boolean = false,
+
+    // ── Crash recovery ──────────────────────────────────────────────────────
+    /**
+     * Non-empty when the previous session did not exit cleanly and there are
+     * persisted unsaved content entries to offer for restoration.
+     */
+    val recoveryEntries: List<RecoveryEntry> = emptyList(),
 )

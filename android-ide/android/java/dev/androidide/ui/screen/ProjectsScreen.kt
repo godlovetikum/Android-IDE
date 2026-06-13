@@ -1,7 +1,8 @@
 // android-ide/android/java/dev/androidide/ui/screen/ProjectsScreen.kt
 //
 // Project management screen.
-// Shows the list of recently-opened projects and lets the user open a new folder.
+// Lists recent projects with per-project actions and provides buttons to
+// open an existing folder or create a new blank project.
 
 package dev.androidide.ui.screen
 
@@ -12,10 +13,11 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
@@ -34,14 +36,26 @@ fun ProjectsScreen(
     uiState: IdeUiState,
     ideViewModel: IdeViewModel,
     onOpenProjectFolder: () -> Unit,
+    onCreateBlankProject: () -> Unit,
 ) {
     val colors = LocalIdeColors.current
+
+    // Rename dialog state
+    var renamingUri  by remember { mutableStateOf<String?>(null) }
+    var renameText   by remember { mutableStateOf("") }
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text("Projects", color = colors.textPrimary) },
                 actions = {
+                    IconButton(onClick = onCreateBlankProject) {
+                        Icon(
+                            imageVector        = Icons.Default.CreateNewFolder,
+                            contentDescription = "New blank project",
+                            tint               = colors.accent,
+                        )
+                    }
                     IconButton(onClick = onOpenProjectFolder) {
                         Icon(
                             imageVector        = Icons.Default.Add,
@@ -61,8 +75,9 @@ fun ProjectsScreen(
     ) { innerPadding ->
         if (uiState.recentProjects.isEmpty()) {
             EmptyProjectsState(
-                onOpenFolder   = onOpenProjectFolder,
-                modifier       = Modifier.fillMaxSize().padding(innerPadding),
+                onOpenFolder        = onOpenProjectFolder,
+                onCreateBlankProject = onCreateBlankProject,
+                modifier            = Modifier.fillMaxSize().padding(innerPadding),
             )
         } else {
             LazyColumn(
@@ -74,28 +89,68 @@ fun ProjectsScreen(
             ) {
                 items(uiState.recentProjects, key = { it.uri }) { project ->
                     ProjectItem(
-                        project    = project,
-                        isActive   = project.uri == uiState.projectRootUri,
-                        onClick    = { ideViewModel.openProject(project.uri) },
-                        onRemove   = { ideViewModel.removeProjectFromRegistry(project.uri) },
+                        project     = project,
+                        isActive    = project.uri == uiState.projectRootUri,
+                        onClick     = { ideViewModel.openProject(project.uri) },
+                        onRename    = { renamingUri = project.uri; renameText = project.name },
+                        onDuplicate = { ideViewModel.duplicateProject(project.uri) },
+                        onExport    = { ideViewModel.exportProject() },
+                        onRemove    = { ideViewModel.removeProjectFromRegistry(project.uri) },
                     )
                 }
 
                 item {
                     Spacer(Modifier.height(8.dp))
-                    TextButton(
-                        onClick  = onOpenProjectFolder,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp),
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        Icon(Icons.Default.Add, contentDescription = null)
-                        Spacer(Modifier.width(8.dp))
-                        Text("Open another folder…")
+                        OutlinedButton(
+                            onClick  = onCreateBlankProject,
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Icon(Icons.Default.CreateNewFolder, contentDescription = null)
+                            Spacer(Modifier.width(8.dp))
+                            Text("New Project")
+                        }
+                        OutlinedButton(
+                            onClick  = onOpenProjectFolder,
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Icon(Icons.Default.Add, contentDescription = null)
+                            Spacer(Modifier.width(8.dp))
+                            Text("Open Folder")
+                        }
                     }
                 }
             }
         }
+    }
+
+    // Rename dialog
+    if (renamingUri != null) {
+        AlertDialog(
+            onDismissRequest = { renamingUri = null },
+            title   = { Text("Rename Project") },
+            text    = {
+                OutlinedTextField(
+                    value         = renameText,
+                    onValueChange = { renameText = it },
+                    label         = { Text("Project name") },
+                    singleLine    = true,
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick  = {
+                        ideViewModel.renameProjectInRegistry(renamingUri!!, renameText.trim())
+                        renamingUri = null
+                    },
+                    enabled  = renameText.isNotBlank(),
+                ) { Text("Rename") }
+            },
+            dismissButton = { TextButton(onClick = { renamingUri = null }) { Text("Cancel") } },
+        )
     }
 }
 
@@ -104,10 +159,14 @@ private fun ProjectItem(
     project: Project,
     isActive: Boolean,
     onClick: () -> Unit,
+    onRename: () -> Unit,
+    onDuplicate: () -> Unit,
+    onExport: () -> Unit,
     onRemove: () -> Unit,
 ) {
-    val colors = LocalIdeColors.current
-    val bg     = if (isActive) colors.activeHighlight else colors.background
+    val colors   = LocalIdeColors.current
+    val bg       = if (isActive) colors.activeHighlight else colors.background
+    var menuOpen by remember { mutableStateOf(false) }
 
     Row(
         verticalAlignment = Alignment.CenterVertically,
@@ -147,13 +206,43 @@ private fun ProjectItem(
             )
         }
         Spacer(Modifier.width(4.dp))
-        IconButton(onClick = onRemove) {
-            Icon(
-                imageVector        = Icons.Default.Delete,
-                contentDescription = "Remove from list",
-                tint               = colors.textDisabled,
-                modifier           = Modifier.size(18.dp),
-            )
+
+        // ••• overflow menu
+        Box {
+            IconButton(onClick = { menuOpen = true }) {
+                Icon(
+                    imageVector        = Icons.Default.MoreVert,
+                    contentDescription = "Project options",
+                    tint               = colors.textDisabled,
+                    modifier           = Modifier.size(18.dp),
+                )
+            }
+            DropdownMenu(
+                expanded         = menuOpen,
+                onDismissRequest = { menuOpen = false },
+            ) {
+                DropdownMenuItem(
+                    text    = { Text("Open") },
+                    onClick = { menuOpen = false; onClick() },
+                )
+                DropdownMenuItem(
+                    text    = { Text("Rename\u2026") },
+                    onClick = { menuOpen = false; onRename() },
+                )
+                DropdownMenuItem(
+                    text    = { Text("Duplicate") },
+                    onClick = { menuOpen = false; onDuplicate() },
+                )
+                DropdownMenuItem(
+                    text    = { Text("Export\u2026") },
+                    onClick = { menuOpen = false; onExport() },
+                )
+                HorizontalDivider()
+                DropdownMenuItem(
+                    text    = { Text("Remove From Registry") },
+                    onClick = { menuOpen = false; onRemove() },
+                )
+            }
         }
     }
     HorizontalDivider(thickness = 1.dp, color = colors.separator)
@@ -162,6 +251,7 @@ private fun ProjectItem(
 @Composable
 private fun EmptyProjectsState(
     onOpenFolder: () -> Unit,
+    onCreateBlankProject: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalIdeColors.current
@@ -184,12 +274,18 @@ private fun EmptyProjectsState(
         )
         Spacer(Modifier.height(8.dp))
         Text(
-            text  = "Open a folder to start coding",
+            text  = "Open an existing folder or create a new project",
             style = MaterialTheme.typography.bodyMedium,
             color = colors.textSecondary,
         )
         Spacer(Modifier.height(24.dp))
-        Button(onClick = onOpenFolder) {
+        Button(onClick = onCreateBlankProject) {
+            Icon(Icons.Default.CreateNewFolder, contentDescription = null)
+            Spacer(Modifier.width(8.dp))
+            Text("New Blank Project")
+        }
+        Spacer(Modifier.height(8.dp))
+        OutlinedButton(onClick = onOpenFolder) {
             Icon(Icons.Default.Add, contentDescription = null)
             Spacer(Modifier.width(8.dp))
             Text("Open Folder")
@@ -199,4 +295,4 @@ private fun EmptyProjectsState(
 
 private fun formatDate(timestampMs: Long): String = runCatching {
     SimpleDateFormat("MMM d, yyyy", Locale.getDefault()).format(Date(timestampMs))
-}.getOrElse { "—" }
+}.getOrElse { "\u2014" }

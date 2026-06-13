@@ -2,15 +2,7 @@
 //
 // Storage Access Framework operations — Kotlin coroutine-based.
 //
-// Migration note (2026-06-12):
-//   Replaces SafBridge.java.
-//   Key differences:
-//     - No Rust JNI init() call. Context is passed in the constructor.
-//     - All methods are suspend functions running on Dispatchers.IO.
-//     - Returns typed Kotlin objects instead of JSON strings.
-//   The underlying DocumentsContract API calls are identical to SafBridge.java.
-//
-// SAF URI shapes (unchanged):
+// SAF URI shapes:
 //   Tree URI:     content://com.android.externalstorage.documents/tree/primary%3AMyProject
 //   Document URI: content://com.android.externalstorage.documents/document/primary%3AMyProject%2FMain.kt
 //
@@ -22,6 +14,7 @@ package dev.androidide.saf
 
 import android.content.Context
 import android.net.Uri
+import android.os.Build
 import android.provider.DocumentsContract
 import android.util.Log
 import dev.androidide.viewmodel.model.FileNode
@@ -56,19 +49,10 @@ class SafRepository(private val context: Context) {
         try {
             val parentUri = Uri.parse(parentUriString)
 
-            // Build the children URI. A tree URI needs getTreeDocumentId();
-            // a plain document URI may already be usable with buildChildDocumentsUri.
             val treeUri: Uri
             val docId: String
             if (DocumentsContract.isTreeUri(parentUri)) {
                 treeUri = parentUri
-                // A plain tree URI (from ACTION_OPEN_DOCUMENT_TREE) has the path
-                //   /tree/<docId>
-                // A document URI built by buildDocumentUriUsingTree has the path
-                //   /tree/<treeDocId>/document/<docId>
-                // getTreeDocumentId() always returns the ROOT docId — wrong for subdirs.
-                // Use getDocumentId() when a "document" segment is present (child URIs),
-                // fall back to getTreeDocumentId() for the root tree URI.
                 docId = if (parentUri.pathSegments.contains("document")) {
                     DocumentsContract.getDocumentId(parentUri)
                 } else {
@@ -102,21 +86,21 @@ class SafRepository(private val context: Context) {
                     val mimeType    = cursor.getString(mimeIdx) ?: "application/octet-stream"
                     val size        = if (cursor.isNull(sizeIdx)) 0L else cursor.getLong(sizeIdx)
 
-                    // Build the full document URI for this child.
                     val docUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, childDocId)
 
                     nodes += FileNode(
-                        documentUri      = docUri.toString(),
-                        displayName      = displayName,
-                        mimeType         = mimeType,
-                        size             = size,
+                        documentUri       = docUri.toString(),
+                        displayName       = displayName,
+                        mimeType          = mimeType,
+                        size              = size,
                         parentDocumentUri = parentUriString,
                     )
                 }
             } ?: Log.e(TAG, "listChildren: null cursor for $parentUriString")
 
-            // Sort: directories first, then files, both alphabetically.
-            nodes.sortedWith(compareByDescending<FileNode> { it.isDirectory }.thenBy { it.displayName.lowercase() })
+            nodes.sortedWith(
+                compareByDescending<FileNode> { it.isDirectory }.thenBy { it.displayName.lowercase() }
+            )
         } catch (e: Exception) {
             Log.e(TAG, "listChildren failed for $parentUriString: ${e.message}", e)
             emptyList()
@@ -151,7 +135,7 @@ class SafRepository(private val context: Context) {
      * Write [data] to a SAF document, replacing its entire content.
      *
      * Uses open mode "wt" (write + truncate). The previous content is
-     * discarded before writing — same behaviour as SafBridge.java.
+     * discarded before writing.
      *
      * @param documentUriString  SAF document URI
      * @param data               Bytes to write
@@ -191,9 +175,6 @@ class SafRepository(private val context: Context) {
     ): String? = withContext(Dispatchers.IO) {
         try {
             val parentUri = Uri.parse(parentUriString)
-            // DocumentsContract.createDocument requires a document URI.
-            // A plain tree URI (/tree/<docId>) must be converted to the root
-            // document URI first; document-within-tree URIs are already correct.
             val docUri = if (DocumentsContract.isTreeUri(parentUri) &&
                 !parentUri.pathSegments.contains("document")) {
                 DocumentsContract.buildDocumentUriUsingTree(
@@ -205,6 +186,80 @@ class SafRepository(private val context: Context) {
             DocumentsContract.createDocument(resolver, docUri, mimeType, displayName)?.toString()
         } catch (e: Exception) {
             Log.e(TAG, "createFile failed (parent=$parentUriString, name=$displayName): ${e.message}", e)
+            null
+        }
+    }
+
+    // ── Copy ───────────────────────────────────────────────────────────────
+
+    /**
+     * Copy a document to [targetParentUriString], optionally renaming it to [newName].
+     *
+     * Implemented as: read → createFile → write. Works across providers.
+     *
+     * @return  Document URI of the new copy, or null on failure.
+     */
+    suspend fun copyDocument(
+        sourceUriString: String,
+        targetParentUriString: String,
+        newName: String? = null,
+    ): String? = withContext(Dispatchers.IO) {
+        try {
+            val bytes       = readFile(sourceUriString) ?: return@withContext null
+            val displayName = newName
+                ?: getDisplayName(sourceUriString)
+                ?: return@withContext null
+            val mimeType    = queryStringColumn(
+                sourceUriString, DocumentsContract.Document.COLUMN_MIME_TYPE
+            ) ?: "text/plain"
+            val newUri      = createFile(targetParentUriString, displayName, mimeType)
+                ?: return@withContext null
+            if (writeFile(newUri, bytes)) newUri else null
+        } catch (e: Exception) {
+            Log.e(TAG, "copyDocument failed: $sourceUriString → $targetParentUriString", e)
+            null
+        }
+    }
+
+    // ── Move ───────────────────────────────────────────────────────────────
+
+    /**
+     * Move a document to [targetParentUriString].
+     *
+     * Uses [DocumentsContract.moveDocument] on API 24+ when available.
+     * Falls back to copy + delete on older APIs or if native move fails.
+     *
+     * @param sourceUriString        SAF document URI to move.
+     * @param sourceParentUriString  SAF document URI of the source's parent directory
+     *                               (required by the native moveDocument API).
+     * @param targetParentUriString  SAF document URI of the target directory.
+     * @return                       New document URI, or null on failure.
+     */
+    suspend fun moveDocument(
+        sourceUriString: String,
+        sourceParentUriString: String,
+        targetParentUriString: String,
+    ): String? = withContext(Dispatchers.IO) {
+        try {
+            // Try native move first (API 24+)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                val moved = runCatching {
+                    DocumentsContract.moveDocument(
+                        resolver,
+                        Uri.parse(sourceUriString),
+                        Uri.parse(sourceParentUriString),
+                        Uri.parse(targetParentUriString),
+                    )?.toString()
+                }.getOrNull()
+                if (moved != null) return@withContext moved
+            }
+            // Fallback: copy then delete the original
+            val newUri = copyDocument(sourceUriString, targetParentUriString)
+                ?: return@withContext null
+            deleteDocument(sourceUriString)
+            newUri
+        } catch (e: Exception) {
+            Log.e(TAG, "moveDocument failed: $sourceUriString → $targetParentUriString", e)
             null
         }
     }
@@ -232,8 +287,7 @@ class SafRepository(private val context: Context) {
      * Rename a SAF document.
      *
      * IMPORTANT: Android may assign a different URI after renaming. Always use
-     * the returned URI for subsequent operations, not the original — same
-     * caveat as in SafBridge.java.
+     * the returned URI for subsequent operations, not the original.
      *
      * @param documentUriString  SAF document URI to rename
      * @param newDisplayName     New display name
@@ -283,8 +337,7 @@ class SafRepository(private val context: Context) {
 // ── InputStream extension ─────────────────────────────────────────────────────
 
 /**
- * Read all bytes from the stream. Compatible with API 26+ (InputStream.readAllBytes
- * requires API 33; this implementation works from API 26).
+ * Read all bytes from the stream. Compatible with API 26+.
  */
 @Throws(IOException::class)
 private fun InputStream.readAllBytesCompat(): ByteArray {

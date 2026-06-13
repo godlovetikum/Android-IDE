@@ -1,7 +1,8 @@
 // android-ide/android/java/dev/androidide/ui/components/EditorTabBar.kt
 //
 // Horizontal scrollable tab bar showing open editor files.
-// Colors are read from LocalIdeColors so theme changes apply immediately.
+// Each tab has a ••• overflow button with Save / Close / Close Others / Close All.
+// A "+" button at the far right opens a new blank tab.
 
 package dev.androidide.ui.components
 
@@ -11,9 +12,10 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
@@ -25,36 +27,76 @@ import dev.androidide.viewmodel.model.EditorTab
 fun EditorTabBar(
     tabs: List<EditorTab>,
     onTabSelected: (String) -> Unit,
-    onTabClosed: (String) -> Unit,
+    onTabCloseSafe: (String) -> Unit,
+    onTabSave: (String) -> Unit,
+    onCloseOthers: (String) -> Unit,
+    onCloseAll: () -> Unit,
+    onNewBlankTab: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalIdeColors.current
     Row(
         modifier = modifier
-            .height(35.dp)
+            .height(36.dp)
             .fillMaxWidth()
-            .background(colors.surface)
-            .horizontalScroll(rememberScrollState()),
+            .background(colors.surface),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        tabs.forEach { tab ->
-            EditorTabItem(
-                tab       = tab,
-                onSelected = { onTabSelected(tab.id) },
-                onClosed  = { onTabClosed(tab.id) },
+        // Scrollable tab list
+        Row(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxHeight()
+                .horizontalScroll(rememberScrollState()),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            tabs.forEach { tab ->
+                EditorTabItem(
+                    tab          = tab,
+                    onSelected   = { onTabSelected(tab.id) },
+                    onCloseSafe  = { onTabCloseSafe(tab.id) },
+                    onSave       = { onTabSave(tab.id) },
+                    onCloseOthers = { onCloseOthers(tab.id) },
+                    onCloseAll   = onCloseAll,
+                )
+            }
+        }
+
+        // "+" new blank tab button
+        Box(
+            modifier = Modifier
+                .fillMaxHeight()
+                .width(1.dp)
+                .background(colors.separator),
+        )
+        IconButton(
+            onClick  = onNewBlankTab,
+            modifier = Modifier.size(36.dp),
+        ) {
+            Icon(
+                imageVector        = Icons.Default.Add,
+                contentDescription = "New tab",
+                tint               = colors.textSecondary,
+                modifier           = Modifier.size(16.dp),
             )
         }
     }
 }
 
+// ── Tab item ───────────────────────────────────────────────────────────────────
+
 @Composable
 private fun EditorTabItem(
     tab: EditorTab,
     onSelected: () -> Unit,
-    onClosed: () -> Unit,
+    onCloseSafe: () -> Unit,
+    onSave: () -> Unit,
+    onCloseOthers: () -> Unit,
+    onCloseAll: () -> Unit,
 ) {
     val colors  = LocalIdeColors.current
     val bgColor = if (tab.isActive) colors.background else colors.surface
+    var menuOpen by remember { mutableStateOf(false) }
 
     Box(
         modifier = Modifier
@@ -66,37 +108,75 @@ private fun EditorTabItem(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
                 .fillMaxHeight()
-                .padding(start = 10.dp, end = 4.dp),
+                .padding(start = 10.dp, end = 2.dp),
         ) {
-            if (tab.isDirty) {
-                Text(
-                    text  = "● ",
+            // Dirty / saving indicator
+            when {
+                tab.isSaving -> CircularProgressIndicator(
+                    modifier  = Modifier.size(8.dp).padding(end = 2.dp),
+                    strokeWidth = 1.5.dp,
+                    color     = colors.accent,
+                )
+                tab.isDirty -> Text(
+                    text  = "\u25cf ",  // ●
                     style = MaterialTheme.typography.labelMedium,
                     color = colors.modified,
                 )
+                else -> Spacer(Modifier.width(0.dp))
             }
+
             Text(
                 text     = tab.displayName,
                 style    = MaterialTheme.typography.labelMedium,
                 color    = if (tab.isActive) colors.textPrimary else colors.textSecondary,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.widthIn(max = 120.dp),
+                modifier = Modifier.widthIn(max = 100.dp),
             )
+
             Spacer(Modifier.width(2.dp))
-            IconButton(
-                onClick  = onClosed,
-                modifier = Modifier.size(20.dp),
-            ) {
-                Icon(
-                    imageVector        = Icons.Default.Close,
-                    contentDescription = "Close tab",
-                    tint               = if (tab.isActive) colors.textSecondary else colors.textDisabled,
-                    modifier           = Modifier.size(12.dp),
-                )
+
+            // ••• overflow button
+            Box {
+                IconButton(
+                    onClick  = { menuOpen = true },
+                    modifier = Modifier.size(24.dp),
+                ) {
+                    Icon(
+                        imageVector        = Icons.Default.MoreVert,
+                        contentDescription = "Tab options",
+                        tint               = if (tab.isActive) colors.textSecondary else colors.textDisabled,
+                        modifier           = Modifier.size(14.dp),
+                    )
+                }
+
+                DropdownMenu(
+                    expanded         = menuOpen,
+                    onDismissRequest = { menuOpen = false },
+                ) {
+                    if (!tab.isBlank) {
+                        DropdownMenuItem(
+                            text    = { Text("Save") },
+                            onClick = { menuOpen = false; onSave() },
+                        )
+                    }
+                    DropdownMenuItem(
+                        text    = { Text("Close") },
+                        onClick = { menuOpen = false; onCloseSafe() },
+                    )
+                    DropdownMenuItem(
+                        text    = { Text("Close Others") },
+                        onClick = { menuOpen = false; onCloseOthers() },
+                    )
+                    DropdownMenuItem(
+                        text    = { Text("Close All") },
+                        onClick = { menuOpen = false; onCloseAll() },
+                    )
+                }
             }
         }
 
+        // Active indicator bar at bottom
         if (tab.isActive) {
             Box(
                 modifier = Modifier
@@ -107,6 +187,7 @@ private fun EditorTabItem(
             )
         }
 
+        // Right separator
         Box(
             modifier = Modifier
                 .fillMaxHeight()

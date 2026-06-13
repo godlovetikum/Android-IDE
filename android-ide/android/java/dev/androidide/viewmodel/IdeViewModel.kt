@@ -6,15 +6,22 @@
 package dev.androidide.viewmodel
 
 import android.app.Application
+import android.content.res.Configuration
 import android.net.Uri
+import android.util.Base64
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import dev.androidide.data.CrashRecoveryRepository
+import dev.androidide.data.EditorSettingsRepository
 import dev.androidide.data.ProjectRepository
 import dev.androidide.data.SessionRepository
 import dev.androidide.data.ThemeRepository
 import dev.androidide.data.model.AppTheme
+import dev.androidide.data.model.EditorSettings
 import dev.androidide.data.model.Project
+import dev.androidide.data.model.VolumeKeyMode
 import dev.androidide.editor.EditorInbound
+import dev.androidide.editor.EditorOutbound
 import dev.androidide.saf.SafRepository
 import dev.androidide.viewmodel.model.AppScreen
 import dev.androidide.viewmodel.model.EditorTab
@@ -27,38 +34,115 @@ import dev.androidide.viewmodel.model.replaceNode
 import dev.androidide.viewmodel.model.setChildren
 import dev.androidide.viewmodel.model.sortedForTree
 import dev.androidide.viewmodel.model.toggleExpanded
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.util.UUID
 
 class IdeViewModel(application: Application) : AndroidViewModel(application) {
 
-    private val safRepository     = SafRepository(application)
-    private val projectRepository = ProjectRepository(application)
-    private val sessionRepository = SessionRepository(application)
-    private val themeRepository   = ThemeRepository(application)
+    private val safRepository      = SafRepository(application)
+    private val projectRepository  = ProjectRepository(application)
+    private val sessionRepository  = SessionRepository(application)
+    private val themeRepository    = ThemeRepository(application)
+    private val editorSettingsRepo = EditorSettingsRepository(application)
+    private val crashRecovery      = CrashRecoveryRepository(application)
 
     private val _uiState = MutableStateFlow(
         IdeUiState(
             appTheme       = themeRepository.get(),
             recentProjects = projectRepository.getAll(),
+            editorSettings = editorSettingsRepo.getEditorSettings(),
+            volumeKeyMode  = editorSettingsRepo.getVolumeKeyMode(),
         )
     )
     val uiState: StateFlow<IdeUiState> = _uiState.asStateFlow()
 
-    // Pending (unsaved) editor content keyed by tab ID.
-    // Stored separately from IdeUiState to avoid recomposing the tree on keystrokes.
+    /**
+     * Outbound Monaco commands.
+     * EditorPane collects this flow and forwards each command to Monaco via EditorBridge.
+     * extraBufferCapacity=16 prevents dropped commands before EditorPane attaches its collector.
+     */
+    private val _editorCommand = MutableSharedFlow<EditorOutbound>(extraBufferCapacity = 16)
+    val editorCommand: SharedFlow<EditorOutbound> = _editorCommand.asSharedFlow()
+
+    /**
+     * Unsaved editor content keyed by tab ID.
+     * Kept outside IdeUiState to avoid full Compose recomposition on every keystroke.
+     */
     private val pendingContent = mutableMapOf<String, String>()
 
     init {
+        crashRecovery.markSessionStart()
+        checkCrashRecovery()
         restoreSession()
     }
 
     override fun onCleared() {
         super.onCleared()
+        crashRecovery.markCleanExit()
         saveSession()
+    }
+
+    // ── Theme helpers ───────────────────────────────────────────────────────
+
+    private fun isSystemDark(): Boolean =
+        (application.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
+            Configuration.UI_MODE_NIGHT_YES
+
+    /**
+     * Resolves the Monaco theme name from the current editor theme setting.
+     * "system" follows the device dark-mode state. "dark" / "light" are explicit.
+     */
+    private fun resolveMonacoTheme(): String {
+        val settings = _uiState.value.editorSettings
+        return when (settings.editorTheme) {
+            "light"  -> "light"
+            "dark"   -> "dark"
+            else     -> if (isSystemDark()) "dark" else "light"
+        }
+    }
+
+    // ── Crash recovery ──────────────────────────────────────────────────────
+
+    private fun checkCrashRecovery() {
+        if (!crashRecovery.isPreviousSessionDirty()) return
+        val entries = crashRecovery.getUnsavedEntries()
+        if (entries.isEmpty()) return
+        _uiState.update { it.copy(recoveryEntries = entries) }
+    }
+
+    fun restoreFromCrash() {
+        val entries = _uiState.value.recoveryEntries
+        _uiState.update { it.copy(recoveryEntries = emptyList()) }
+        var firstId: String? = null
+        entries.forEach { entry ->
+            val tab = EditorTab(
+                id          = entry.tabId,
+                documentUri = entry.documentUri,
+                displayName = entry.displayName,
+                language    = languageForExtension(entry.displayName.substringAfterLast('.', "")),
+                content     = entry.content,
+                isDirty     = true,
+                isActive    = false,
+            )
+            if (firstId == null) firstId = tab.id
+            pendingContent[tab.id] = entry.content
+            _uiState.update { state ->
+                state.copy(openTabs = state.openTabs + tab, currentScreen = AppScreen.EDITOR)
+            }
+        }
+        firstId?.let { selectTab(it) }
+    }
+
+    fun dismissCrashRecovery() {
+        crashRecovery.clearAll()
+        _uiState.update { it.copy(recoveryEntries = emptyList()) }
     }
 
     // ── Session ────────────────────────────────────────────────────────────
@@ -69,14 +153,10 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
         val activeUri  = sessionRepository.getActiveTabUri()
         val screenName = sessionRepository.getScreenName()
 
-        // Restore navigation screen
         val screen = screenName?.let { runCatching { AppScreen.valueOf(it) }.getOrNull() }
         if (screen != null) _uiState.update { it.copy(currentScreen = screen) }
 
-        // Re-open the last project (loads file tree in background)
         viewModelScope.launch { openProjectInternal(projectUri) }
-
-        // Re-open tabs in parallel — SAF reads don't need the file tree
         tabUris.forEach { uri ->
             viewModelScope.launch { openFileInternal(uri, markActive = uri == activeUri) }
         }
@@ -86,8 +166,8 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
         val state = _uiState.value
         sessionRepository.save(
             projectUri   = state.projectRootUri,
-            openTabUris  = state.openTabs.map { it.documentUri },
-            activeTabUri = state.openTabs.firstOrNull { it.isActive }?.documentUri,
+            openTabUris  = state.openTabs.filter { !it.isBlank }.map { it.documentUri },
+            activeTabUri = state.openTabs.firstOrNull { it.isActive && !it.isBlank }?.documentUri,
             screenName   = state.currentScreen.name,
         )
     }
@@ -99,19 +179,62 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
         saveSession()
     }
 
-    // ── Theme ──────────────────────────────────────────────────────────────
+    // ── App theme ───────────────────────────────────────────────────────────
 
     fun setTheme(theme: AppTheme) {
         themeRepository.set(theme)
         _uiState.update { it.copy(appTheme = theme) }
+        if (_uiState.value.isEditorReady) {
+            sendEditorCommand(EditorOutbound.SetTheme(resolveMonacoTheme()))
+        }
+    }
+
+    // ── Editor settings ─────────────────────────────────────────────────────
+
+    fun setEditorSettings(settings: EditorSettings) {
+        val previousTheme = _uiState.value.editorSettings.editorTheme
+        editorSettingsRepo.setEditorSettings(settings)
+        _uiState.update { it.copy(editorSettings = settings) }
+        sendEditorCommand(EditorOutbound.SetEditorOptions(
+            tabSize     = settings.tabSize,
+            wordWrap    = settings.wordWrap,
+            lineNumbers = settings.lineNumbers,
+            fontSize    = settings.fontSize,
+        ))
+        if (_uiState.value.isEditorReady && settings.editorTheme != previousTheme) {
+            sendEditorCommand(EditorOutbound.SetTheme(resolveMonacoTheme()))
+        }
+    }
+
+    fun setVolumeKeyMode(mode: VolumeKeyMode) {
+        editorSettingsRepo.setVolumeKeyMode(mode)
+        _uiState.update { it.copy(volumeKeyMode = mode) }
+    }
+
+    // ── Volume keys ─────────────────────────────────────────────────────────
+
+    fun onVolumeUp() {
+        when (_uiState.value.volumeKeyMode) {
+            VolumeKeyMode.HORIZONTAL -> sendEditorCommand(EditorOutbound.ExecuteCommand("cursorLeft"))
+            VolumeKeyMode.VERTICAL   -> sendEditorCommand(EditorOutbound.ExecuteCommand("cursorUp"))
+            VolumeKeyMode.DISABLED   -> return
+        }
+    }
+
+    fun onVolumeDown() {
+        when (_uiState.value.volumeKeyMode) {
+            VolumeKeyMode.HORIZONTAL -> sendEditorCommand(EditorOutbound.ExecuteCommand("cursorRight"))
+            VolumeKeyMode.VERTICAL   -> sendEditorCommand(EditorOutbound.ExecuteCommand("cursorDown"))
+            VolumeKeyMode.DISABLED   -> return
+        }
+    }
+
+    fun sendEditorCommand(command: EditorOutbound) {
+        _editorCommand.tryEmit(command)
     }
 
     // ── Project management ─────────────────────────────────────────────────
 
-    /**
-     * Open a project from a SAF tree URI obtained via Intent.ACTION_OPEN_DOCUMENT_TREE.
-     * Registers it in the recent-projects registry and navigates to the editor.
-     */
     fun openProject(treeUriString: String) {
         viewModelScope.launch { openProjectInternal(treeUriString) }
     }
@@ -119,25 +242,46 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
     private suspend fun openProjectInternal(treeUriString: String) {
         val name = extractProjectName(treeUriString)
         _uiState.update { it.copy(projectName = name, projectRootUri = treeUriString, currentScreen = AppScreen.EDITOR) }
-
         projectRepository.upsert(Project(name = name, uri = treeUriString))
         _uiState.update { it.copy(recentProjects = projectRepository.getAll()) }
-
         val nodes = safRepository.listChildren(treeUriString)
         _uiState.update { it.copy(fileTree = nodes.sortedForTree()) }
     }
 
     /**
-     * Remove a project from the registry without touching its files on disk.
+     * Create a new blank project folder inside [parentUri] with the given [name],
+     * then open it as the active project.
      */
+    fun createBlankProject(parentUri: String, name: String) {
+        viewModelScope.launch {
+            val newDirUri = safRepository.createFile(parentUri, name, "vnd.android.document/directory")
+            if (newDirUri != null) {
+                openProjectInternal(newDirUri)
+            } else {
+                _uiState.update { it.copy(statusMessage = "Could not create project folder") }
+            }
+        }
+    }
+
+    /**
+     * Update the display name stored in the project registry.
+     * Does NOT rename the filesystem folder.
+     */
+    fun renameProjectInRegistry(uri: String, newName: String) {
+        projectRepository.upsert(Project(name = newName, uri = uri))
+        _uiState.update { it.copy(recentProjects = projectRepository.getAll()) }
+    }
+
+    /** Placeholder — project duplication will be implemented in a later phase. */
+    fun duplicateProject(uri: String) {
+        _uiState.update { it.copy(statusMessage = "Duplicate project not yet implemented") }
+    }
+
     fun removeProjectFromRegistry(uri: String) {
         projectRepository.remove(uri)
         _uiState.update { it.copy(recentProjects = projectRepository.getAll()) }
     }
 
-    /**
-     * Close the current project and return to the Projects screen.
-     */
     fun closeCurrentProject() {
         _uiState.value.openTabs.forEach { pendingContent.remove(it.id) }
         _uiState.update { state ->
@@ -154,12 +298,18 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
         saveSession()
     }
 
+    fun refreshProject() {
+        val rootUri = _uiState.value.projectRootUri ?: return
+        viewModelScope.launch {
+            val nodes = safRepository.listChildren(rootUri)
+            _uiState.update { it.copy(fileTree = nodes.sortedForTree()) }
+        }
+    }
+
     // ── File tree ──────────────────────────────────────────────────────────
 
     fun toggleDirectory(documentUri: String) {
-        _uiState.update { state ->
-            state.copy(fileTree = state.fileTree.toggleExpanded(documentUri))
-        }
+        _uiState.update { state -> state.copy(fileTree = state.fileTree.toggleExpanded(documentUri)) }
         val node = _uiState.value.fileTree.findNode(documentUri)
         if (node != null && node.isExpanded && node.isDirectory && node.children.isEmpty()) {
             viewModelScope.launch {
@@ -171,7 +321,101 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    // ── File tree clipboard ─────────────────────────────────────────────────
+
+    fun copyFileNode(node: FileNode) = _uiState.update { it.copy(clipboard = node, clipboardIsCut = false) }
+    fun cutFileNode(node: FileNode)  = _uiState.update { it.copy(clipboard = node, clipboardIsCut = true) }
+    fun clearClipboard()             = _uiState.update { it.copy(clipboard = null, clipboardIsCut = false) }
+
+    fun pasteFileNode(targetDir: FileNode) {
+        val source = _uiState.value.clipboard ?: return
+        val isCut  = _uiState.value.clipboardIsCut
+        viewModelScope.launch {
+            if (isCut) {
+                val sourceParent = source.parentDocumentUri ?: run {
+                    _uiState.update { it.copy(statusMessage = "Move failed: unknown parent") }
+                    return@launch
+                }
+                val newUri = safRepository.moveDocument(source.documentUri, sourceParent, targetDir.documentUri) ?: run {
+                    _uiState.update { it.copy(statusMessage = "Move failed") }
+                    return@launch
+                }
+                _uiState.update { state ->
+                    state.copy(
+                        openTabs       = state.openTabs.map { tab ->
+                            if (tab.documentUri == source.documentUri) tab.copy(documentUri = newUri) else tab
+                        },
+                        clipboard      = null,
+                        clipboardIsCut = false,
+                        statusMessage  = "Moved ${source.displayName}",
+                    )
+                }
+                refreshDirectory(sourceParent)
+                refreshDirectory(targetDir.documentUri)
+            } else {
+                safRepository.copyDocument(source.documentUri, targetDir.documentUri) ?: run {
+                    _uiState.update { it.copy(statusMessage = "Copy failed") }
+                    return@launch
+                }
+                refreshDirectory(targetDir.documentUri)
+                _uiState.update { it.copy(statusMessage = "Copied ${source.displayName}") }
+            }
+        }
+    }
+
+    // ── Import / Export ────────────────────────────────────────────────────
+
+    /**
+     * Copy each file from [sourceUris] into [targetDirUri].
+     * Requires read permission on each source URI (caller must have called
+     * ContentResolver.takePersistableUriPermission before invoking this).
+     */
+    fun importFiles(targetDirUri: String, sourceUris: List<String>) {
+        viewModelScope.launch {
+            var count = 0
+            sourceUris.forEach { uri ->
+                val bytes = safRepository.readFile(uri) ?: return@forEach
+                val name  = safRepository.getDisplayName(uri)
+                    ?: uri.substringAfterLast('/', "imported_file")
+                val created = safRepository.createFile(targetDirUri, name, mimeTypeForName(name))
+                if (created != null && safRepository.writeFile(created, bytes)) count++
+            }
+            refreshDirectory(targetDirUri)
+            _uiState.update { it.copy(statusMessage = "Imported $count file(s)") }
+        }
+    }
+
+    /** Placeholder — ZIP export will be implemented in a later phase. */
+    fun exportDirectory(node: FileNode) {
+        _uiState.update { it.copy(statusMessage = "Export not yet implemented") }
+    }
+
+    /** Placeholder — ZIP export will be implemented in a later phase. */
+    fun exportProject() {
+        _uiState.update { it.copy(statusMessage = "Export not yet implemented") }
+    }
+
     // ── Editor tabs ────────────────────────────────────────────────────────
+
+    fun newBlankTab() {
+        val tabId = UUID.randomUUID().toString()
+        val tab = EditorTab(
+            id          = tabId,
+            documentUri = "blank://new/$tabId",
+            displayName = "untitled",
+            language    = "plaintext",
+            content     = "",
+            isActive    = true,
+            isBlank     = true,
+        )
+        _uiState.update { state ->
+            state.copy(
+                openTabs      = state.openTabs.map { it.copy(isActive = false) } + tab,
+                activeTabId   = tabId,
+                currentScreen = AppScreen.EDITOR,
+            )
+        }
+    }
 
     fun openFile(documentUri: String) {
         viewModelScope.launch { openFileInternal(documentUri, markActive = true) }
@@ -183,7 +427,6 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
             if (markActive) selectTab(existing.id)
             return
         }
-
         val bytes = safRepository.readFile(documentUri) ?: return
         val content = String(bytes, Charsets.UTF_8)
         val displayName = _uiState.value.fileTree.findNode(documentUri)?.displayName
@@ -198,7 +441,6 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
             content     = content,
             isActive    = markActive,
         )
-
         _uiState.update { state ->
             val tabs = if (markActive) {
                 state.openTabs.map { it.copy(isActive = false) } + newTab
@@ -222,8 +464,11 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /** Close a tab immediately, discarding unsaved changes without confirmation. */
     fun closeTab(tabId: String) {
+        val tab = _uiState.value.openTabs.find { it.id == tabId }
         pendingContent.remove(tabId)
+        crashRecovery.clearUnsavedContent(tabId)
         _uiState.update { state ->
             val remaining   = state.openTabs.filter { it.id != tabId }
             val newActiveId = if (state.activeTabId == tabId) remaining.lastOrNull()?.id else state.activeTabId
@@ -232,12 +477,92 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
                 activeTabId = newActiveId,
             )
         }
+        tab?.let { sendEditorCommand(EditorOutbound.CloseTab(it.documentUri)) }
+    }
+
+    /**
+     * Close with dirty-check.
+     * Shows UnsavedClose confirmation if the tab has unsaved changes.
+     */
+    fun closeTabSafe(tabId: String) {
+        val tab = _uiState.value.openTabs.find { it.id == tabId } ?: return
+        if (tab.isDirty) {
+            _uiState.update { it.copy(fileOpDialog = FileOpDialog.UnsavedClose(tabId, tab.displayName)) }
+        } else {
+            closeTab(tabId)
+        }
+    }
+
+    /** User chose "Save & Close" in the UnsavedClose dialog. */
+    fun saveAndCloseTab(tabId: String) {
+        val tab     = _uiState.value.openTabs.find { it.id == tabId } ?: run {
+            _uiState.update { it.copy(fileOpDialog = null) }
+            return
+        }
+        val content = pendingContent[tabId]
+        _uiState.update { it.copy(fileOpDialog = null) }
+        if (content == null || tab.isBlank) { closeTab(tabId); return }
+        viewModelScope.launch {
+            val ok = safRepository.writeFile(tab.documentUri, content.toByteArray(Charsets.UTF_8))
+            if (ok) {
+                pendingContent.remove(tabId)
+                crashRecovery.clearUnsavedContent(tabId)
+            }
+            closeTab(tabId)
+        }
+    }
+
+    /** User chose "Discard" in the UnsavedClose dialog. */
+    fun confirmCloseTab(tabId: String) {
+        _uiState.update { it.copy(fileOpDialog = null) }
+        closeTab(tabId)
+    }
+
+    fun closeOtherTabs(tabId: String) {
+        _uiState.value.openTabs.filter { it.id != tabId }.forEach { closeTab(it.id) }
+    }
+
+    fun closeAllTabs() {
+        _uiState.value.openTabs.toList().forEach { closeTab(it.id) }
+    }
+
+    fun saveAllFiles() {
+        _uiState.value.openTabs.filter { it.isDirty && !it.isBlank }.forEach { saveFile(it.documentUri) }
+    }
+
+    // ── Exit confirmation ───────────────────────────────────────────────────
+
+    fun requestExit(): Boolean {
+        val hasDirty = _uiState.value.openTabs.any { it.isDirty }
+        if (hasDirty) {
+            _uiState.update { it.copy(showExitConfirmation = true) }
+            return true
+        }
+        return false
+    }
+
+    fun dismissExitConfirmation() = _uiState.update { it.copy(showExitConfirmation = false) }
+
+    fun saveAllAndExit(onReady: () -> Unit) {
+        saveAllFiles()
+        _uiState.update { it.copy(showExitConfirmation = false) }
+        crashRecovery.markCleanExit()
+        onReady()
     }
 
     // ── Editor bridge ──────────────────────────────────────────────────────
 
     fun onEditorReady() {
         _uiState.update { it.copy(isEditorReady = true) }
+        val settings = _uiState.value.editorSettings
+        sendEditorCommand(EditorOutbound.SetEditorOptions(
+            tabSize     = settings.tabSize,
+            wordWrap    = settings.wordWrap,
+            lineNumbers = settings.lineNumbers,
+            fontSize    = settings.fontSize,
+        ))
+        sendEditorCommand(EditorOutbound.SetTheme(resolveMonacoTheme()))
+        sendEditorCommand(EditorOutbound.ForceLayout)
     }
 
     fun onEditorMessage(message: EditorInbound) {
@@ -251,6 +576,10 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
                     state.copy(openTabs = state.openTabs.map {
                         if (it.id == tab.id) it.copy(isDirty = true) else it
                     })
+                }
+                crashRecovery.saveUnsavedContent(tab.id, tab.documentUri, tab.displayName, message.content)
+                if (_uiState.value.editorSettings.autoSave) {
+                    saveFile(message.path)
                 }
             }
 
@@ -266,37 +595,116 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
 
     fun saveActiveFile() {
         val active = _uiState.value.openTabs.firstOrNull { it.isActive } ?: return
+        if (active.isBlank) return
         saveFile(active.documentUri)
+    }
+
+    fun saveTabById(tabId: String) {
+        val tab = _uiState.value.openTabs.find { it.id == tabId } ?: return
+        if (tab.isBlank) return
+        saveFile(tab.documentUri)
     }
 
     private fun saveFile(documentUri: String) {
         val tab     = _uiState.value.openTabs.find { it.documentUri == documentUri } ?: return
+        if (tab.isBlank) return
         val content = pendingContent[tab.id] ?: return
 
+        _uiState.update { state ->
+            state.copy(openTabs = state.openTabs.map {
+                if (it.id == tab.id) it.copy(isSaving = true) else it
+            })
+        }
         viewModelScope.launch {
             val ok = safRepository.writeFile(documentUri, content.toByteArray(Charsets.UTF_8))
             if (ok) {
                 pendingContent.remove(tab.id)
+                crashRecovery.clearUnsavedContent(tab.id)
                 _uiState.update { state ->
                     state.copy(
-                        openTabs      = state.openTabs.map { if (it.id == tab.id) it.copy(isDirty = false) else it },
+                        openTabs      = state.openTabs.map {
+                            if (it.id == tab.id) it.copy(isDirty = false, isSaving = false) else it
+                        },
                         statusMessage = "Saved",
                     )
                 }
             } else {
-                _uiState.update { it.copy(statusMessage = "Save failed") }
+                _uiState.update { state ->
+                    state.copy(
+                        openTabs      = state.openTabs.map {
+                            if (it.id == tab.id) it.copy(isSaving = false) else it
+                        },
+                        statusMessage = "Save failed",
+                    )
+                }
             }
+        }
+    }
+
+    fun saveActiveFileAs(newUri: String) {
+        val active  = _uiState.value.openTabs.firstOrNull { it.isActive } ?: return
+        val content = pendingContent[active.id] ?: active.content ?: return
+        viewModelScope.launch {
+            val ok = safRepository.writeFile(newUri, content.toByteArray(Charsets.UTF_8))
+            if (!ok) { _uiState.update { it.copy(statusMessage = "Save As failed") }; return@launch }
+            val newName = safRepository.getDisplayName(newUri) ?: displayNameFromUri(newUri)
+            val newLang = languageForExtension(newName.substringAfterLast('.', ""))
+            pendingContent.remove(active.id)
+            crashRecovery.clearUnsavedContent(active.id)
+            _uiState.update { state ->
+                state.copy(
+                    openTabs      = state.openTabs.map {
+                        if (it.id == active.id) it.copy(
+                            documentUri = newUri, displayName = newName,
+                            language = newLang, isDirty = false, isBlank = false,
+                        ) else it
+                    },
+                    statusMessage = "Saved as $newName",
+                )
+            }
+        }
+    }
+
+    // ── Preview / Run ──────────────────────────────────────────────────────
+
+    /**
+     * Toggle the preview panel for the active tab.
+     * Supports HTML (raw render) and Markdown (converted to styled HTML).
+     * Other file types show a status message.
+     */
+    fun togglePreview() {
+        val active = _uiState.value.openTabs.firstOrNull { it.isActive }
+        if (active == null) {
+            _uiState.update { it.copy(statusMessage = "No active file to preview") }
+            return
+        }
+        val supportedLanguages = setOf("html", "markdown")
+        if (active.language !in supportedLanguages) {
+            _uiState.update { it.copy(statusMessage = "Preview not supported for ${active.language} files") }
+            return
+        }
+        if (_uiState.value.isPreviewVisible) {
+            _uiState.update { it.copy(isPreviewVisible = false) }
+        } else {
+            val content = pendingContent[active.id] ?: active.content.orEmpty()
+            val htmlContent = when (active.language) {
+                "html"     -> content
+                "markdown" -> markdownToPreviewHtml(content)
+                else       -> return
+            }
+            val encoded = Base64.encodeToString(htmlContent.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
+            _uiState.update { it.copy(isPreviewVisible = true, previewUrl = "data:text/html;base64,$encoded") }
         }
     }
 
     // ── File operations ────────────────────────────────────────────────────
 
-    fun showRenameDialog(node: FileNode)        = _uiState.update { it.copy(fileOpDialog = FileOpDialog.Rename(node)) }
-    fun showDeleteDialog(node: FileNode)        = _uiState.update { it.copy(fileOpDialog = FileOpDialog.Delete(node)) }
-    fun showCreateFileDialog(parent: FileNode)  = _uiState.update { it.copy(fileOpDialog = FileOpDialog.CreateFile(parent)) }
-    fun showCreateFolderDialog(parent: FileNode)= _uiState.update { it.copy(fileOpDialog = FileOpDialog.CreateFolder(parent)) }
-    fun showDuplicateDialog(node: FileNode)     = _uiState.update { it.copy(fileOpDialog = FileOpDialog.Duplicate(node)) }
-    fun dismissFileOpDialog()                   = _uiState.update { it.copy(fileOpDialog = null) }
+    fun showRenameDialog(node: FileNode)         = _uiState.update { it.copy(fileOpDialog = FileOpDialog.Rename(node)) }
+    fun showDeleteDialog(node: FileNode)         = _uiState.update { it.copy(fileOpDialog = FileOpDialog.Delete(node)) }
+    fun showCreateFileDialog(parent: FileNode)   = _uiState.update { it.copy(fileOpDialog = FileOpDialog.CreateFile(parent)) }
+    fun showCreateFolderDialog(parent: FileNode) = _uiState.update { it.copy(fileOpDialog = FileOpDialog.CreateFolder(parent)) }
+    fun showDuplicateDialog(node: FileNode)      = _uiState.update { it.copy(fileOpDialog = FileOpDialog.Duplicate(node)) }
+    fun dismissFileOpDialog()                    = _uiState.update { it.copy(fileOpDialog = null) }
 
     fun renameNode(node: FileNode, newName: String) {
         viewModelScope.launch {
@@ -306,7 +714,7 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
             }
             _uiState.update { state ->
                 state.copy(
-                    openTabs = state.openTabs.map {
+                    openTabs      = state.openTabs.map {
                         if (it.documentUri == node.documentUri) it.copy(documentUri = newUri, displayName = newName) else it
                     },
                     fileTree      = state.fileTree.replaceNode(node.documentUri, node.copy(documentUri = newUri, displayName = newName)),
@@ -357,13 +765,43 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun createFileAtRoot(name: String) {
+        val rootUri = _uiState.value.projectRootUri ?: run {
+            _uiState.update { it.copy(statusMessage = "No project open") }
+            return
+        }
+        viewModelScope.launch {
+            safRepository.createFile(rootUri, name, mimeTypeForName(name)) ?: run {
+                _uiState.update { it.copy(statusMessage = "Create failed") }
+                return@launch
+            }
+            refreshProject()
+            _uiState.update { it.copy(statusMessage = "Created $name") }
+        }
+    }
+
+    fun createFolderAtRoot(name: String) {
+        val rootUri = _uiState.value.projectRootUri ?: run {
+            _uiState.update { it.copy(statusMessage = "No project open") }
+            return
+        }
+        viewModelScope.launch {
+            safRepository.createFile(rootUri, name, "vnd.android.document/directory") ?: run {
+                _uiState.update { it.copy(statusMessage = "Create failed") }
+                return@launch
+            }
+            refreshProject()
+            _uiState.update { it.copy(statusMessage = "Created folder $name") }
+        }
+    }
+
     fun duplicateFile(node: FileNode, newName: String) {
         val parentUri = node.parentDocumentUri ?: run {
             _uiState.update { it.copy(fileOpDialog = null, statusMessage = "Cannot duplicate: no parent") }
             return
         }
         viewModelScope.launch {
-            val bytes = safRepository.readFile(node.documentUri) ?: run {
+            val bytes  = safRepository.readFile(node.documentUri) ?: run {
                 _uiState.update { it.copy(fileOpDialog = null, statusMessage = "Duplicate: read error") }
                 return@launch
             }
@@ -389,6 +827,79 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
     }
+
+    // ── Markdown preview converter ─────────────────────────────────────────
+
+    /**
+     * Convert a Markdown string to a self-contained HTML page for the preview WebView.
+     * Supports headings, bold, italic, inline code, fenced code blocks,
+     * blockquotes, unordered lists, horizontal rules, and links/images.
+     */
+    private fun markdownToPreviewHtml(markdown: String): String {
+        val sb = StringBuilder()
+        sb.append(
+            """<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:760px;margin:0 auto;padding:16px 20px;background:#fff;color:#24292e;line-height:1.6}
+h1,h2{border-bottom:1px solid #eaecef;padding-bottom:.3em}
+pre{background:#f6f8fa;border:1px solid #e1e4e8;border-radius:6px;padding:16px;overflow-x:auto}
+code{font-family:'SFMono-Regular',Consolas,monospace;background:#f0f0f0;padding:.2em .4em;border-radius:3px;font-size:.9em}
+pre code{background:none;padding:0;font-size:1em}
+blockquote{margin:0;padding:0 1em;color:#6a737d;border-left:4px solid #dfe2e5}
+hr{border:none;border-top:1px solid #e1e4e8;margin:16px 0}
+img{max-width:100%}a{color:#0366d6}
+ul,ol{padding-left:2em}
+</style></head><body>"""
+        )
+        val lines = markdown.lines()
+        var i = 0
+        while (i < lines.size) {
+            val line = lines[i]
+            if (line.startsWith("```")) {
+                val codeLines = mutableListOf<String>()
+                i++
+                while (i < lines.size && !lines[i].startsWith("```")) {
+                    codeLines += lines[i]; i++
+                }
+                sb.append("<pre><code>").append(codeLines.joinToString("\n").escHtml()).append("</code></pre>\n")
+                i++; continue
+            }
+            sb.append(when {
+                line.startsWith("######") -> "<h6>${line.removePrefix("######").trim().mdInline()}</h6>"
+                line.startsWith("#####")  -> "<h5>${line.removePrefix("#####").trim().mdInline()}</h5>"
+                line.startsWith("####")   -> "<h4>${line.removePrefix("####").trim().mdInline()}</h4>"
+                line.startsWith("###")    -> "<h3>${line.removePrefix("###").trim().mdInline()}</h3>"
+                line.startsWith("##")     -> "<h2>${line.removePrefix("##").trim().mdInline()}</h2>"
+                line.startsWith("#")      -> "<h1>${line.removePrefix("#").trim().mdInline()}</h1>"
+                line.startsWith("- ") || line.startsWith("* ") ->
+                    "<ul><li>${line.substring(2).trim().mdInline()}</li></ul>"
+                line.matches(Regex("\\d+\\.\\s.*")) ->
+                    "<ol><li>${line.substringAfter(". ").trim().mdInline()}</li></ol>"
+                line.startsWith("> ") -> "<blockquote>${line.removePrefix("> ").mdInline()}</blockquote>"
+                line.matches(Regex("[-*_]{3,}\\s*")) -> "<hr/>"
+                line.isBlank() -> "<br/>"
+                else -> "<p>${line.mdInline()}</p>"
+            }).append('\n')
+            i++
+        }
+        sb.append("</body></html>")
+        return sb.toString()
+    }
+
+    private fun String.mdInline(): String {
+        var s = this.escHtml()
+        s = s.replace(Regex("\\*\\*\\*(.*?)\\*\\*\\*"), "<strong><em>$1</em></strong>")
+        s = s.replace(Regex("\\*\\*(.*?)\\*\\*"),       "<strong>$1</strong>")
+        s = s.replace(Regex("__(.*?)__"),               "<strong>$1</strong>")
+        s = s.replace(Regex("\\*(.*?)\\*"),             "<em>$1</em>")
+        s = s.replace(Regex("`(.*?)`"),                 "<code>$1</code>")
+        s = s.replace(Regex("!\\[(.*?)]\\((.*?)\\)"),   "<img alt='$1' src='$2'>")
+        s = s.replace(Regex("\\[(.*?)]\\((.*?)\\)"),    "<a href='$2'>$1</a>")
+        return s
+    }
+
+    private fun String.escHtml(): String =
+        replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
 
     // ── Private helpers ────────────────────────────────────────────────────
 

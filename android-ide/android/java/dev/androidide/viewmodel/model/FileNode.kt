@@ -13,7 +13,7 @@ package dev.androidide.viewmodel.model
  * [mimeType]           MIME type from DocumentsContract.
  *                      Directory nodes: "vnd.android.document/directory".
  * [size]               File size in bytes; 0 for directories.
- * [parentDocumentUri]  SAF URI of the parent directory. Used for create/duplicate operations.
+ * [parentDocumentUri]  SAF URI of the parent directory. Used for create/duplicate/move operations.
  *                      Null only for tree root nodes where the parent is the project root.
  * [children]           Lazily loaded — empty until the node is expanded.
  * [isExpanded]         Whether the directory is open in the file tree UI.
@@ -85,3 +85,24 @@ fun List<FileNode>.removeNode(documentUri: String): List<FileNode> = mapNotNull 
 fun List<FileNode>.sortedForTree(): List<FileNode> =
     sortedWith(compareByDescending<FileNode> { it.isDirectory }.thenBy { it.displayName.lowercase() })
         .map { if (it.isDirectory) it.copy(children = it.children.sortedForTree()) else it }
+
+/**
+ * Return the display-name path to [documentUri] relative to the tree roots.
+ *
+ * Example: for a tree rooted at "src", calling pathTo("src/main/Main.kt")
+ * returns "src/main/Main.kt".
+ *
+ * Returns null if [documentUri] is not found in the tree.
+ * The [prefix] parameter is used internally for recursion.
+ */
+fun List<FileNode>.pathTo(documentUri: String, prefix: String = ""): String? {
+    for (node in this) {
+        val current = if (prefix.isEmpty()) node.displayName else "$prefix/${node.displayName}"
+        if (node.documentUri == documentUri) return current
+        if (node.isDirectory) {
+            val found = node.children.pathTo(documentUri, current)
+            if (found != null) return found
+        }
+    }
+    return null
+}

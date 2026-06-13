@@ -2,14 +2,15 @@
 <!--
   android-ide/android/assets/editor/index.html
 
-  Monaco Editor shell loaded by the Android WebView.
+  Monaco Editor shell page loaded by the Android WebView.
 
   Bridge protocol:
     Kotlin → JS: window.androidIDE.receiveMessage({ type, ...payload })
     JS → Kotlin: window.AndroidBridge.onMessage(jsonString)
 
   Message types:
-    Kotlin → JS: loadFile, setTheme, setFontSize, requestSave, closeTab
+    Kotlin → JS: loadFile, closeTab, setTheme, setFontSize, setEditorOptions,
+                 forceLayout, executeCommand, showFind, showReplace, requestSave
     JS → Kotlin: ready, contentChanged, cursorMoved, fileSaved
 
   Monaco bundle:
@@ -17,6 +18,14 @@
     On Android: file:///android_asset/editor/vs/loader.js
     Version: 0.52.0 (pinned in scripts/fetch-monaco.sh)
     To upgrade: update MONACO_VERSION in scripts/fetch-monaco.sh.
+
+  Container sizing:
+    #editor-root uses absolute positioning (top/left/right/bottom: 0) to fill
+    the body regardless of the height:100% chain. This is the only reliable
+    approach in Android WebView where the height chain can break during the
+    transition from 0→measured dimensions before Compose lays out the WebView.
+    editor.layout() is called explicitly from Kotlin after the WebView is
+    in the Compose tree (triggered by the forceLayout message on editor ready).
 -->
 <html lang="en">
 <head>
@@ -25,16 +34,44 @@
   <title>AndroidIDE Editor</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    html, body { width: 100%; height: 100%; background: #1e1e1e; overflow: hidden; }
-    #editor-root { width: 100%; height: 100%; }
 
-    /* Loading indicator shown while Monaco initialises */
+    html, body {
+      width: 100%;
+      height: 100%;
+      background: #1e1e1e;
+      overflow: hidden;
+    }
+
+    /*
+     * Absolute positioning fills the body regardless of the height:100% chain.
+     * This is critical: WebView loads this page before Compose has measured and
+     * laid out the WebView widget. At that moment window.innerHeight = 0.
+     * With height:100% the editor container would be 0px tall.
+     * With absolute positioning the container fills the viewport as soon as
+     * the WebView is given its final size, and editor.layout() (called via
+     * forceLayout after editor ready) provides the exact pixel dimensions.
+     */
+    #editor-root {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+    }
+
     #loading {
-      position: absolute; top: 0; left: 0; right: 0; bottom: 0;
-      display: flex; align-items: center; justify-content: center;
-      background: #1e1e1e; color: #555; font-family: monospace; font-size: 14px;
+      position: absolute;
+      top: 0; left: 0; right: 0; bottom: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #1e1e1e;
+      color: #555;
+      font-family: monospace;
+      font-size: 14px;
       z-index: 10;
     }
+
     #loading.hidden { display: none; }
   </style>
 </head>

@@ -4,11 +4,17 @@
  * Monaco Editor initialisation and bidirectional bridge to the Kotlin layer.
  *
  * Inbound protocol  (Kotlin → JS via WebView.evaluateJavascript):
- *   { type: "loadFile",    path, content, language }
- *   { type: "setTheme",    theme }
- *   { type: "setFontSize", size }
- *   { type: "requestSave", path }
- *   { type: "closeTab",    path }
+ *   { type: "loadFile",         path, content, language }
+ *   { type: "setTheme",         theme }
+ *   { type: "setFontSize",      size }
+ *   { type: "requestSave",      path }
+ *   { type: "closeTab",         path }
+ *   { type: "forceLayout" }
+ *   { type: "executeCommand",   command }
+ *   { type: "insertText",       text }
+ *   { type: "setEditorOptions", tabSize?, wordWrap?, lineNumbers?, fontSize? }
+ *   { type: "showFind" }
+ *   { type: "showReplace" }
  *
  * Outbound protocol (JS → Kotlin via AndroidBridge.onMessage):
  *   { type: "ready" }
@@ -17,17 +23,31 @@
  *   { type: "fileSaved",      path }
  *
  * Monaco version: 0.52.0 (bundled — see scripts/fetch-monaco.sh).
- * The require.config paths entry "vs" resolves to the local vs/ directory
- * using a relative path. No CDN requests are made at runtime.
+ * The require.config paths entry "vs" resolves to the local vs/ directory.
+ * No network requests are made at runtime.
  *
  * Model URI scheme:
- *   Monaco requires a URI to identify each model. The 'path' value coming from
- *   Kotlin is a SAF content:// URI, which cannot be concatenated raw into another
- *   URI (the result would be malformed and monaco.Uri.parse would throw).
- *   We encode the path with encodeURIComponent so it becomes a safe URI segment:
- *     androidide:///files/<encodeURIComponent(path)>
- *   The 'currentPath' variable always stores the original SAF URI string, which
- *   is what Kotlin expects in contentChanged / fileSaved bridge messages.
+ *   The 'path' value from Kotlin is a SAF content:// URI. We encode it with
+ *   encodeURIComponent:  androidide:///files/<encodeURIComponent(path)>
+ *   'currentPath' always stores the original SAF URI for bridge messages.
+ *
+ * Layout strategy:
+ *   automaticLayout is NOT used because Android WebView's ResizeObserver is
+ *   unreliable. Instead, editor.layout() is called explicitly:
+ *   1. After editor creation (best-effort initial sizing).
+ *   2. On the window 'resize' event (orientation changes, IME show/hide).
+ *   3. On a 'forceLayout' message from Kotlin (with a requestAnimationFrame
+ *      retry to catch any pending Blink synchronization).
+ *   4. In loadFile() after setModel(), with a requestAnimationFrame retry.
+ *
+ * Root cause of Monaco visibility defect on Android WebView (fixed here):
+ *   DOM element offsetWidth / offsetHeight are driven by Blink's layout pass.
+ *   That pass can complete AFTER Kotlin's evaluateJavascript fires, so those
+ *   values may be 0 even though the WebView has its final dimensions.
+ *   window.innerWidth / window.innerHeight are set by the Android WebView
+ *   engine directly from the View's measured dimensions — they are always
+ *   correct once the page has loaded. applyLayout() now uses window.inner*
+ *   as the authoritative source instead of #editor-root.offsetWidth/Height.
  */
 
 // ---------------------------------------------------------------------------
@@ -35,38 +55,63 @@
 // ---------------------------------------------------------------------------
 
 function postToNative(msg) {
-  const json = JSON.stringify(msg);
+  var json = JSON.stringify(msg);
   if (typeof window.AndroidBridge !== 'undefined') {
-    // Kotlin @JavascriptInterface — synchronous call from the WebView JS thread
     window.AndroidBridge.onMessage(json);
   } else {
-    // Fallback for browser-based development
     window.parent.postMessage(json, '*');
   }
 }
 
 // ---------------------------------------------------------------------------
+// Layout management
+// ---------------------------------------------------------------------------
+
+/**
+ * Apply the current viewport dimensions to Monaco.
+ *
+ * Uses window.innerWidth / window.innerHeight instead of
+ * #editor-root.offsetWidth / offsetHeight.  Android WebView sets the
+ * window.inner* values from the View's measured dimensions immediately,
+ * whereas offsetWidth / offsetHeight depend on a completed Blink layout
+ * pass that may not have run yet when evaluateJavascript fires.
+ *
+ * Safe to call before Monaco is ready — returns early if editor is null.
+ */
+function applyLayout() {
+  if (!editor) return;
+  var w = window.innerWidth  || 0;
+  var h = window.innerHeight || 0;
+  if (w > 0 && h > 0) {
+    editor.layout({ width: w, height: h });
+  }
+}
+
+// Register early so resize events during Monaco loading are not missed.
+window.addEventListener('resize', function () {
+  applyLayout();
+  // One additional pass after the browser finishes reflow.
+  requestAnimationFrame(applyLayout);
+});
+
+// ---------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------
 
-let editor = null;          // monaco.editor.IStandaloneCodeEditor
-let currentPath = null;     // SAF URI of the currently loaded file (original, un-encoded)
-let contentChangeTimer = null;
-const CONTENT_CHANGE_DEBOUNCE_MS = 300;
+var editor = null;          // monaco.editor.IStandaloneCodeEditor
+var currentPath = null;     // SAF URI of the currently loaded file
+var contentChangeTimer = null;
+var CONTENT_CHANGE_DEBOUNCE_MS = 300;
 
 // ---------------------------------------------------------------------------
 // Monaco loader
 // ---------------------------------------------------------------------------
 
-// "vs" resolves to the bundled vs/ directory relative to this file.
-// On Android: file:///android_asset/editor/vs
-// No network requests are made — all files are served from APK assets.
-require.config({
-  paths: { vs: 'vs' }
-});
+require.config({ paths: { vs: 'vs' } });
 
 require(['vs/editor/editor.main'], function () {
-  // Define AndroidIDE dark theme (extends vs-dark with custom colours)
+
+  // Define AndroidIDE dark theme
   monaco.editor.defineTheme('androidide-dark', {
     base: 'vs-dark',
     inherit: true,
@@ -118,9 +163,9 @@ require(['vs/editor/editor.main'], function () {
     scrollBeyondLastLine: false,
     wordWrap: 'off',
     renderWhitespace: 'selection',
-    automaticLayout: true,
+    // automaticLayout intentionally omitted — ResizeObserver is unreliable
+    // on Android WebView. Layout is managed explicitly via applyLayout().
     padding: { top: 8, bottom: 8 },
-    // Touch-friendly scrollbars
     scrollbar: {
       vertical: 'auto',
       horizontal: 'auto',
@@ -129,11 +174,16 @@ require(['vs/editor/editor.main'], function () {
     },
   });
 
-  // --- Content change ---
-  editor.onDidChangeModelContent(() => {
+  // Initial layout — best-effort. The authoritative trigger is the forceLayout
+  // message from Kotlin, sent after Compose has measured the WebView.
+  applyLayout();
+  requestAnimationFrame(applyLayout);
+
+  // --- Content change (debounced) ---
+  editor.onDidChangeModelContent(function () {
     if (!currentPath) return;
     clearTimeout(contentChangeTimer);
-    contentChangeTimer = setTimeout(() => {
+    contentChangeTimer = setTimeout(function () {
       postToNative({
         type: 'contentChanged',
         path: currentPath,
@@ -143,7 +193,7 @@ require(['vs/editor/editor.main'], function () {
   });
 
   // --- Cursor position ---
-  editor.onDidChangeCursorPosition((e) => {
+  editor.onDidChangeCursorPosition(function (e) {
     postToNative({
       type: 'cursorMoved',
       line:   e.position.lineNumber,
@@ -151,16 +201,14 @@ require(['vs/editor/editor.main'], function () {
     });
   });
 
-  // --- Keyboard shortcut: Ctrl+S / Cmd+S → explicit save ---
-  editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
+  // --- Keyboard shortcut: Ctrl+S / Cmd+S ---
+  editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, function () {
     if (!currentPath) return;
     postToNative({ type: 'fileSaved', path: currentPath });
   });
 
-  // Hide loading indicator
+  // Hide loading indicator and signal readiness to Kotlin
   document.getElementById('loading').classList.add('hidden');
-
-  // Signal readiness to Kotlin
   postToNative({ type: 'ready' });
 });
 
@@ -169,16 +217,14 @@ require(['vs/editor/editor.main'], function () {
 // ---------------------------------------------------------------------------
 
 window.androidIDE = {
-  /**
-   * Receive a message from the Kotlin layer.
-   * Called as: window.androidIDE.receiveMessage({type, ...})
-   */
+
   receiveMessage: function (msg) {
     if (typeof msg === 'string') {
       try { msg = JSON.parse(msg); } catch (e) { return; }
     }
 
     switch (msg.type) {
+
       case 'loadFile':
         loadFile(msg.path, msg.content, msg.language);
         break;
@@ -189,15 +235,24 @@ window.androidIDE = {
           if (msg.theme === 'light' || msg.theme === 'vs') {
             theme = 'androidide-light';
           } else if (msg.theme !== 'dark' && msg.theme !== 'vs-dark') {
-            theme = msg.theme; // pass through custom theme names unchanged
+            theme = msg.theme;
           }
           monaco.editor.setTheme(theme);
         }
         break;
 
       case 'setFontSize':
+        if (editor) editor.updateOptions({ fontSize: msg.size });
+        break;
+
+      case 'setEditorOptions':
         if (editor) {
-          editor.updateOptions({ fontSize: msg.size });
+          var opts = {};
+          if (msg.tabSize     != null) opts.tabSize     = msg.tabSize;
+          if (msg.wordWrap    != null) opts.wordWrap    = msg.wordWrap;    // "on" / "off"
+          if (msg.lineNumbers != null) opts.lineNumbers = msg.lineNumbers; // "on" / "off"
+          if (msg.fontSize    != null) opts.fontSize    = msg.fontSize;
+          if (Object.keys(opts).length > 0) editor.updateOptions(opts);
         }
         break;
 
@@ -208,16 +263,91 @@ window.androidIDE = {
         break;
 
       case 'closeTab':
-        if (msg.path === currentPath) {
-          editor.setValue('');
-          currentPath = null;
+        if (msg.path) {
+          var safeSegment = encodeURIComponent(msg.path);
+          var modelUri    = monaco.Uri.parse('androidide:///files/' + safeSegment);
+          var model       = monaco.editor.getModel(modelUri);
+          if (model) {
+            if (msg.path === currentPath) {
+              editor.setModel(null);
+              currentPath = null;
+            }
+            model.dispose();
+          } else if (msg.path === currentPath) {
+            editor.setValue('');
+            currentPath = null;
+          }
+        }
+        break;
+
+      case 'forceLayout':
+        // Apply layout immediately using window.innerWidth/Height (always correct),
+        // then schedule a follow-up pass after Blink's next paint cycle.
+        applyLayout();
+        requestAnimationFrame(applyLayout);
+        break;
+
+      case 'executeCommand':
+        if (!editor || !msg.command) break;
+        // Named special cases handled before Monaco's action/trigger lookup
+        if (msg.command === 'focusEditor') {
+          editor.focus();
+          break;
+        }
+        if (msg.command === 'blurEditor') {
+          window.androidIDE.blurEditor();
+          break;
+        }
+        // Try as an editor action first (async; e.g. 'editor.action.indentLines')
+        var action = editor.getAction(msg.command);
+        if (action) {
+          action.run().catch(function (e) {
+            console.warn('[androidIDE] executeCommand action failed:', msg.command, e);
+          });
+        } else {
+          // Fall back to keyboard handler trigger (sync; e.g. 'cursorLeft', 'undo')
+          editor.trigger('keyboard', msg.command, null);
+        }
+        break;
+
+      case 'insertText':
+        if (editor && msg.text) {
+          editor.trigger('keyboard', 'type', { text: msg.text });
+        }
+        break;
+
+      case 'showFind':
+        if (editor) {
+          var findAction = editor.getAction('actions.find');
+          if (findAction) findAction.run();
+        }
+        break;
+
+      case 'showReplace':
+        if (editor) {
+          var replaceAction = editor.getAction('editor.action.startFindReplaceAction');
+          if (replaceAction) replaceAction.run();
         }
         break;
 
       default:
         console.warn('[androidIDE] Unknown message type:', msg.type);
     }
-  }
+  },
+
+  /**
+   * Blur the Monaco textarea to dismiss the soft keyboard on Android.
+   * The Monaco editor's hidden <textarea> is the focused element when typing.
+   */
+  blurEditor: function () {
+    if (editor) {
+      var domNode = editor.getDomNode();
+      if (domNode) {
+        var ta = domNode.querySelector('textarea');
+        if (ta) ta.blur();
+      }
+    }
+  },
 };
 
 // ---------------------------------------------------------------------------
@@ -227,34 +357,24 @@ window.androidIDE = {
 /**
  * Load a file into the Monaco editor.
  *
- * @param {string} path     - Original SAF content:// URI. Stored as currentPath
- *                            and echoed back in contentChanged/fileSaved messages.
+ * @param {string} path     - Original SAF content:// URI.
  * @param {string} content  - Full file text.
  * @param {string} language - Monaco language ID (e.g. "kotlin", "java").
  */
 function loadFile(path, content, language) {
   if (!editor) return;
 
-  // Keep the original SAF URI as currentPath — Kotlin identifies files by this URI.
   currentPath = path;
 
-  // Build a well-formed Monaco model URI.
-  // path is a SAF content:// URI and cannot be concatenated raw into another URI
-  // (e.g. 'androidide://file' + 'content://...' produces 'androidide://filecontent://...'
-  // which monaco.Uri.parse rejects and throws, aborting the load silently).
-  // encodeURIComponent makes the SAF URI safe as a URI path segment.
   var safeSegment = encodeURIComponent(path);
-  var uri = monaco.Uri.parse('androidide:///files/' + safeSegment);
-
-  // Reuse or create a model for this path to preserve undo history.
-  var model = monaco.editor.getModel(uri);
+  var uri         = monaco.Uri.parse('androidide:///files/' + safeSegment);
+  var model       = monaco.editor.getModel(uri);
 
   if (model) {
-    // File already has a model — update content if it changed.
     if (model.getValue() !== content) {
       model.pushEditOperations([], [{
         range: model.getFullModelRange(),
-        text: content,
+        text:  content,
       }], function () { return null; });
     }
     if (model.getLanguageId() !== language) {
@@ -265,8 +385,11 @@ function loadFile(path, content, language) {
   }
 
   editor.setModel(model);
-  editor.focus();
 
-  // Scroll to top when loading a new file.
+  // Apply layout using window.innerWidth/innerHeight (always correct on Android
+  // WebView), then schedule a follow-up pass after Blink's next paint cycle.
+  applyLayout();
+  editor.focus();
   editor.setScrollPosition({ scrollTop: 0, scrollLeft: 0 });
+  requestAnimationFrame(applyLayout);
 }

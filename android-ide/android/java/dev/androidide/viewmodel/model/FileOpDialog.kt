@@ -23,4 +23,10 @@ sealed class FileOpDialog {
      * Pre-fills the name field with "Copy of <displayName>".
      */
     data class Duplicate(val node: FileNode) : FileOpDialog()
+
+    /**
+     * Confirm-close dialog shown when the user tries to close a tab that has
+     * unsaved changes. Options: Save and close, Discard and close, Cancel.
+     */
+    data class UnsavedClose(val tabId: String, val displayName: String) : FileOpDialog()
 }

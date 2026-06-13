@@ -2,15 +2,9 @@
 //
 // JavaScript ↔ Kotlin bridge for the Monaco editor WebView.
 //
-// Migration note (2026-06-12):
-//   Replaces EditorBridge.java.
-//   Key difference: removed "private static native void nativeOnEditorMessage(String)"
-//   JNI call to Rust. Inbound messages now dispatch to a Kotlin callback directly.
-//   Outbound JS format is identical — monaco-init.js is unchanged.
-//
 // Setup in EditorPane.kt:
 //   val bridge = remember { EditorBridge() }
-//   bridge.messageListener = { msg -> viewModel.onEditorMessage(msg) }
+//   bridge.messageListener = viewModel::onEditorMessage
 //   webView.addJavascriptInterface(bridge, "AndroidBridge")
 //   webView.loadUrl("file:///android_asset/editor/index.html")
 //
@@ -45,9 +39,7 @@ class EditorBridge {
 
     /**
      * Called by Monaco via window.AndroidBridge.onMessage(jsonString).
-     *
-     * This method runs on a background thread managed by the WebView.
-     * Do NOT touch UI elements here.
+     * Runs on a background thread managed by the WebView — do NOT touch UI.
      */
     @JavascriptInterface
     fun onMessage(json: String) {
@@ -63,9 +55,7 @@ class EditorBridge {
 
     /**
      * Send a message to Monaco by evaluating a JS expression in [webView].
-     *
-     * This method is safe to call from any thread — it posts the evaluation
-     * to the WebView's UI thread internally.
+     * Safe to call from any thread — posts the evaluation to the WebView's UI thread.
      */
     fun send(webView: WebView, message: EditorOutbound) {
         val js = message.toJs()
