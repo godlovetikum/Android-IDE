@@ -122,3 +122,22 @@ None. Phase 1 UI Correction Pass complete. Ready to begin Phase 2.
 **2026-06-13:** Phase 1 UI Correction Pass complete. All 9 file groups updated: data models, repository layer, ViewModel, AppRoot, IdeScreen, EditorPane, FileTreePanel, SettingsScreen, ProjectsScreen. Key fixes: preview crash (BUG-006), base64 URL issue (BUG-007), drawer gesture conflict (BUG-008), sidebar restructure, multi-select mode, .git filtering, file search panel, corrected context menus.
 
 Last updated: 2026-06-13
+| 025 | Data: EditorSettings — add `uiFontScale: Float` (0.75–1.50) and `defaultProjectDir: String` | data | 2026-06-13 |
+| 026 | Data: EditorSettingsRepository — persist `uiFontScale` and `defaultProjectDir` via SharedPreferences | data | 2026-06-13 |
+| 027 | Data: SessionRepository — project-scoped tab persistence (KEY_PREFIX_TABS + projectHash, KEY_PREFIX_ACTIVE + projectHash) | data | 2026-06-13 |
+| 028 | Data: IdeUiState — rename `clipboard: FileNode?` → `clipboardItems: List<FileNode>` for multi-item clipboard | data | 2026-06-13 |
+| 029 | Data: FileNode.kt — `pathTo` returns leading slash (`/displayName/…`); add `ancestorsOf` extension | data | 2026-06-13 |
+| 030 | ViewModel: IdeViewModel — project-scoped session save/restore; `saveCurrentProjectSession` before project switch | viewmodel | 2026-06-13 |
+| 031 | ViewModel: IdeViewModel — `copyFileNode`/`cutFileNode` collect multi-select items, exit selection mode; `pasteFileNode` iterates all items | viewmodel | 2026-06-13 |
+| 032 | ViewModel: IdeViewModel — `createBlankProject` writes `package.json` template; respects `defaultProjectDir` | viewmodel | 2026-06-13 |
+| 033 | ViewModel: IdeViewModel — `pasteFromKotlinClipboard` reads Android ClipboardManager, sends `InsertText` to Monaco | viewmodel | 2026-06-13 |
+| 034 | UI: IdeScreen — SidebarNavPanel replaced with compact 48dp icon-only Row of 5 `IconButton`s | ui | 2026-06-13 |
+| 035 | UI: IdeScreen — `onCloseDrawer` lambda threaded into sidebar; drawer auto-closes on file open (narrow screen) | ui | 2026-06-13 |
+| 036 | UI: IdeScreen — `IdeTopBar` shows path only (no headline title); path tappable for ancestor reveal + sibling quick-switch dropdown | ui | 2026-06-13 |
+| 037 | UI: EditorPane — `KeyboardToolbar` replaced horizontal scroll with 2-page `HorizontalPager` (page 1: nav/undo, page 2: clipboard/keyboard); icons 24dp, targets 44dp | editor/ui | 2026-06-13 |
+| 038 | UI: EditorPane — WebView `isFocusableInTouchMode = true`; `onTouchListener` calls `requestFocus()`; `onPasteFromClipboard` callback bypasses WebView clipboard API | editor/ui | 2026-06-13 |
+| 039 | UI: FileTreePanel — param renamed to `clipboardItems: List<FileNode>`; paste label shows item count; cut items visually dimmed | ui | 2026-06-13 |
+| 040 | UI: SettingsScreen — add UI Font Scale slider (0.75–1.50, 5% steps, reset button); add Default Project Directory inline editor | ui | 2026-06-13 |
+| 041 | UI: AppRoot — `CompositionLocalProvider(LocalDensity)` applies `uiFontScale` to all app text | ui | 2026-06-13 |
+| 042 | Editor: monaco-init.js — tap-to-focus (`click`+`touchend` → `editor.focus()`); `insertText` uses `editor.executeEdits` (atomic paste); content-change debounce 300ms→150ms; performance options (no context menu, no autocomplete, no folding, no link detection); `applyLayout` uses `window.innerWidth/innerHeight` | editor | 2026-06-13 |
+| 043 | CI: build.yml — release APK job has `if: github.event_name == 'workflow_dispatch'` guard; release builds never run automatically | ci | 2026-06-13 |

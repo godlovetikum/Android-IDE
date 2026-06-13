@@ -46,6 +46,17 @@ data class IdeUiState(
     /** Set of document URIs currently selected in multi-select mode. */
     val selectedUris: Set<String> = emptySet(),
 
+    // ── File tree clipboard ─────────────────────────────────────────────────
+    /**
+     * Files/folders pending a paste operation.
+     * Supports both single-item and multi-item clipboard from multi-select.
+     * Empty list means clipboard is empty.
+     */
+    val clipboardItems: List<FileNode> = emptyList(),
+
+    /** True when [clipboardItems] were cut (will be moved); false for copy. */
+    val clipboardIsCut: Boolean = false,
+
     // ── Editor ─────────────────────────────────────────────────────────────
     /** All open editor tabs. */
     val openTabs: List<EditorTab> = emptyList(),
@@ -88,13 +99,6 @@ data class IdeUiState(
     // ── Volume keys ─────────────────────────────────────────────────────────
     /** Controls how hardware volume keys behave when the editor is focused. */
     val volumeKeyMode: VolumeKeyMode = VolumeKeyMode.HORIZONTAL,
-
-    // ── File tree clipboard ─────────────────────────────────────────────────
-    /** FileNode pending a paste operation; null when the clipboard is empty. */
-    val clipboard: FileNode? = null,
-
-    /** True when [clipboard] was cut (will be moved); false for copy. */
-    val clipboardIsCut: Boolean = false,
 
     // ── Exit confirmation ───────────────────────────────────────────────────
     /**

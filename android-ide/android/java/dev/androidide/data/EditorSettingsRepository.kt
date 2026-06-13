@@ -25,6 +25,8 @@ class EditorSettingsRepository(context: Context) {
         private const val KEY_SHOW_SYMBOL_BAR      = "show_symbol_bar"
         private const val KEY_HIDE_GIT_FOLDER      = "hide_git_folder"
         private const val KEY_CUSTOM_SYMBOLS       = "custom_symbols"
+        private const val KEY_UI_FONT_SCALE        = "ui_font_scale"
+        private const val KEY_DEFAULT_PROJECT_DIR  = "default_project_dir"
         private const val SYMBOL_SEPARATOR         = "|"
     }
 
@@ -50,6 +52,9 @@ class EditorSettingsRepository(context: Context) {
             ?.filter { it.isNotEmpty() }
             ?.ifEmpty { EditorSettings.DEFAULT_SYMBOLS }
             ?: EditorSettings.DEFAULT_SYMBOLS,
+        uiFontScale          = prefs.getFloat(KEY_UI_FONT_SCALE, 1.0f)
+            .coerceIn(EditorSettings.UI_FONT_SCALE_MIN, EditorSettings.UI_FONT_SCALE_MAX),
+        defaultProjectDir    = prefs.getString(KEY_DEFAULT_PROJECT_DIR, "") ?: "",
     )
 
     fun setEditorSettings(settings: EditorSettings) {
@@ -65,6 +70,9 @@ class EditorSettingsRepository(context: Context) {
             .putBoolean(KEY_SHOW_SYMBOL_BAR,     settings.showSymbolBar)
             .putBoolean(KEY_HIDE_GIT_FOLDER,     settings.hideGitFolder)
             .putString (KEY_CUSTOM_SYMBOLS,      settings.customSymbols.joinToString(SYMBOL_SEPARATOR))
+            .putFloat  (KEY_UI_FONT_SCALE,       settings.uiFontScale
+                .coerceIn(EditorSettings.UI_FONT_SCALE_MIN, EditorSettings.UI_FONT_SCALE_MAX))
+            .putString (KEY_DEFAULT_PROJECT_DIR, settings.defaultProjectDir)
             .apply()
     }
 

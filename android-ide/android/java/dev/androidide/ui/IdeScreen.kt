@@ -8,11 +8,18 @@
 //   Narrow (< 600dp) — ModalNavigationDrawer (gesturesEnabled = false) + content area
 //
 // The sidebar contains:
-//   1. Large navigation buttons (Projects, Editor, Git [disabled], Terminal [disabled], Settings)
+//   1. Compact nav icon row (48dp tall) — Projects, Editor, Git, Terminal, Settings
 //   2. Files header (shown when a project is open) — search, reveal, new file, new folder, more
-//   3. FileTreePanel (shown when a project is open)
+//   3. FileTreePanel (dominates remaining height)
 //
-// imePadding() is applied to the editor content area so it shrinks when the soft keyboard appears.
+// Sidebar auto-close: when a file is opened on a narrow screen the drawer closes
+// automatically, the editor receives focus, and the keyboard can appear.
+//
+// gesturesEnabled=false: prevents horizontal swipe in the Monaco editor from
+// accidentally opening the drawer.
+//
+// imePadding() is applied to the editor content area so it shrinks when the
+// soft keyboard appears.
 
 package dev.androidide.ui
 
@@ -57,6 +64,7 @@ import dev.androidide.viewmodel.model.AppScreen
 import dev.androidide.viewmodel.model.FileNode
 import dev.androidide.viewmodel.model.FileOpDialog
 import dev.androidide.viewmodel.model.IdeUiState
+import dev.androidide.viewmodel.model.ancestorsOf
 import dev.androidide.viewmodel.model.pathTo
 import kotlinx.coroutines.launch
 
@@ -91,94 +99,104 @@ fun IdeScreen(
         mimeType    = "vnd.android.document/directory",
     )
 
-    // ── Shared FileTreePanel composable (avoids duplication in wide/narrow) ─
-    val fileTreePanelContent: @Composable (Modifier) -> Unit = { mod ->
-        FileTreePanel(
-            nodes                    = uiState.fileTree,
-            clipboard                = uiState.clipboard,
-            clipboardIsCut           = uiState.clipboardIsCut,
-            projectName              = uiState.projectName,
-            activeTabDocumentUri     = activeTab?.documentUri,
-            hideGitFolder            = uiState.editorSettings.hideGitFolder,
-            isMultiSelectMode        = uiState.isMultiSelectMode,
-            selectedUris             = uiState.selectedUris,
-            isSearchVisible          = uiState.isSearchVisible,
-            fileSearchQuery          = uiState.fileSearchQuery,
-            fileSearchResults        = uiState.fileSearchResults,
-            onFileClick              = { uri ->
-                if (uiState.isMultiSelectMode) ideViewModel.toggleNodeSelection(uri)
-                else { ideViewModel.openFile(uri); ideViewModel.navigateTo(AppScreen.EDITOR) }
-            },
-            onDirToggle              = { uri ->
-                if (uiState.isMultiSelectMode) ideViewModel.toggleNodeSelection(uri)
-                else ideViewModel.toggleDirectory(uri)
-            },
-            onShowRenameDialog       = ideViewModel::showRenameDialog,
-            onShowDeleteDialog       = ideViewModel::showDeleteDialog,
-            onShowCreateFileDialog   = ideViewModel::showCreateFileDialog,
-            onShowCreateFolderDialog = ideViewModel::showCreateFolderDialog,
-            onShowDuplicateDialog    = ideViewModel::showDuplicateDialog,
-            onCopyNode               = ideViewModel::copyFileNode,
-            onCutNode                = ideViewModel::cutFileNode,
-            onPasteInto              = ideViewModel::pasteFileNode,
-            onImportFilesAt          = onImportFilesAt,
-            onExportDirectory        = ideViewModel::exportDirectory,
-            onNewFileAtRoot          = { ideViewModel.showCreateFileDialog(rootNode) },
-            onNewFolderAtRoot        = { ideViewModel.showCreateFolderDialog(rootNode) },
-            onImportFilesAtRoot      = onImportFilesAtRoot,
-            onExportProject          = ideViewModel::exportProject,
-            onRefresh                = ideViewModel::refreshProject,
-            onRenameProject          = { /* TODO Phase 2: rename project via dialog */ },
-            onRemoveProject          = {
-                uiState.projectRootUri?.let { ideViewModel.requestRemoveProject(it) }
-            },
-            onCopyPath               = ideViewModel::copyPathToClipboard,
-            onToggleNodeSelection    = ideViewModel::toggleNodeSelection,
-            onExitSelectionMode      = ideViewModel::exitSelectionMode,
-            onSearchQueryChange      = ideViewModel::searchFiles,
-            onSearchFileSelect       = { uri ->
-                ideViewModel.hideFileSearch()
-                ideViewModel.openFile(uri)
-                ideViewModel.navigateTo(AppScreen.EDITOR)
-            },
-            modifier                 = mod,
-        )
-    }
+    // ── Shared FileTreePanel composable ────────────────────────────────────
+    //
+    // [onCloseDrawer] is called after opening a file on narrow screens so the
+    // sidebar collapses automatically and the editor is immediately visible.
+    val fileTreePanelContent: @Composable (Modifier, onCloseDrawer: (() -> Unit)?) -> Unit =
+        { mod, onCloseDrawer ->
+            FileTreePanel(
+                nodes                    = uiState.fileTree,
+                clipboardItems           = uiState.clipboardItems,
+                clipboardIsCut           = uiState.clipboardIsCut,
+                projectName              = uiState.projectName,
+                activeTabDocumentUri     = activeTab?.documentUri,
+                hideGitFolder            = uiState.editorSettings.hideGitFolder,
+                isMultiSelectMode        = uiState.isMultiSelectMode,
+                selectedUris             = uiState.selectedUris,
+                isSearchVisible          = uiState.isSearchVisible,
+                fileSearchQuery          = uiState.fileSearchQuery,
+                fileSearchResults        = uiState.fileSearchResults,
+                onFileClick              = { uri ->
+                    if (uiState.isMultiSelectMode) ideViewModel.toggleNodeSelection(uri)
+                    else {
+                        ideViewModel.openFile(uri)
+                        ideViewModel.navigateTo(AppScreen.EDITOR)
+                        onCloseDrawer?.invoke()
+                    }
+                },
+                onDirToggle              = { uri ->
+                    if (uiState.isMultiSelectMode) ideViewModel.toggleNodeSelection(uri)
+                    else ideViewModel.toggleDirectory(uri)
+                },
+                onShowRenameDialog       = ideViewModel::showRenameDialog,
+                onShowDeleteDialog       = ideViewModel::showDeleteDialog,
+                onShowCreateFileDialog   = ideViewModel::showCreateFileDialog,
+                onShowCreateFolderDialog = ideViewModel::showCreateFolderDialog,
+                onShowDuplicateDialog    = ideViewModel::showDuplicateDialog,
+                onCopyNode               = ideViewModel::copyFileNode,
+                onCutNode                = ideViewModel::cutFileNode,
+                onPasteInto              = ideViewModel::pasteFileNode,
+                onImportFilesAt          = onImportFilesAt,
+                onExportDirectory        = ideViewModel::exportDirectory,
+                onNewFileAtRoot          = { ideViewModel.showCreateFileDialog(rootNode) },
+                onNewFolderAtRoot        = { ideViewModel.showCreateFolderDialog(rootNode) },
+                onImportFilesAtRoot      = onImportFilesAtRoot,
+                onExportProject          = ideViewModel::exportProject,
+                onRefresh                = ideViewModel::refreshProject,
+                onRenameProject          = { /* TODO Phase 2: rename project via dialog */ },
+                onRemoveProject          = {
+                    uiState.projectRootUri?.let { ideViewModel.requestRemoveProject(it) }
+                },
+                onCopyPath               = ideViewModel::copyPathToClipboard,
+                onToggleNodeSelection    = ideViewModel::toggleNodeSelection,
+                onExitSelectionMode      = ideViewModel::exitSelectionMode,
+                onSearchQueryChange      = ideViewModel::searchFiles,
+                onSearchFileSelect       = { uri ->
+                    ideViewModel.hideFileSearch()
+                    ideViewModel.openFile(uri)
+                    ideViewModel.navigateTo(AppScreen.EDITOR)
+                    onCloseDrawer?.invoke()
+                },
+                modifier                 = mod,
+            )
+        }
 
     // ── Sidebar composable (shared between wide/narrow) ────────────────────
-    val sidebarContent: @Composable (Modifier) -> Unit = { mod ->
-        Column(
-            modifier = mod
-                .background(colors.surface)
-                .fillMaxHeight(),
-        ) {
-            SidebarNavPanel(
-                currentScreen      = uiState.currentScreen,
-                onNavigateProjects = { ideViewModel.navigateTo(AppScreen.PROJECTS) },
-                onNavigateEditor   = { ideViewModel.navigateTo(AppScreen.EDITOR) },
-                onNavigateSettings = { ideViewModel.navigateTo(AppScreen.SETTINGS) },
-            )
-            if (uiState.projectRootUri != null) {
-                HorizontalDivider(thickness = 1.dp, color = colors.separator)
-                FilesHeader(
-                    isSearchVisible    = uiState.isSearchVisible,
-                    onShowFileSearch   = ideViewModel::showFileSearch,
-                    onHideFileSearch   = ideViewModel::hideFileSearch,
-                    onRevealActiveFile = ideViewModel::revealActiveFile,
-                    onNewFile          = { ideViewModel.showCreateFileDialog(rootNode) },
-                    onNewFolder        = { ideViewModel.showCreateFolderDialog(rootNode) },
-                    onImportFiles      = onImportFilesAtRoot,
-                    onRefresh          = ideViewModel::refreshProject,
-                    onExportProject    = ideViewModel::exportProject,
-                    onRenameProject    = { /* TODO Phase 2 */ },
-                    onRemoveProject    = {
-                        uiState.projectRootUri?.let { ideViewModel.requestRemoveProject(it) }
-                    },
+    val sidebarContent: @Composable (Modifier, onCloseDrawer: (() -> Unit)?) -> Unit =
+        { mod, onCloseDrawer ->
+            Column(
+                modifier = mod
+                    .background(colors.surface)
+                    .fillMaxHeight(),
+            ) {
+                SidebarNavPanel(
+                    currentScreen      = uiState.currentScreen,
+                    onNavigateProjects = { ideViewModel.navigateTo(AppScreen.PROJECTS) },
+                    onNavigateEditor   = { ideViewModel.navigateTo(AppScreen.EDITOR) },
+                    onNavigateSettings = { ideViewModel.navigateTo(AppScreen.SETTINGS) },
                 )
-                fileTreePanelContent(Modifier.fillMaxSize())
+                HorizontalDivider(thickness = 1.dp, color = colors.separator)
+                if (uiState.projectRootUri != null) {
+                    FilesHeader(
+                        isSearchVisible    = uiState.isSearchVisible,
+                        onShowFileSearch   = ideViewModel::showFileSearch,
+                        onHideFileSearch   = ideViewModel::hideFileSearch,
+                        onRevealActiveFile = ideViewModel::revealActiveFile,
+                        onNewFile          = { ideViewModel.showCreateFileDialog(rootNode) },
+                        onNewFolder        = { ideViewModel.showCreateFolderDialog(rootNode) },
+                        onImportFiles      = onImportFilesAtRoot,
+                        onRefresh          = ideViewModel::refreshProject,
+                        onExportProject    = ideViewModel::exportProject,
+                        onRenameProject    = { /* TODO Phase 2 */ },
+                        onRemoveProject    = {
+                            uiState.projectRootUri?.let { ideViewModel.requestRemoveProject(it) }
+                        },
+                    )
+                    fileTreePanelContent(Modifier.fillMaxSize(), onCloseDrawer)
+                }
             }
         }
-    }
 
     // ── Content composable ────────────────────────────────────────────────
     val mainContent: @Composable (onToggleSidebar: (() -> Unit)?, Modifier) -> Unit =
@@ -197,8 +215,10 @@ fun IdeScreen(
                             onFind           = { ideViewModel.sendEditorCommand(EditorOutbound.ShowFind) },
                             onReplace        = { ideViewModel.sendEditorCommand(EditorOutbound.ShowReplace) },
                             onTogglePreview  = ideViewModel::togglePreview,
-                            onOpenFile       = { uri ->
-                                ideViewModel.openFile(uri)
+                            onOpenFile       = { uri -> ideViewModel.openFile(uri) },
+                            onRevealInTree   = { uri ->
+                                ideViewModel.revealActiveFile()
+                                onToggleSidebar?.invoke()
                             },
                             onMenuClick      = onToggleSidebar,
                         )
@@ -238,10 +258,8 @@ fun IdeScreen(
     // ── Layout ─────────────────────────────────────────────────────────────
     if (isWide) {
         Row(modifier = Modifier.fillMaxSize()) {
-            // Permanent sidebar
-            sidebarContent(Modifier.width(240.dp).fillMaxHeight())
+            sidebarContent(Modifier.width(240.dp).fillMaxHeight(), null)
             VerticalDivider(thickness = 1.dp, color = colors.separator)
-            // Content area
             Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
                 mainContent(null, Modifier.fillMaxSize())
             }
@@ -249,17 +267,22 @@ fun IdeScreen(
     } else {
         val drawerState = rememberDrawerState(DrawerValue.Closed)
         val scope       = rememberCoroutineScope()
-        val toggleDrawer: () -> Unit = { scope.launch { if (drawerState.isClosed) drawerState.open() else drawerState.close() } }
+        val closeDrawer: () -> Unit = { scope.launch { drawerState.close() } }
+        val toggleDrawer: () -> Unit = {
+            scope.launch {
+                if (drawerState.isClosed) drawerState.open() else drawerState.close()
+            }
+        }
 
         ModalNavigationDrawer(
             drawerState     = drawerState,
-            gesturesEnabled = false,
+            gesturesEnabled = false,    // prevent swipe conflicts with Monaco horizontal scroll
             drawerContent   = {
                 ModalDrawerSheet(
                     modifier             = Modifier.width(280.dp),
                     drawerContainerColor = colors.surface,
                 ) {
-                    sidebarContent(Modifier.fillMaxSize())
+                    sidebarContent(Modifier.fillMaxSize(), closeDrawer)
                 }
             },
         ) {
@@ -315,25 +338,26 @@ private fun EditorContent(
             HorizontalDivider(thickness = 1.dp, color = colors.separator)
         }
         EditorPane(
-            activeTab           = uiState.openTabs.firstOrNull { it.isActive },
-            isEditorReady       = uiState.isEditorReady,
-            isPreviewVisible    = uiState.isPreviewVisible,
-            previewHtmlContent  = uiState.previewHtmlContent,
-            previewLayout       = s.previewLayout,
-            editorCommands      = ideViewModel.editorCommand,
-            onEditorReady       = ideViewModel::onEditorReady,
-            onEditorMessage     = ideViewModel::onEditorMessage,
-            onInsertText        = { text -> ideViewModel.sendEditorCommand(EditorOutbound.InsertText(text)) },
-            onExecuteCommand    = { cmd  -> ideViewModel.sendEditorCommand(EditorOutbound.ExecuteCommand(cmd)) },
-            showKeyboardToolbar = s.showKeyboardToolbar,
-            showSymbolBar       = s.showSymbolBar,
-            customSymbols       = s.customSymbols,
-            modifier            = Modifier.weight(1f).fillMaxWidth(),
+            activeTab               = uiState.openTabs.firstOrNull { it.isActive },
+            isEditorReady           = uiState.isEditorReady,
+            isPreviewVisible        = uiState.isPreviewVisible,
+            previewHtmlContent      = uiState.previewHtmlContent,
+            previewLayout           = s.previewLayout,
+            editorCommands          = ideViewModel.editorCommand,
+            onEditorReady           = ideViewModel::onEditorReady,
+            onEditorMessage         = ideViewModel::onEditorMessage,
+            onInsertText            = { text -> ideViewModel.sendEditorCommand(EditorOutbound.InsertText(text)) },
+            onExecuteCommand        = { cmd  -> ideViewModel.sendEditorCommand(EditorOutbound.ExecuteCommand(cmd)) },
+            onPasteFromClipboard    = ideViewModel::pasteFromKotlinClipboard,
+            showKeyboardToolbar     = s.showKeyboardToolbar,
+            showSymbolBar           = s.showSymbolBar,
+            customSymbols           = s.customSymbols,
+            modifier                = Modifier.weight(1f).fillMaxWidth(),
         )
     }
 }
 
-// ── Sidebar nav panel ─────────────────────────────────────────────────────────
+// ── Sidebar nav panel — compact icon row ──────────────────────────────────────
 
 @Composable
 private fun SidebarNavPanel(
@@ -343,38 +367,41 @@ private fun SidebarNavPanel(
     onNavigateSettings: () -> Unit,
 ) {
     val colors = LocalIdeColors.current
-    Column(
+    Row(
+        horizontalArrangement = Arrangement.SpaceEvenly,
+        verticalAlignment     = Alignment.CenterVertically,
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 4.dp),
+            .height(48.dp)
+            .background(colors.surface),
     ) {
-        SidebarNavButton(
-            icon      = Icons.Default.FolderOpen,
-            label     = "Projects",
-            selected  = currentScreen == AppScreen.PROJECTS,
-            onClick   = onNavigateProjects,
+        NavIconButton(
+            icon     = Icons.Default.FolderOpen,
+            label    = "Projects",
+            selected = currentScreen == AppScreen.PROJECTS,
+            onClick  = onNavigateProjects,
         )
-        SidebarNavButton(
-            icon      = Icons.Default.Code,
-            label     = "Editor",
-            selected  = currentScreen == AppScreen.EDITOR,
-            onClick   = onNavigateEditor,
+        NavIconButton(
+            icon     = Icons.Default.Code,
+            label    = "Editor",
+            selected = currentScreen == AppScreen.EDITOR,
+            onClick  = onNavigateEditor,
         )
-        SidebarNavButton(
-            icon     = Icons.Default.MergeType,
-            label    = "Git",
+        NavIconButton(
+            icon    = Icons.Default.MergeType,
+            label   = "Git",
             selected = false,
             enabled  = false,
             onClick  = {},
         )
-        SidebarNavButton(
-            icon     = Icons.Default.Terminal,
-            label    = "Terminal",
+        NavIconButton(
+            icon    = Icons.Default.Terminal,
+            label   = "Terminal",
             selected = false,
             enabled  = false,
             onClick  = {},
         )
-        SidebarNavButton(
+        NavIconButton(
             icon     = Icons.Default.Settings,
             label    = "Settings",
             selected = currentScreen == AppScreen.SETTINGS,
@@ -384,7 +411,7 @@ private fun SidebarNavPanel(
 }
 
 @Composable
-private fun SidebarNavButton(
+private fun NavIconButton(
     icon: ImageVector,
     label: String,
     selected: Boolean,
@@ -397,28 +424,16 @@ private fun SidebarNavButton(
         selected -> colors.accent
         else     -> colors.textSecondary
     }
-    val bg = if (selected) colors.activeHighlight else androidx.compose.ui.graphics.Color.Transparent
-
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(bg)
-            .height(44.dp)
-            .run { if (enabled) clickable(onClick = onClick) else this }
-            .padding(horizontal = 12.dp),
+    IconButton(
+        onClick  = onClick,
+        enabled  = enabled,
+        modifier = Modifier.size(48.dp),
     ) {
         Icon(
             imageVector        = icon,
             contentDescription = label,
             tint               = tint,
-            modifier           = Modifier.size(18.dp),
-        )
-        Spacer(Modifier.width(12.dp))
-        Text(
-            text  = label,
-            style = MaterialTheme.typography.bodyMedium,
-            color = tint,
+            modifier           = Modifier.size(22.dp),
         )
     }
 }
@@ -454,7 +469,6 @@ private fun FilesHeader(
             color    = colors.textDisabled,
             modifier = Modifier.weight(1f),
         )
-        // Search toggle
         IconButton(
             onClick  = if (isSearchVisible) onHideFileSearch else onShowFileSearch,
             modifier = Modifier.size(28.dp),
@@ -466,7 +480,6 @@ private fun FilesHeader(
                 modifier           = Modifier.size(16.dp),
             )
         }
-        // Reveal active file
         IconButton(onClick = onRevealActiveFile, modifier = Modifier.size(28.dp)) {
             Icon(
                 imageVector        = Icons.Default.MyLocation,
@@ -475,7 +488,6 @@ private fun FilesHeader(
                 modifier           = Modifier.size(16.dp),
             )
         }
-        // New file
         IconButton(onClick = onNewFile, modifier = Modifier.size(28.dp)) {
             Icon(
                 imageVector        = Icons.Default.Add,
@@ -484,7 +496,6 @@ private fun FilesHeader(
                 modifier           = Modifier.size(16.dp),
             )
         }
-        // New folder
         IconButton(onClick = onNewFolder, modifier = Modifier.size(28.dp)) {
             Icon(
                 imageVector        = Icons.Default.CreateNewFolder,
@@ -493,7 +504,6 @@ private fun FilesHeader(
                 modifier           = Modifier.size(16.dp),
             )
         }
-        // More menu
         Box {
             IconButton(onClick = { menuOpen = true }, modifier = Modifier.size(28.dp)) {
                 Icon(
@@ -540,6 +550,10 @@ private fun FilesHeader(
 }
 
 // ── Top app bar ────────────────────────────────────────────────────────────────
+//
+// Layout:
+//   Left:  Sidebar toggle (hamburger) | breadcrumb file path
+//   Right: Save (when autoSave off) | Find/Replace overflow | Run/Preview
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -555,20 +569,28 @@ private fun IdeTopBar(
     onReplace: () -> Unit,
     onTogglePreview: () -> Unit,
     onOpenFile: (String) -> Unit,
+    onRevealInTree: (String) -> Unit,
     onMenuClick: (() -> Unit)?,
 ) {
     val colors          = LocalIdeColors.current
     var overflowOpen    by remember { mutableStateOf(false) }
     var pathDropdownOpen by remember { mutableStateOf(false) }
 
-    val fileName = activeTab?.displayName ?: "Android IDE"
+    // Build breadcrumb path from file tree.
+    // pathTo returns a leading-slash path like "/src/pages/home.html".
     val filePath = when {
-        activeTab != null       -> fileTree.pathTo(activeTab.documentUri) ?: projectName
+        activeTab != null -> fileTree.pathTo(activeTab.documentUri)
+            ?: if (projectName.isNotEmpty()) "/$projectName/${activeTab.displayName}" else activeTab.displayName
         projectName.isNotEmpty() -> projectName
-        else                    -> ""
+        else -> "Android IDE"
     }
 
-    // Siblings for the path dropdown quick-switcher
+    // Ancestors of the active file (for breadcrumb tap → reveal in tree).
+    val ancestors = remember(activeTab?.documentUri, fileTree) {
+        activeTab?.documentUri?.let { fileTree.ancestorsOf(it) } ?: emptyList()
+    }
+
+    // Siblings at the same level (for file-switch dropdown).
     val siblings = remember(activeTab?.documentUri, fileTree) {
         activeTab?.documentUri?.let { uri ->
             fun List<FileNode>.findSiblings(target: String): List<FileNode>? {
@@ -586,46 +608,54 @@ private fun IdeTopBar(
 
     TopAppBar(
         title = {
-            Column(
-                verticalArrangement = Arrangement.Center,
-                modifier = Modifier.fillMaxHeight(),
-            ) {
+            // Show ONLY the file path — no separate file name headline.
+            // The path doubles as a tappable quick-switcher for siblings.
+            Box(modifier = Modifier.fillMaxHeight(), contentAlignment = Alignment.CenterStart) {
                 Text(
-                    text     = fileName,
-                    style    = MaterialTheme.typography.titleSmall,
+                    text     = filePath,
+                    style    = MaterialTheme.typography.bodyMedium,
                     color    = colors.textPrimary,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.run {
+                        if (siblings.isNotEmpty() || ancestors.isNotEmpty()) {
+                            clickable { pathDropdownOpen = true }
+                        } else this
+                    },
                 )
-                if (filePath.isNotEmpty()) {
-                    Box {
-                        Text(
-                            text     = filePath,
-                            style    = MaterialTheme.typography.bodySmall,
-                            color    = colors.textSecondary,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.run {
-                                if (siblings.isNotEmpty()) {
-                                    combinedClickableModifier(onClick = { pathDropdownOpen = true })
-                                } else this
-                            },
-                        )
-                        if (siblings.isNotEmpty()) {
-                            DropdownMenu(
-                                expanded         = pathDropdownOpen,
-                                onDismissRequest = { pathDropdownOpen = false },
-                            ) {
-                                siblings.forEach { sibling ->
-                                    DropdownMenuItem(
-                                        text    = { Text(sibling.displayName) },
-                                        onClick = {
-                                            pathDropdownOpen = false
-                                            if (!sibling.isDirectory) onOpenFile(sibling.documentUri)
-                                        },
-                                    )
-                                }
+                if (pathDropdownOpen) {
+                    DropdownMenu(
+                        expanded         = pathDropdownOpen,
+                        onDismissRequest = { pathDropdownOpen = false },
+                    ) {
+                        // Parent directories — navigating up the path hierarchy
+                        if (ancestors.isNotEmpty()) {
+                            ancestors.forEach { ancestor ->
+                                DropdownMenuItem(
+                                    text    = { Text("\u25B8 ${ancestor.displayName}/", color = colors.textSecondary) },
+                                    onClick = {
+                                        pathDropdownOpen = false
+                                        onRevealInTree(ancestor.documentUri)
+                                    },
+                                )
                             }
+                            HorizontalDivider()
+                        }
+                        // Siblings — switch to a file at the same level
+                        siblings.forEach { sibling ->
+                            DropdownMenuItem(
+                                text    = {
+                                    val isActive = sibling.documentUri == activeTab?.documentUri
+                                    Text(
+                                        sibling.displayName,
+                                        color = if (isActive) colors.accent else colors.textPrimary,
+                                    )
+                                },
+                                onClick = {
+                                    pathDropdownOpen = false
+                                    if (!sibling.isDirectory) onOpenFile(sibling.documentUri)
+                                },
+                            )
                         }
                     }
                 }
@@ -644,7 +674,7 @@ private fun IdeTopBar(
             }
         },
         actions = {
-            // Save (hidden when autoSave is on)
+            // Save — hidden when autoSave is on
             if (!autoSave) {
                 IconButton(onClick = onSave, enabled = activeTab != null) {
                     Icon(
@@ -654,7 +684,7 @@ private fun IdeTopBar(
                     )
                 }
             }
-            // Run / Preview — always visible, always enabled
+            // Run / Preview — always visible
             IconButton(onClick = onTogglePreview) {
                 Icon(
                     imageVector        = Icons.Default.PlayArrow,
@@ -662,7 +692,7 @@ private fun IdeTopBar(
                     tint               = if (isPreviewVisible) colors.accent else colors.textSecondary,
                 )
             }
-            // Overflow menu
+            // Overflow: Find, Find & Replace, Save As
             Box {
                 IconButton(onClick = { overflowOpen = true }) {
                     Icon(
@@ -676,11 +706,6 @@ private fun IdeTopBar(
                     onDismissRequest = { overflowOpen = false },
                 ) {
                     DropdownMenuItem(
-                        text        = { Text("Save As\u2026") },
-                        leadingIcon = { Icon(Icons.Default.SaveAs, contentDescription = null, modifier = Modifier.size(18.dp)) },
-                        onClick     = { overflowOpen = false; onSaveAs() },
-                    )
-                    DropdownMenuItem(
                         text        = { Text("Find") },
                         leadingIcon = { Icon(Icons.Default.FindInPage, contentDescription = null, modifier = Modifier.size(18.dp)) },
                         onClick     = { overflowOpen = false; onFind() },
@@ -690,6 +715,11 @@ private fun IdeTopBar(
                         leadingIcon = { Icon(Icons.Default.FindInPage, contentDescription = null, modifier = Modifier.size(18.dp)) },
                         onClick     = { overflowOpen = false; onReplace() },
                     )
+                    DropdownMenuItem(
+                        text        = { Text("Save As\u2026") },
+                        leadingIcon = { Icon(Icons.Default.SaveAs, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                        onClick     = { overflowOpen = false; onSaveAs() },
+                    )
                 }
             }
         },
@@ -698,13 +728,9 @@ private fun IdeTopBar(
             titleContentColor      = colors.textPrimary,
             actionIconContentColor = colors.textSecondary,
         ),
-        modifier = Modifier.height(52.dp),
+        modifier = Modifier.height(48.dp),
     )
 }
-
-// Simple clickable Modifier extension for Text path-dropdown trigger
-private fun Modifier.combinedClickableModifier(onClick: () -> Unit): Modifier =
-    this.clickable(onClick = onClick)
 
 // ── File operation dialogs ─────────────────────────────────────────────────────
 
@@ -716,42 +742,36 @@ private fun FileOpDialogHost(
     when (dialog) {
         is FileOpDialog.Rename -> RenameDialog(
             node      = dialog.node,
-            onConfirm = { name -> ideViewModel.renameNode(dialog.node, name) },
+            onConfirm = { ideViewModel.renameNode(dialog.node, it) },
             onDismiss = ideViewModel::dismissFileOpDialog,
         )
-        is FileOpDialog.Delete -> DeleteConfirmDialog(
+        is FileOpDialog.Delete -> DeleteDialog(
             node      = dialog.node,
             onConfirm = { ideViewModel.deleteNode(dialog.node) },
             onDismiss = ideViewModel::dismissFileOpDialog,
         )
-        is FileOpDialog.CreateFile -> NameInputDialog(
-            title        = "New File",
-            label        = "File name",
-            initialValue = "",
-            onConfirm    = { name -> ideViewModel.createFileInDirectory(dialog.parentNode, name) },
-            onDismiss    = ideViewModel::dismissFileOpDialog,
+        is FileOpDialog.CreateFile -> CreateFileDialog(
+            parent    = dialog.parent,
+            onConfirm = { ideViewModel.createFileInDirectory(dialog.parent, it) },
+            onDismiss = ideViewModel::dismissFileOpDialog,
         )
-        is FileOpDialog.CreateFolder -> NameInputDialog(
-            title        = "New Folder",
-            label        = "Folder name",
-            initialValue = "",
-            onConfirm    = { name -> ideViewModel.createFolderInDirectory(dialog.parentNode, name) },
-            onDismiss    = ideViewModel::dismissFileOpDialog,
+        is FileOpDialog.CreateFolder -> CreateFolderDialog(
+            parent    = dialog.parent,
+            onConfirm = { ideViewModel.createFolderInDirectory(dialog.parent, it) },
+            onDismiss = ideViewModel::dismissFileOpDialog,
         )
-        is FileOpDialog.Duplicate -> NameInputDialog(
-            title        = "Duplicate",
-            label        = "New name",
-            initialValue = "Copy of ${dialog.node.displayName}",
-            onConfirm    = { name -> ideViewModel.duplicateFile(dialog.node, name) },
-            onDismiss    = ideViewModel::dismissFileOpDialog,
+        is FileOpDialog.Duplicate -> DuplicateDialog(
+            node      = dialog.node,
+            onConfirm = { ideViewModel.duplicateFile(dialog.node, it) },
+            onDismiss = ideViewModel::dismissFileOpDialog,
         )
         is FileOpDialog.UnsavedClose -> UnsavedCloseDialog(
-            displayName = dialog.displayName,
-            onSaveClose = { ideViewModel.saveAndCloseTab(dialog.tabId) },
-            onDiscard   = { ideViewModel.confirmCloseTab(dialog.tabId) },
-            onCancel    = ideViewModel::dismissFileOpDialog,
+            fileName  = dialog.displayName,
+            onSave    = { ideViewModel.saveAndCloseTab(dialog.tabId) },
+            onDiscard = { ideViewModel.confirmCloseTab(dialog.tabId) },
+            onCancel  = ideViewModel::dismissFileOpDialog,
         )
-        null -> Unit
+        null -> {}
     }
 }
 
@@ -759,53 +779,108 @@ private fun FileOpDialogHost(
 
 @Composable
 private fun RenameDialog(node: FileNode, onConfirm: (String) -> Unit, onDismiss: () -> Unit) {
-    var text by remember { mutableStateOf(node.displayName) }
+    var name by remember { mutableStateOf(node.displayName) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title   = { Text("Rename") },
         text    = {
-            OutlinedTextField(value = text, onValueChange = { text = it }, label = { Text("New name") }, singleLine = true)
+            OutlinedTextField(
+                value         = name,
+                onValueChange = { name = it },
+                label         = { Text("New name") },
+                singleLine    = true,
+            )
         },
         confirmButton = {
-            TextButton(onClick = { if (text.isNotBlank()) onConfirm(text.trim()) }, enabled = text.isNotBlank()) { Text("Rename") }
+            TextButton(onClick = { if (name.isNotBlank()) onConfirm(name.trim()) }, enabled = name.isNotBlank()) {
+                Text("Rename")
+            }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }
 
 @Composable
-private fun DeleteConfirmDialog(node: FileNode, onConfirm: () -> Unit, onDismiss: () -> Unit) {
+private fun DeleteDialog(node: FileNode, onConfirm: () -> Unit, onDismiss: () -> Unit) {
     AlertDialog(
         onDismissRequest = onDismiss,
         title   = { Text("Delete") },
-        text    = {
-            Text("Permanently delete \u201c${node.displayName}\u201d?" +
-                if (node.isDirectory) "\n\nAll files inside will also be deleted." else "")
-        },
+        text    = { Text("Permanently delete \"${node.displayName}\"? This cannot be undone.") },
         confirmButton = {
-            TextButton(onClick = onConfirm) { Text("Delete", color = LocalIdeColors.current.error) }
+            TextButton(
+                onClick = onConfirm,
+                colors  = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
+            ) { Text("Delete") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }
 
 @Composable
-private fun NameInputDialog(
-    title: String,
-    label: String,
-    initialValue: String,
-    onConfirm: (String) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    var text by remember { mutableStateOf(initialValue) }
+private fun CreateFileDialog(parent: FileNode, onConfirm: (String) -> Unit, onDismiss: () -> Unit) {
+    var name by remember { mutableStateOf("") }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title   = { Text(title) },
+        title   = { Text("New File") },
         text    = {
-            OutlinedTextField(value = text, onValueChange = { text = it }, label = { Text(label) }, singleLine = true)
+            OutlinedTextField(
+                value         = name,
+                onValueChange = { name = it },
+                label         = { Text("File name") },
+                singleLine    = true,
+                placeholder   = { Text("main.kt") },
+            )
         },
         confirmButton = {
-            TextButton(onClick = { if (text.isNotBlank()) onConfirm(text.trim()) }, enabled = text.isNotBlank()) { Text("OK") }
+            TextButton(onClick = { if (name.isNotBlank()) onConfirm(name.trim()) }, enabled = name.isNotBlank()) {
+                Text("Create")
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+@Composable
+private fun CreateFolderDialog(parent: FileNode, onConfirm: (String) -> Unit, onDismiss: () -> Unit) {
+    var name by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title   = { Text("New Folder") },
+        text    = {
+            OutlinedTextField(
+                value         = name,
+                onValueChange = { name = it },
+                label         = { Text("Folder name") },
+                singleLine    = true,
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = { if (name.isNotBlank()) onConfirm(name.trim()) }, enabled = name.isNotBlank()) {
+                Text("Create")
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+@Composable
+private fun DuplicateDialog(node: FileNode, onConfirm: (String) -> Unit, onDismiss: () -> Unit) {
+    var name by remember { mutableStateOf("copy_${node.displayName}") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title   = { Text("Duplicate") },
+        text    = {
+            OutlinedTextField(
+                value         = name,
+                onValueChange = { name = it },
+                label         = { Text("New name") },
+                singleLine    = true,
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = { if (name.isNotBlank()) onConfirm(name.trim()) }, enabled = name.isNotBlank()) {
+                Text("Duplicate")
+            }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
@@ -813,20 +888,23 @@ private fun NameInputDialog(
 
 @Composable
 private fun UnsavedCloseDialog(
-    displayName: String,
-    onSaveClose: () -> Unit,
+    fileName: String,
+    onSave: () -> Unit,
     onDiscard: () -> Unit,
     onCancel: () -> Unit,
 ) {
     AlertDialog(
         onDismissRequest = onCancel,
         title   = { Text("Unsaved Changes") },
-        text    = { Text("\u201c$displayName\u201d has unsaved changes. Save before closing?") },
-        confirmButton   = { TextButton(onClick = onSaveClose) { Text("Save & Close") } },
-        dismissButton   = {
+        text    = { Text("\"$fileName\" has unsaved changes. Save before closing?") },
+        confirmButton = { TextButton(onClick = onSave) { Text("Save & Close") } },
+        dismissButton = {
             Row {
-                TextButton(onClick = onDiscard) { Text("Discard", color = LocalIdeColors.current.error) }
-                TextButton(onClick = onCancel)  { Text("Cancel") }
+                TextButton(
+                    onClick = onDiscard,
+                    colors  = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                ) { Text("Discard") }
+                TextButton(onClick = onCancel) { Text("Cancel") }
             }
         },
     )
@@ -842,29 +920,26 @@ private fun ExitConfirmDialog(
         onDismissRequest = onCancel,
         title   = { Text("Unsaved Changes") },
         text    = { Text("You have unsaved changes. Save all before exiting?") },
-        confirmButton   = { TextButton(onClick = onSaveAll) { Text("Save All & Exit") } },
-        dismissButton   = {
+        confirmButton = { TextButton(onClick = onSaveAll) { Text("Save All") } },
+        dismissButton = {
             Row {
-                TextButton(onClick = onDiscard) { Text("Discard", color = LocalIdeColors.current.error) }
-                TextButton(onClick = onCancel)  { Text("Cancel") }
+                TextButton(
+                    onClick = onDiscard,
+                    colors  = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                ) { Text("Discard All") }
+                TextButton(onClick = onCancel) { Text("Cancel") }
             }
         },
     )
 }
 
 @Composable
-private fun CrashRecoveryDialog(
-    count: Int,
-    onRestore: () -> Unit,
-    onDismiss: () -> Unit,
-) {
+private fun CrashRecoveryDialog(count: Int, onRestore: () -> Unit, onDismiss: () -> Unit) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title   = { Text("Restore Work?") },
-        text    = {
-            Text("$count unsaved file(s) were found from a previous session that ended unexpectedly. Restore them?")
-        },
-        confirmButton   = { TextButton(onClick = onRestore) { Text("Restore") } },
-        dismissButton   = { TextButton(onClick = onDismiss) { Text("Discard") } },
+        title   = { Text("Recover Unsaved Files") },
+        text    = { Text("$count file(s) were not saved before the previous session ended. Restore them?") },
+        confirmButton = { TextButton(onClick = onRestore) { Text("Restore") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Discard") } },
     )
 }

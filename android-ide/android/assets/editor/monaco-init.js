@@ -40,6 +40,14 @@
  *      retry to catch any pending Blink synchronization).
  *   4. In loadFile() after setModel(), with a requestAnimationFrame retry.
  *
+ * Performance notes:
+ *   - contextmenu disabled (Android long-press is handled natively).
+ *   - quickSuggestions disabled (Phase 4: LSP autocomplete).
+ *   - folding disabled (saves DOM nodes; re-enable with LSP in Phase 4).
+ *   - links disabled (reduces highlight passes on every edit).
+ *   - insertText uses editor.executeEdits for atomic paste with correct undo.
+ *   - Content-change debounce is 150 ms (was 300 ms) for more responsive dirty-marking.
+ *
  * Root cause of Monaco visibility defect on Android WebView (fixed here):
  *   DOM element offsetWidth / offsetHeight are driven by Blink's layout pass.
  *   That pass can complete AFTER Kotlin's evaluateJavascript fires, so those
@@ -69,14 +77,7 @@ function postToNative(msg) {
 
 /**
  * Apply the current viewport dimensions to Monaco.
- *
- * Uses window.innerWidth / window.innerHeight instead of
- * #editor-root.offsetWidth / offsetHeight.  Android WebView sets the
- * window.inner* values from the View's measured dimensions immediately,
- * whereas offsetWidth / offsetHeight depend on a completed Blink layout
- * pass that may not have run yet when evaluateJavascript fires.
- *
- * Safe to call before Monaco is ready — returns early if editor is null.
+ * Uses window.innerWidth / window.innerHeight (always correct on Android WebView).
  */
 function applyLayout() {
   if (!editor) return;
@@ -87,10 +88,8 @@ function applyLayout() {
   }
 }
 
-// Register early so resize events during Monaco loading are not missed.
 window.addEventListener('resize', function () {
   applyLayout();
-  // One additional pass after the browser finishes reflow.
   requestAnimationFrame(applyLayout);
 });
 
@@ -101,7 +100,7 @@ window.addEventListener('resize', function () {
 var editor = null;          // monaco.editor.IStandaloneCodeEditor
 var currentPath = null;     // SAF URI of the currently loaded file
 var contentChangeTimer = null;
-var CONTENT_CHANGE_DEBOUNCE_MS = 300;
+var CONTENT_CHANGE_DEBOUNCE_MS = 150;   // faster dirty-marking (was 300)
 
 // ---------------------------------------------------------------------------
 // Monaco loader
@@ -172,10 +171,37 @@ require(['vs/editor/editor.main'], function () {
       verticalScrollbarSize: 10,
       horizontalScrollbarSize: 10,
     },
+
+    // ── Performance settings for Android WebView ─────────────────────────
+    // Context menu disabled: Android handles long-press natively; the WebView
+    // context menu is slow and duplicates functionality.
+    contextmenu: false,
+
+    // Quick suggestions (autocomplete) disabled until Phase 4 (LSP).
+    // Suggestion computation on every keystroke adds latency on low-RAM devices.
+    quickSuggestions: false,
+    suggestOnTriggerCharacters: false,
+    acceptSuggestionOnCommit: 'off',
+    snippetSuggestions: 'none',
+    parameterHints: { enabled: false },
+
+    // Code folding uses a significant number of DOM nodes. Disabled until Phase 4.
+    folding: false,
+
+    // Link detection runs a regex over every visible line on every edit.
+    links: false,
+
+    // Render validation decorations only when a language server is present (Phase 4).
+    renderValidationDecorations: 'off',
+
+    // Smooth caret animation adds GPU compositing overhead on Android.
+    cursorSmoothCaretAnimation: 'off',
+
+    // Bracket pair colorization is purely cosmetic — disable for less render work.
+    'bracketPairColorization.enabled': false,
   });
 
-  // Initial layout — best-effort. The authoritative trigger is the forceLayout
-  // message from Kotlin, sent after Compose has measured the WebView.
+  // Initial layout — best-effort.
   applyLayout();
   requestAnimationFrame(applyLayout);
 
@@ -206,6 +232,20 @@ require(['vs/editor/editor.main'], function () {
     if (!currentPath) return;
     postToNative({ type: 'fileSaved', path: currentPath });
   });
+
+  // --- Tap-to-focus: clicking anywhere in the editor focuses the Monaco
+  //     textarea so the soft keyboard appears immediately on Android. ---
+  var editorDom = editor.getDomNode();
+  if (editorDom) {
+    editorDom.addEventListener('click', function () {
+      editor.focus();
+    }, { passive: true });
+
+    editorDom.addEventListener('touchend', function () {
+      // Small delay allows the tap selection to settle before requesting focus.
+      setTimeout(function () { editor.focus(); }, 50);
+    }, { passive: true });
+  }
 
   // Hide loading indicator and signal readiness to Kotlin
   document.getElementById('loading').classList.add('hidden');
@@ -281,15 +321,12 @@ window.androidIDE = {
         break;
 
       case 'forceLayout':
-        // Apply layout immediately using window.innerWidth/Height (always correct),
-        // then schedule a follow-up pass after Blink's next paint cycle.
         applyLayout();
         requestAnimationFrame(applyLayout);
         break;
 
       case 'executeCommand':
         if (!editor || !msg.command) break;
-        // Named special cases handled before Monaco's action/trigger lookup
         if (msg.command === 'focusEditor') {
           editor.focus();
           break;
@@ -298,21 +335,32 @@ window.androidIDE = {
           window.androidIDE.blurEditor();
           break;
         }
-        // Try as an editor action first (async; e.g. 'editor.action.indentLines')
         var action = editor.getAction(msg.command);
         if (action) {
           action.run().catch(function (e) {
             console.warn('[androidIDE] executeCommand action failed:', msg.command, e);
           });
         } else {
-          // Fall back to keyboard handler trigger (sync; e.g. 'cursorLeft', 'undo')
           editor.trigger('keyboard', msg.command, null);
         }
         break;
 
       case 'insertText':
         if (editor && msg.text) {
-          editor.trigger('keyboard', 'type', { text: msg.text });
+          // Use executeEdits for correct undo/redo behaviour and proper
+          // indentation handling after multi-line pastes. This is more
+          // correct than editor.trigger('keyboard', 'type', ...) which
+          // bypasses Monaco's paste normalisation.
+          var sel = editor.getSelection();
+          editor.executeEdits('paste', [{
+            range: sel,
+            text:  msg.text,
+            forceMoveMarkers: true,
+          }]);
+          // Reveal the cursor after paste so the viewport follows the insertion.
+          requestAnimationFrame(function () {
+            editor.revealPositionInCenterIfOutsideViewport(editor.getPosition());
+          });
         }
         break;
 
@@ -337,7 +385,6 @@ window.androidIDE = {
 
   /**
    * Blur the Monaco textarea to dismiss the soft keyboard on Android.
-   * The Monaco editor's hidden <textarea> is the focused element when typing.
    */
   blurEditor: function () {
     if (editor) {
@@ -371,6 +418,8 @@ function loadFile(path, content, language) {
   var model       = monaco.editor.getModel(uri);
 
   if (model) {
+    // Update content atomically using executeEdits to preserve undo history
+    // and avoid visual distortion that setValue() can cause on large files.
     if (model.getValue() !== content) {
       model.pushEditOperations([], [{
         range: model.getFullModelRange(),
@@ -385,11 +434,13 @@ function loadFile(path, content, language) {
   }
 
   editor.setModel(model);
-
-  // Apply layout using window.innerWidth/innerHeight (always correct on Android
-  // WebView), then schedule a follow-up pass after Blink's next paint cycle.
-  applyLayout();
-  editor.focus();
   editor.setScrollPosition({ scrollTop: 0, scrollLeft: 0 });
+
+  // Apply layout using window.innerWidth/innerHeight, then schedule a
+  // follow-up pass after Blink's next paint cycle.
+  applyLayout();
   requestAnimationFrame(applyLayout);
+
+  // Focus the editor so the soft keyboard can appear immediately on tap.
+  editor.focus();
 }

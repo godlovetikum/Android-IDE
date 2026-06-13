@@ -10,6 +10,11 @@
 //   • Multi-selection mode with exit button
 //   • .git folder filtering (controlled by hideGitFolder)
 //   • File name search panel (controlled by isSearchVisible)
+//
+// Clipboard:
+//   clipboardItems: List<FileNode> replaces the old clipboard: FileNode? to support
+//   multi-item cut/copy from multi-select mode. The paste menu item is shown
+//   whenever the clipboard is non-empty.
 
 package dev.androidide.ui.components
 
@@ -46,7 +51,8 @@ import dev.androidide.viewmodel.model.FileSearchResult
 fun FileTreePanel(
     // ── Data ──────────────────────────────────────────────────────────────
     nodes: List<FileNode>,
-    clipboard: FileNode?,
+    /** Files/folders pending paste. Empty = clipboard is clear. */
+    clipboardItems: List<FileNode>,
     clipboardIsCut: Boolean,
     projectName: String,
     activeTabDocumentUri: String?,
@@ -188,7 +194,7 @@ fun FileTreePanel(
                     FileTreeRow(
                         node                     = node,
                         depth                    = depth,
-                        clipboard                = clipboard,
+                        clipboardItems           = clipboardItems,
                         clipboardIsCut           = clipboardIsCut,
                         isActive                 = node.documentUri == activeTabDocumentUri,
                         isSelected               = node.documentUri in selectedUris,
@@ -342,7 +348,7 @@ private fun RootProjectNode(
 private fun FileTreeRow(
     node: FileNode,
     depth: Int,
-    clipboard: FileNode?,
+    clipboardItems: List<FileNode>,
     clipboardIsCut: Boolean,
     isActive: Boolean,
     isSelected: Boolean,
@@ -364,10 +370,13 @@ private fun FileTreeRow(
     val colors   = LocalIdeColors.current
     var menuOpen by remember { mutableStateOf(false) }
 
+    // Node is "pending paste" if it appears in the clipboard.
+    val isInClipboard = clipboardItems.any { it.documentUri == node.documentUri }
+
     val rowBackground = when {
-        isSelected -> colors.activeHighlight
-        isActive   -> colors.activeHighlight.copy(alpha = 0.6f)
-        else       -> Color.Transparent
+        isSelected     -> colors.activeHighlight
+        isActive       -> colors.activeHighlight.copy(alpha = 0.6f)
+        else           -> Color.Transparent
     }
 
     Row(
@@ -421,16 +430,26 @@ private fun FileTreeRow(
                 else                                -> Icons.Default.InsertDriveFile
             },
             contentDescription = null,
-            tint               = if (node.isDirectory) colors.accentLight else colors.textSecondary,
-            modifier           = Modifier.size(14.dp),
+            // Dim clipboard items to signal they are pending cut/copy.
+            tint = when {
+                isInClipboard && clipboardIsCut -> colors.textDisabled
+                isInClipboard                   -> colors.accent.copy(alpha = 0.5f)
+                node.isDirectory                -> colors.accentLight
+                else                            -> colors.textSecondary
+            },
+            modifier = Modifier.size(14.dp),
         )
 
         Spacer(Modifier.width(4.dp))
 
         Text(
-            text     = node.displayName,
-            style    = MaterialTheme.typography.bodyMedium,
-            color    = if (isActive) colors.accent else colors.textPrimary,
+            text  = node.displayName,
+            style = MaterialTheme.typography.bodyMedium,
+            color = when {
+                isInClipboard && clipboardIsCut -> colors.textDisabled
+                isActive                        -> colors.accent
+                else                            -> colors.textPrimary
+            },
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
@@ -454,6 +473,8 @@ private fun FileTreeRow(
                 expanded         = menuOpen,
                 onDismissRequest = { menuOpen = false },
             ) {
+                val hasClipboard = clipboardItems.isNotEmpty()
+
                 if (node.isDirectory) {
                     // ── Folder menu ──────────────────────────────────────
                     DropdownMenuItem(
@@ -490,11 +511,16 @@ private fun FileTreeRow(
                         text    = { Text("Cut") },
                         onClick = { menuOpen = false; onCutNode(node) },
                     )
-                    if (clipboard != null) {
+                    if (hasClipboard) {
                         DropdownMenuItem(
                             text = {
-                                val op = if (clipboardIsCut) "Move" else "Paste Copy of"
-                                Text("$op \u201c${clipboard.displayName}\u201d here")
+                                val verb  = if (clipboardIsCut) "Move" else "Copy"
+                                val count = clipboardItems.size
+                                if (count == 1) {
+                                    Text("$verb \u201c${clipboardItems[0].displayName}\u201d here")
+                                } else {
+                                    Text("$verb $count items here")
+                                }
                             },
                             onClick = { menuOpen = false; onPasteInto(node) },
                         )

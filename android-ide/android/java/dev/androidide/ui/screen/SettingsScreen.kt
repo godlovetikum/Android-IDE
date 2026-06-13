@@ -1,7 +1,8 @@
 // android-ide/android/java/dev/androidide/ui/screen/SettingsScreen.kt
 //
 // Settings screen — app theme, editor theme, preview layout, editor display,
-// volume key controls, and Phase 2 feature placeholders.
+// volume key controls, UI font scaling, default project directory, and Phase 2
+// feature placeholders.
 
 package dev.androidide.ui.screen
 
@@ -16,7 +17,7 @@ import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.MergeType
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -81,6 +82,69 @@ fun SettingsScreen(
                 }
             }
 
+            // ── UI Font Scale ───────────────────────────────────────────────
+            SectionHeader("UI Font Size")
+            Card(colors = CardDefaults.cardColors(containerColor = colors.surface)) {
+                Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text  = "Text Scale",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = colors.textPrimary,
+                            )
+                            val pct = (s.uiFontScale * 100).toInt()
+                            Text(
+                                text  = "$pct% — affects all UI text (file tree, menus, dialogs)",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = colors.textSecondary,
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Slider(
+                        value         = s.uiFontScale,
+                        onValueChange = { v ->
+                            val snapped = (v / EditorSettings.UI_FONT_SCALE_STEP).toInt() *
+                                EditorSettings.UI_FONT_SCALE_STEP
+                            ideViewModel.setEditorSettings(
+                                s.copy(uiFontScale = snapped.coerceIn(
+                                    EditorSettings.UI_FONT_SCALE_MIN,
+                                    EditorSettings.UI_FONT_SCALE_MAX,
+                                ))
+                            )
+                        },
+                        valueRange    = EditorSettings.UI_FONT_SCALE_MIN..EditorSettings.UI_FONT_SCALE_MAX,
+                        steps         = ((EditorSettings.UI_FONT_SCALE_MAX - EditorSettings.UI_FONT_SCALE_MIN) /
+                            EditorSettings.UI_FONT_SCALE_STEP).toInt() - 1,
+                        modifier      = Modifier.fillMaxWidth(),
+                    )
+                    Row(
+                        modifier              = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Text(
+                            text  = "${(EditorSettings.UI_FONT_SCALE_MIN * 100).toInt()}%",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = colors.textDisabled,
+                        )
+                        TextButton(
+                            onClick  = { ideViewModel.setEditorSettings(s.copy(uiFontScale = 1.0f)) },
+                            enabled  = s.uiFontScale != 1.0f,
+                            modifier = Modifier.height(28.dp),
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                        ) {
+                            Text("Reset", style = MaterialTheme.typography.labelSmall)
+                        }
+                        Text(
+                            text  = "${(EditorSettings.UI_FONT_SCALE_MAX * 100).toInt()}%",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = colors.textDisabled,
+                        )
+                    }
+                }
+            }
+
             // ── Editor Theme ───────────────────────────────────────────────
             SectionHeader("Editor Theme")
             Card(colors = CardDefaults.cardColors(containerColor = colors.surface)) {
@@ -121,7 +185,7 @@ fun SettingsScreen(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text("Font Size", color = colors.textPrimary, style = MaterialTheme.typography.bodyMedium)
-                            Text("${s.fontSize} sp", color = colors.textSecondary, style = MaterialTheme.typography.bodySmall)
+                            Text("${s.fontSize} sp (Monaco editor only)", color = colors.textSecondary, style = MaterialTheme.typography.bodySmall)
                         }
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             OutlinedButton(
@@ -196,7 +260,7 @@ fun SettingsScreen(
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text("Auto Save", color = colors.textPrimary, style = MaterialTheme.typography.bodyMedium)
-                            Text("Save on every edit (300 ms debounce)", color = colors.textSecondary, style = MaterialTheme.typography.bodySmall)
+                            Text("Save on every edit (150 ms debounce)", color = colors.textSecondary, style = MaterialTheme.typography.bodySmall)
                         }
                         Switch(checked = s.autoSave, onCheckedChange = { ideViewModel.setEditorSettings(s.copy(autoSave = it)) })
                     }
@@ -257,6 +321,74 @@ fun SettingsScreen(
                         }
                         Switch(checked = s.hideGitFolder, onCheckedChange = { ideViewModel.setEditorSettings(s.copy(hideGitFolder = it)) })
                     }
+                }
+            }
+
+            // ── Project Storage ────────────────────────────────────────────
+            SectionHeader("Project Storage")
+            Card(colors = CardDefaults.cardColors(containerColor = colors.surface)) {
+                Column(modifier = Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text  = "Default Project Directory",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = colors.textPrimary,
+                    )
+                    Text(
+                        text  = "New blank projects are created here. Leave empty to use app-private storage (no special permissions required).",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = colors.textSecondary,
+                    )
+                    Spacer(Modifier.height(4.dp))
+
+                    val dir = s.defaultProjectDir
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier          = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(
+                            text     = if (dir.isEmpty()) "(app-private storage)" else dir,
+                            style    = MaterialTheme.typography.bodySmall,
+                            color    = if (dir.isEmpty()) colors.textDisabled else colors.textPrimary,
+                            modifier = Modifier.weight(1f),
+                            maxLines = 2,
+                        )
+                        if (dir.isNotEmpty()) {
+                            Spacer(Modifier.width(8.dp))
+                            OutlinedButton(
+                                onClick        = { ideViewModel.setEditorSettings(s.copy(defaultProjectDir = "")) },
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                                modifier       = Modifier.height(32.dp),
+                            ) {
+                                Text("Reset", style = MaterialTheme.typography.labelSmall)
+                            }
+                        }
+                    }
+                    Text(
+                        text  = "To change this directory, edit it here directly or use the \"New Project\" dialog in the Projects screen.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = colors.textDisabled,
+                    )
+                    var editPath by remember { mutableStateOf(dir) }
+                    LaunchedEffect(dir) { editPath = dir }
+                    OutlinedTextField(
+                        value         = editPath,
+                        onValueChange = { editPath = it },
+                        modifier      = Modifier.fillMaxWidth(),
+                        label         = { Text("Path", style = MaterialTheme.typography.bodySmall) },
+                        singleLine    = true,
+                        textStyle     = MaterialTheme.typography.bodySmall,
+                        placeholder   = { Text("/storage/emulated/0/Projects", style = MaterialTheme.typography.bodySmall) },
+                        trailingIcon  = {
+                            if (editPath != dir) {
+                                TextButton(
+                                    onClick        = { ideViewModel.setEditorSettings(s.copy(defaultProjectDir = editPath.trim())) },
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                                ) {
+                                    Text("Apply", style = MaterialTheme.typography.labelSmall)
+                                }
+                            }
+                        },
+                    )
                 }
             }
 

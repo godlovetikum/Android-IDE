@@ -5,6 +5,11 @@
 // Owns all ActivityResultLaunchers so they are registered at the root
 // composable level and shared with child screens via callbacks.
 //
+// Global font scaling:
+//   uiFontScale from EditorSettings is applied here via LocalDensity so it
+//   affects ALL text in the application — file tree, menus, settings, dialogs,
+//   toolbar labels, and any other UI chrome — not just the Monaco editor.
+//
 // IdeScreen is always the root screen — no bottom NavigationBar.
 // Navigation between Projects / Editor / Settings is handled by the sidebar.
 
@@ -18,6 +23,8 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
 import androidx.lifecycle.viewmodel.compose.viewModel
 import dev.androidide.ui.theme.AndroidIDETheme
 import dev.androidide.viewmodel.IdeViewModel
@@ -76,27 +83,41 @@ fun AppRoot(ideViewModel: IdeViewModel = viewModel()) {
         importTargetDirUri = ""
     }
 
+    // ── Global font scale — applied to ALL Compose text ────────────────────
+    // uiFontScale multiplies LocalDensity.fontScale so that every Text in the
+    // entire composition is scaled: file tree rows, menu items, settings labels,
+    // dialogs, toolbar labels, and status bar text.
+    val baseDensity  = LocalDensity.current
+    val uiFontScale  = uiState.editorSettings.uiFontScale
+
     AndroidIDETheme(appTheme = uiState.appTheme) {
-        Box(modifier = Modifier.fillMaxSize().systemBarsPadding()) {
-            // IdeScreen is always the root — sidebar handles all navigation.
-            IdeScreen(
-                ideViewModel        = ideViewModel,
-                uiState             = uiState,
-                onOpenProjectFolder = { openProjectLauncher.launch(null) },
-                onCreateBlankProject = {
-                    createProjectName       = "MyProject"
-                    showCreateProjectDialog = true
-                },
-                onSaveAs            = { saveAsLauncher.launch(activeTabName) },
-                onImportFilesAt     = { node ->
-                    importTargetDirUri = node.documentUri
-                    importFilesLauncher.launch(arrayOf("*/*"))
-                },
-                onImportFilesAtRoot = {
-                    importTargetDirUri = uiState.projectRootUri ?: ""
-                    if (importTargetDirUri.isNotEmpty()) importFilesLauncher.launch(arrayOf("*/*"))
-                },
-            )
+        CompositionLocalProvider(
+            LocalDensity provides Density(
+                density   = baseDensity.density,
+                fontScale = uiFontScale,
+            ),
+        ) {
+            Box(modifier = Modifier.fillMaxSize().systemBarsPadding()) {
+                // IdeScreen is always the root — sidebar handles all navigation.
+                IdeScreen(
+                    ideViewModel        = ideViewModel,
+                    uiState             = uiState,
+                    onOpenProjectFolder = { openProjectLauncher.launch(null) },
+                    onCreateBlankProject = {
+                        createProjectName       = "MyProject"
+                        showCreateProjectDialog = true
+                    },
+                    onSaveAs            = { saveAsLauncher.launch(activeTabName) },
+                    onImportFilesAt     = { node ->
+                        importTargetDirUri = node.documentUri
+                        importFilesLauncher.launch(arrayOf("*/*"))
+                    },
+                    onImportFilesAtRoot = {
+                        importTargetDirUri = uiState.projectRootUri ?: ""
+                        if (importTargetDirUri.isNotEmpty()) importFilesLauncher.launch(arrayOf("*/*"))
+                    },
+                )
+            }
         }
     }
 
@@ -106,13 +127,24 @@ fun AppRoot(ideViewModel: IdeViewModel = viewModel()) {
             onDismissRequest = { showCreateProjectDialog = false },
             title   = { Text("New Project") },
             text    = {
-                OutlinedTextField(
-                    value         = createProjectName,
-                    onValueChange = { createProjectName = it },
-                    label         = { Text("Project name") },
-                    singleLine    = true,
-                    placeholder   = { Text("MyProject") },
-                )
+                Column {
+                    OutlinedTextField(
+                        value         = createProjectName,
+                        onValueChange = { createProjectName = it },
+                        label         = { Text("Project name") },
+                        singleLine    = true,
+                        placeholder   = { Text("MyProject") },
+                    )
+                    val dir = uiState.editorSettings.defaultProjectDir
+                    if (dir.isNotEmpty()) {
+                        Text(
+                            text  = "Location: $dir",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = androidx.compose.ui.Modifier.padding(top = 8.dp),
+                        )
+                    }
+                }
             },
             confirmButton = {
                 TextButton(

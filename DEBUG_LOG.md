@@ -176,3 +176,145 @@ Future contributors must be able to understand previous mistakes without redisco
 **Rationale:** On mobile developer tools, bottom tabs consume vertical space needed for code. A sidebar keeps navigation reachable via one tap from any screen while maximising editor real estate. The drawer gesture (`gesturesEnabled = false`) prevents accidental opens from editor swipes.
 
 Last updated: 2026-06-13
+
+---
+
+### BUG-009 — Sidebar nav panel consumed 220dp vertical space, leaving too little for the file tree
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-06-13 |
+| **Subsystem** | ui |
+| **Issue** | The sidebar navigation panel was a vertical Column of 5 labelled `NavigationDrawerItem` rows (~44dp each = ~220dp total), leaving only ~40% of the sidebar height for the file tree on a typical 800dp-tall phone. |
+| **Root Cause** | `NavigationDrawerItem` includes a label + optional badge — it's designed for drawers where each item is a primary destination with its own row. Using 5 such items for a utility nav strip wastes space. |
+| **Files Modified** | `ui/IdeScreen.kt` |
+| **Solution** | Replace the vertical item list with a single `Row` of 5 `IconButton`s, each 48×48dp (standard touch target). The entire nav strip is now exactly 48dp tall. Labels are provided only as `contentDescription` for accessibility; a long-press tooltip is available via `TooltipBox`. |
+| **Prevention** | Use a compact icon-only row for utility navigation when vertical space is scarce. `NavigationDrawerItem` with text labels is appropriate for a bottom NavBar but wastes height in a sidebar. |
+
+---
+
+### BUG-010 — File open in sidebar did not close the drawer, leaving editor hidden
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-06-13 |
+| **Subsystem** | ui |
+| **Issue** | After tapping a file in the sidebar drawer on a narrow screen, the drawer remained open. The editor was technically visible behind it, but the drawer covered the full screen. The user had to swipe or tap the backdrop to dismiss it. |
+| **Root Cause** | `onFileClick` in `fileTreePanelContent` called only `ideViewModel.openFile()` + `navigateTo(EDITOR)`. The drawer's coroutine scope was not reachable from inside `FileTreePanel`. |
+| **Files Modified** | `ui/IdeScreen.kt` |
+| **Solution** | Threaded a `onCloseDrawer: (() -> Unit)?` lambda through the sidebar content lambda. On narrow screens, `closeDrawer` is wired to `scope.launch { drawerState.close() }`. On file open and file search select, `onCloseDrawer?.invoke()` is called immediately after `openFile`. On wide screens the lambda is null (no drawer to close). |
+| **Prevention** | Any action inside a modal drawer that should "complete and dismiss" must close the drawer as part of the same event handler. |
+
+---
+
+### BUG-011 — Top app bar showed file name as a headline title + path as a separate subtitle, wasting toolbar height
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-06-13 |
+| **Subsystem** | ui |
+| **Issue** | `IdeTopBar` showed two text items: a large file-name headline and a smaller path sub-headline. Combined with action icons they pushed the bar to 64dp+, leaving less space for the editor. |
+| **Root Cause** | Copied the default `CenterAlignedTopAppBar` template that places a large title. |
+| **Files Modified** | `ui/IdeScreen.kt` |
+| **Solution** | Single `Text` item in the `title` slot showing only the full path (e.g. `/src/pages/home.html`). The path is tappable: a dropdown lists ancestor directories (to reveal in tree) and sibling files (quick switch). Top bar height reduced to 48dp. |
+| **Prevention** | In a code editor, the file path is the title. Don't show a separate headline and subtitle — one single-line path item is sufficient. |
+
+---
+
+### BUG-012 — Keyboard toolbar used horizontalScroll, hiding most actions off-screen
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-06-13 |
+| **Subsystem** | ui |
+| **Issue** | The keyboard toolbar placed 13 icon buttons in a single `Row` wrapped in `horizontalScroll`. On a 360dp-wide phone, only ~5 icons were visible without scrolling. Users had to scroll right to find Cut, Copy, Paste. The scroll position was not persisted across keyboard shows/hides. |
+| **Root Cause** | `horizontalScroll` was used as a quick way to fit all actions without designing a second page. |
+| **Files Modified** | `ui/components/EditorPane.kt` |
+| **Solution** | Replace `horizontalScroll` + single `Row` with a 2-page `HorizontalPager`. Page 1: navigation + undo/redo (7 actions). Page 2: clipboard + select + keyboard control (6 actions). Page indicator dots below. Icons 24dp, touch targets 44dp. All actions visible without horizontal scrolling. |
+| **Prevention** | Never use horizontal scroll for a toolbar. Users won't discover hidden items. Use paging or fewer items. |
+
+---
+
+### BUG-013 — Monaco WebView did not request focus on tap, so keyboard did not appear
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-06-13 |
+| **Subsystem** | editor |
+| **Issue** | Tapping the Monaco editor area did not reliably summon the soft keyboard. The WebView had focus but had not been configured as focusable in touch mode, so Android's IME did not activate. |
+| **Root Cause** | `isFocusableInTouchMode` was not set on the WebView. Without it, the view can receive focus from code but not from a touch event, which is what the IME observes. |
+| **Files Modified** | `ui/components/EditorPane.kt`, `assets/editor/monaco-init.js` |
+| **Solution** | Set `isFocusable = true` and `isFocusableInTouchMode = true` on the WebView. Added `setOnTouchListener` that calls `requestFocus()`. On the JS side, added `click` + `touchend` listeners on the editor DOM node that call `editor.focus()` (with a 50ms delay on touchend to let tap-selection settle). |
+| **Prevention** | Any editable WebView that should accept keyboard input on Android must have `isFocusableInTouchMode = true`. |
+
+---
+
+### BUG-014 — Paste from keyboard toolbar used WebView clipboard API (slow, permission-gated)
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-06-13 |
+| **Subsystem** | editor |
+| **Issue** | The toolbar "Paste" button called `editor.action.clipboardPasteAction` in Monaco. On Android, this invokes the WebView's clipboard API, which requires user permission on API 29+ and is noticeably slow (100–300ms latency before text appears). |
+| **Root Cause** | Monaco's built-in paste action uses the browser clipboard API (`navigator.clipboard.readText`), which Android WebView implements through a permission system. |
+| **Files Modified** | `ui/components/EditorPane.kt`, `viewmodel/IdeViewModel.kt` |
+| **Solution** | Added `onPasteFromClipboard` callback to `KeyboardToolbar`. When the Paste button is tapped, Kotlin reads directly from `android.content.ClipboardManager` (no permission needed) and sends the text as an `insertText` command. JS uses `editor.executeEdits` (atomic, preserves undo history) instead of `editor.trigger('keyboard', 'type', ...)`. |
+| **Prevention** | Always read the Android clipboard from Kotlin when in a Compose/WebView hybrid. Never rely on the WebView's `navigator.clipboard` API on Android — it's slow and requires runtime permissions. |
+
+---
+
+### BUG-015 — `clipboardItems` renamed from `clipboard: FileNode?` — multi-item cut/copy not supported
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-06-13 |
+| **Subsystem** | data |
+| **Issue** | `IdeUiState.clipboard: FileNode?` stored only one file/folder at a time. Multi-select mode allowed selecting several items, but Cut/Copy from multi-select silently operated only on the single tapped node. |
+| **Root Cause** | Original clipboard field was designed for single-item operations. |
+| **Files Modified** | `viewmodel/model/IdeUiState.kt`, `viewmodel/IdeViewModel.kt`, `ui/components/FileTreePanel.kt`, `ui/IdeScreen.kt` |
+| **Solution** | Renamed `clipboard: FileNode?` → `clipboardItems: List<FileNode>`. `copyFileNode` / `cutFileNode` now check `isMultiSelectMode` and, if active, collect all `selectedUris` into `clipboardItems`. Multi-select mode exits automatically after copy/cut so the user can navigate to a destination. `pasteFileNode` iterates over all items. `FileTreePanel` shows a count in the paste menu item ("Move 3 items here"). |
+| **Prevention** | Design clipboard state as a list from the beginning, even when only one item is initially supported. |
+
+---
+
+## Architectural Corrections
+
+### AC-001 — Tech Stack Migration: Slint/Rust → Kotlin/Jetpack Compose
+
+**Date:** 2026-06-12
+
+**Original design:**
+- Rust application with Slint UI framework
+- JNI bridge for SAF and WebView
+- NativeActivity entry point via `android_main()`
+- `IDEActivity extends NativeActivity` to layer Monaco WebView above native Surface
+
+**Migrated design:**
+- Kotlin + Jetpack Compose
+- `ComponentActivity.setContent {}` entry point
+- Monaco WebView as a Compose `AndroidView` inside `EditorPane.kt`
+- SAF accessed directly via `ContentResolver` in `SafRepository.kt`
+- No JNI, no NDK, no native code
+
+**Consequence:** All Rust/Slint source files removed. Build pipeline simplified to standard `./gradlew assembleRelease`. See TECH_STACK_MIGRATION.md for the full migration record.
+
+---
+
+### AC-002 — Navigation refactor: bottom NavigationBar removed, sidebar-only navigation
+
+**Date:** 2026-06-13
+
+**Original design:**
+- Bottom `NavigationBar` with Projects / Editor / Settings tabs
+- `AppRoot` switched between `ProjectsScreen`, `IdeScreen`, `SettingsScreen` at the top level
+- Sidebar existed only within `IdeScreen` (editor screen only)
+
+**New design:**
+- `IdeScreen` is always the root screen — `AppRoot` renders nothing else
+- A persistent sidebar (always accessible via drawer or permanent column on wide screens) handles all navigation
+- Navigation buttons in the sidebar: Projects, Editor, Git (Phase 2), Terminal (Phase 2), Settings
+- No bottom `NavigationBar`
+
+**Rationale:** On mobile developer tools, bottom tabs consume vertical space needed for code. A sidebar keeps navigation reachable via one tap from any screen while maximising editor real estate. The drawer gesture (`gesturesEnabled = false`) prevents accidental opens from editor swipes.
+
+Last updated: 2026-06-13

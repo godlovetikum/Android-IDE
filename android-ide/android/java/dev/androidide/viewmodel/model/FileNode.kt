@@ -87,20 +87,36 @@ fun List<FileNode>.sortedForTree(): List<FileNode> =
         .map { if (it.isDirectory) it.copy(children = it.children.sortedForTree()) else it }
 
 /**
- * Return the display-name path to [documentUri] relative to the tree roots.
- *
- * Example: for a tree rooted at "src", calling pathTo("src/main/Main.kt")
- * returns "src/main/Main.kt".
+ * Return the display-name path to [documentUri] relative to the tree roots,
+ * always prefixed with "/" so paths look like "/src/pages/home.html".
  *
  * Returns null if [documentUri] is not found in the tree.
  * The [prefix] parameter is used internally for recursion.
  */
 fun List<FileNode>.pathTo(documentUri: String, prefix: String = ""): String? {
     for (node in this) {
-        val current = if (prefix.isEmpty()) node.displayName else "$prefix/${node.displayName}"
+        val current = "$prefix/${node.displayName}"
         if (node.documentUri == documentUri) return current
         if (node.isDirectory) {
             val found = node.children.pathTo(documentUri, current)
+            if (found != null) return found
+        }
+    }
+    return null
+}
+
+/**
+ * Return the list of [FileNode] objects on the path from a tree root down to
+ * (but not including) the node with [documentUri], in root-first order.
+ *
+ * Used by breadcrumb path navigation so each ancestor segment has a known URI.
+ * Returns an empty list if the node is a root-level entry or is not found.
+ */
+fun List<FileNode>.ancestorsOf(documentUri: String, acc: List<FileNode> = emptyList()): List<FileNode>? {
+    for (node in this) {
+        if (node.documentUri == documentUri) return acc
+        if (node.isDirectory) {
+            val found = node.children.ancestorsOf(documentUri, acc + node)
             if (found != null) return found
         }
     }

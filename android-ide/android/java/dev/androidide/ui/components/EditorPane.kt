@@ -4,29 +4,40 @@
 //
 // Layout: Column
 //   Content area (editor ± preview) — weight(1f)
-//   SymbolBar    (optional, above keyboard toolbar)
-//   KeyboardToolbar (optional, 13 fixed-action icon buttons)
+//   SymbolBar    (optional, above keyboard toolbar) — horizontally scrollable symbol chips
+//   KeyboardToolbar (optional, 2-page pager of icon buttons, NO horizontal scroll)
+//
+// Keyboard toolbar pages:
+//   Page 1: Indent, ↑, ↓, ←, →, Undo, Redo       (7 actions)
+//   Page 2: Cut, Copy, Paste*, Select All, Show KB, Hide KB  (6 actions)
+//
+// *Paste reads from the Android ClipboardManager via Kotlin (onPasteFromClipboard)
+//  instead of the WebView clipboard API, which is slow and permission-gated.
 //
 // Preview crash safety:
 //   WebViewClient.onRenderProcessGone returns true to prevent app termination.
 //   Preview content is loaded via loadDataWithBaseURL (no URL-length limit issues
 //   that affect data: scheme URLs with large base64 payloads).
 //
-// Architecture decisions:
-//   Both WebViews are wrapped in remember{} so they survive recompositions.
-//   editor commands are driven via evaluateJavascript() by EditorBridge.
+// Editor focus:
+//   isFocusable / isFocusableInTouchMode are set on the WebView so tapping the
+//   editor requests native focus, making the soft keyboard appear immediately.
 
 package dev.androidide.ui.components
 
 import android.annotation.SuppressLint
+import android.view.View
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ContentCopy
@@ -64,7 +75,7 @@ import kotlinx.coroutines.flow.SharedFlow
 // JavascriptInterface: EditorBridge.onMessage IS annotated @JavascriptInterface; lint produces a
 //   false-positive through the generic remember<T>{}.
 @SuppressLint("SetJavaScriptEnabled", "JavascriptInterface", "WebViewClientOnReceivedSslError")
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun EditorPane(
     activeTab: EditorTab?,
@@ -77,6 +88,7 @@ fun EditorPane(
     onEditorMessage: (EditorInbound) -> Unit,
     onInsertText: (String) -> Unit,
     onExecuteCommand: (String) -> Unit,
+    onPasteFromClipboard: () -> Unit,
     showKeyboardToolbar: Boolean = true,
     showSymbolBar: Boolean = true,
     customSymbols: List<String> = EditorSettings.DEFAULT_SYMBOLS,
@@ -96,6 +108,11 @@ fun EditorPane(
     // ── Monaco WebView — created once, never recreated ─────────────────────
     val editorWebView = remember {
         WebView(context).apply {
+            // isFocusable / isFocusableInTouchMode: required so that tapping the
+            // editor requests native focus and the soft keyboard appears immediately.
+            isFocusable              = true
+            isFocusableInTouchMode   = true
+            isClickable              = true
             settings.apply {
                 javaScriptEnabled                = true
                 domStorageEnabled                = true
@@ -111,6 +128,10 @@ fun EditorPane(
             addJavascriptInterface(editorBridge, "AndroidBridge")
             webChromeClient = WebChromeClient()
             webViewClient   = WebViewClient()
+            setOnTouchListener { v, _ ->
+                v.requestFocus()
+                false   // do not consume the event — let WebView handle it
+            }
             loadUrl("file:///android_asset/editor/index.html")
         }
     }
@@ -128,11 +149,10 @@ fun EditorPane(
                     request: WebResourceRequest,
                     error: WebResourceError,
                 ) {
-                    // Errors in the render thread are non-fatal here; the WebView still displays.
+                    // Non-fatal render errors are handled gracefully via the crash guard below.
                 }
 
-                // API 26+ — returns true to tell Android we handled the crash gracefully.
-                // Without this override, a render process crash terminates the entire app.
+                // API 26+ — returning true prevents app termination on render crash (BUG-006).
                 override fun onRenderProcessGone(
                     view: WebView,
                     detail: android.webkit.RenderProcessGoneDetail,
@@ -166,8 +186,6 @@ fun EditorPane(
     }
 
     // ── Load preview content when it changes ───────────────────────────────
-    // Uses loadDataWithBaseURL instead of loadUrl("data:...") to avoid the
-    // URL-length limit that causes crashes with large base64-encoded pages.
     LaunchedEffect(previewHtmlContent, isPreviewVisible) {
         if (isPreviewVisible && previewHtmlContent.isNotEmpty()) {
             previewCrashed = false
@@ -185,7 +203,6 @@ fun EditorPane(
         }
     }
 
-    // ── Orientation detection for responsive preview layout ─────────────────
     val configuration = LocalConfiguration.current
     val isLandscape   = configuration.screenWidthDp > configuration.screenHeightDp
 
@@ -196,7 +213,7 @@ fun EditorPane(
             !isPreviewVisible -> {
                 AndroidView(
                     factory  = { editorWebView },
-                    update   = { /* no-op — all updates via evaluateJavascript */ },
+                    update   = { },
                     modifier = Modifier.weight(1f).fillMaxWidth(),
                 )
             }
@@ -263,18 +280,16 @@ fun EditorPane(
         // Symbol shortcut bar — shown above keyboard toolbar when a tab is active
         if (activeTab != null && showSymbolBar) {
             HorizontalDivider(thickness = 1.dp, color = colors.separator)
-            SymbolBar(
-                symbols         = customSymbols,
-                onInsertSymbol  = onInsertText,
-            )
+            SymbolBar(symbols = customSymbols, onInsertSymbol = onInsertText)
         }
 
-        // Keyboard toolbar — 13 fixed-action icon buttons
+        // Keyboard toolbar — 2-page pager, no horizontal scrolling
         if (activeTab != null && showKeyboardToolbar) {
             HorizontalDivider(thickness = 1.dp, color = colors.separator)
             KeyboardToolbar(
-                onInsertText     = onInsertText,
-                onExecuteCommand = onExecuteCommand,
+                onInsertText         = onInsertText,
+                onExecuteCommand     = onExecuteCommand,
+                onPasteFromClipboard = onPasteFromClipboard,
             )
         }
     }
@@ -331,55 +346,92 @@ private fun SymbolBar(
     }
 }
 
-// ── Keyboard toolbar ──────────────────────────────────────────────────────────
+// ── Keyboard toolbar — 2-page HorizontalPager (no horizontal scroll) ──────────
 
 private data class KeyboardAction(
     val icon: ImageVector,
     val label: String,
-    val commandId: String,
+    val commandId: String?,         // null for special Kotlin-side actions
+    val isPaste: Boolean = false,   // triggers onPasteFromClipboard instead of executeCommand
 )
 
-private val KEYBOARD_TOOLBAR_ACTIONS = listOf(
-    KeyboardAction(Icons.Default.FormatIndentIncrease, "Indent",      "editor.action.indentLines"),
-    KeyboardAction(Icons.Default.KeyboardArrowUp,      "Cursor Up",   "cursorUp"),
-    KeyboardAction(Icons.Default.KeyboardArrowDown,    "Cursor Down", "cursorDown"),
-    KeyboardAction(Icons.Default.KeyboardArrowLeft,    "Cursor Left", "cursorLeft"),
-    KeyboardAction(Icons.Default.KeyboardArrowRight,   "Cursor Right","cursorRight"),
-    KeyboardAction(Icons.Default.Undo,                 "Undo",        "undo"),
-    KeyboardAction(Icons.Default.Redo,                 "Redo",        "redo"),
-    KeyboardAction(Icons.Default.ContentCut,           "Cut",         "editor.action.clipboardCutAction"),
-    KeyboardAction(Icons.Default.ContentCopy,          "Copy",        "editor.action.clipboardCopyAction"),
-    KeyboardAction(Icons.Default.ContentPaste,         "Paste",       "editor.action.clipboardPasteAction"),
-    KeyboardAction(Icons.Default.SelectAll,            "Select All",  "editor.action.selectAll"),
-    KeyboardAction(Icons.Default.Keyboard,             "Show Keyboard","focusEditor"),
-    KeyboardAction(Icons.Default.KeyboardHide,         "Hide Keyboard","blurEditor"),
+// Page 1: navigation + undo/redo (7 actions)
+private val TOOLBAR_PAGE_1 = listOf(
+    KeyboardAction(Icons.Default.FormatIndentIncrease, "Indent",       "editor.action.indentLines"),
+    KeyboardAction(Icons.Default.KeyboardArrowUp,      "Cursor Up",    "cursorUp"),
+    KeyboardAction(Icons.Default.KeyboardArrowDown,    "Cursor Down",  "cursorDown"),
+    KeyboardAction(Icons.Default.KeyboardArrowLeft,    "Cursor Left",  "cursorLeft"),
+    KeyboardAction(Icons.Default.KeyboardArrowRight,   "Cursor Right", "cursorRight"),
+    KeyboardAction(Icons.Default.Undo,                 "Undo",         "undo"),
+    KeyboardAction(Icons.Default.Redo,                 "Redo",         "redo"),
 )
 
-@OptIn(ExperimentalMaterial3Api::class)
+// Page 2: clipboard + selection + keyboard (6 actions)
+private val TOOLBAR_PAGE_2 = listOf(
+    KeyboardAction(Icons.Default.ContentCut,    "Cut",          "editor.action.clipboardCutAction"),
+    KeyboardAction(Icons.Default.ContentCopy,   "Copy",         "editor.action.clipboardCopyAction"),
+    KeyboardAction(Icons.Default.ContentPaste,  "Paste",        null, isPaste = true),
+    KeyboardAction(Icons.Default.SelectAll,     "Select All",   "editor.action.selectAll"),
+    KeyboardAction(Icons.Default.Keyboard,      "Show Keyboard","focusEditor"),
+    KeyboardAction(Icons.Default.KeyboardHide,  "Hide Keyboard","blurEditor"),
+)
+
+private val TOOLBAR_PAGES = listOf(TOOLBAR_PAGE_1, TOOLBAR_PAGE_2)
+
+@OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
 private fun KeyboardToolbar(
     onInsertText: (String) -> Unit,
     onExecuteCommand: (String) -> Unit,
+    onPasteFromClipboard: () -> Unit,
 ) {
-    val colors = LocalIdeColors.current
-    Row(
+    val colors     = LocalIdeColors.current
+    val pagerState = rememberPagerState(pageCount = { TOOLBAR_PAGES.size })
+
+    Column(
         modifier = Modifier
-            .height(40.dp)
             .fillMaxWidth()
-            .background(colors.surface)
-            .horizontalScroll(rememberScrollState()),
-        verticalAlignment = Alignment.CenterVertically,
+            .background(colors.surface),
     ) {
-        Spacer(Modifier.width(4.dp))
-        KEYBOARD_TOOLBAR_ACTIONS.forEach { action ->
-            ToolbarIconButton(
-                icon             = action.icon,
-                label            = action.label,
-                onExecuteCommand = onExecuteCommand,
-                commandId        = action.commandId,
-            )
+        HorizontalPager(state = pagerState) { pageIndex ->
+            Row(
+                modifier = Modifier
+                    .height(48.dp)
+                    .fillMaxWidth(),
+                verticalAlignment     = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceEvenly,
+            ) {
+                TOOLBAR_PAGES[pageIndex].forEach { action ->
+                    ToolbarIconButton(
+                        icon             = action.icon,
+                        label            = action.label,
+                        isPaste          = action.isPaste,
+                        commandId        = action.commandId,
+                        onExecuteCommand = onExecuteCommand,
+                        onPaste          = onPasteFromClipboard,
+                    )
+                }
+            }
         }
-        Spacer(Modifier.width(4.dp))
+        // Page indicator dots
+        Row(
+            modifier              = Modifier.fillMaxWidth().height(12.dp),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment     = Alignment.CenterVertically,
+        ) {
+            repeat(TOOLBAR_PAGES.size) { idx ->
+                val selected = pagerState.currentPage == idx
+                Box(
+                    modifier = Modifier
+                        .padding(horizontal = 3.dp)
+                        .size(if (selected) 6.dp else 4.dp)
+                        .background(
+                            color = if (selected) colors.accent else colors.textDisabled,
+                            shape = androidx.compose.foundation.shape.CircleShape,
+                        ),
+                )
+            }
+        }
     }
 }
 
@@ -388,10 +440,12 @@ private fun KeyboardToolbar(
 private fun ToolbarIconButton(
     icon: ImageVector,
     label: String,
-    commandId: String,
+    commandId: String?,
+    isPaste: Boolean,
     onExecuteCommand: (String) -> Unit,
+    onPaste: () -> Unit,
 ) {
-    val colors = LocalIdeColors.current
+    val colors       = LocalIdeColors.current
     val tooltipState = rememberTooltipState()
     TooltipBox(
         positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
@@ -403,14 +457,19 @@ private fun ToolbarIconButton(
         state = tooltipState,
     ) {
         IconButton(
-            onClick  = { onExecuteCommand(commandId) },
-            modifier = Modifier.size(40.dp),
+            onClick  = {
+                when {
+                    isPaste    -> onPaste()
+                    commandId != null -> onExecuteCommand(commandId)
+                }
+            },
+            modifier = Modifier.size(44.dp),
         ) {
             Icon(
                 imageVector        = icon,
                 contentDescription = label,
                 tint               = colors.textSecondary,
-                modifier           = Modifier.size(18.dp),
+                modifier           = Modifier.size(24.dp),
             )
         }
     }

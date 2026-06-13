@@ -1,16 +1,17 @@
 name: Android IDE Build
 
-# Migration note (2026-06-12):
-# Rewrote from Slint/Rust + cargo-ndk pipeline to pure Kotlin/Jetpack Compose.
-# Removed: Rust toolchain install, cargo cache, NDK install, cargo-ndk,
-#          "cargo ndk build" steps, GTK/WebKit2GTK system deps, x86 Rust job.
-# Preserved: JDK 17, Android SDK setup, Gradle wrapper generation,
-#            Monaco bundling (scripts/fetch-monaco.sh), APK upload.
+# Build pipeline rules:
+#   Debug APK  — built automatically on push, PR, and manual dispatch.
+#   Release APK — built ONLY on manual workflow_dispatch.
+#                 Release builds must never run automatically.
 #
 # APK signing:
 #   Debug APK:   always signed with the auto-generated Android SDK debug keystore.
 #   Release APK: signed with a production keystore when the four KEYSTORE_*
 #                secrets are configured in repo Settings → Secrets → Actions.
+#                Base64 decoding is performed inside GitHub Actions (echo | base64 -d).
+#                Gradle consumes the already-decoded keystore file on disk — Gradle
+#                must not perform any base64 decoding operations.
 #                Falls back to the debug keystore automatically when secrets are
 #                absent (fork PRs, local dev — still produces an installable APK).
 #
@@ -34,7 +35,7 @@ env:
 
 jobs:
   # ─────────────────────────────────────────────────────────────
-  # Job 1: Lint + Debug APK (fast feedback on every push/PR)
+  # Job 1: Lint + Debug APK (runs on every push / PR / dispatch)
   # ─────────────────────────────────────────────────────────────
   check:
     name: Lint & Debug Build
@@ -72,7 +73,7 @@ jobs:
       - name: Lint
         working-directory: android-ide/android
         run: ./gradlew lint
-        
+
       # The debug keystore is used as a fallback when KEYSTORE_BASE64 is not set.
       # It is created automatically by `assembleDebug` in the `check` job, but
       # this job runs on a fresh runner — create it here if absent.
@@ -90,7 +91,7 @@ jobs:
           else
             echo "Debug keystore already exists."
           fi
-          
+
       - name: Build debug APK
         working-directory: android-ide/android
         run: ./gradlew assembleDebug
@@ -103,11 +104,13 @@ jobs:
           retention-days: 7
 
   # ─────────────────────────────────────────────────────────────
-  # Job 2: Release APK (runs after lint+debug passes)
+  # Job 2: Release APK — MANUAL DISPATCH ONLY
+  # Release builds must never run automatically on push or PR.
   # ─────────────────────────────────────────────────────────────
   build-release:
     name: Build Release APK
     runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
     needs: check
     steps:
       - uses: actions/checkout@v4
@@ -137,9 +140,6 @@ jobs:
         working-directory: android-ide
         run: bash scripts/fetch-monaco.sh
 
-      # The debug keystore is used as a fallback when KEYSTORE_BASE64 is not set.
-      # It is created automatically by `assembleDebug` in the `check` job, but
-      # this job runs on a fresh runner — create it here if absent.
       - name: Ensure debug keystore exists (fallback signing)
         run: |
           mkdir -p ~/.android
@@ -155,7 +155,6 @@ jobs:
             echo "Debug keystore already exists."
           fi
 
-      # Show which signing path will be taken so the build log is unambiguous.
       - name: Report signing mode
         run: |
           if [ -n "${{ secrets.KEYSTORE_BASE64 }}" ]; then
@@ -165,7 +164,9 @@ jobs:
             echo "To enable release signing, add KEYSTORE_BASE64, KEYSTORE_PASSWORD,"
             echo "KEY_ALIAS, and KEY_PASSWORD to repo Settings → Secrets → Actions."
           fi
-          
+
+      # Base64 decoding is done here in the shell — Gradle reads the
+      # already-decoded keystore file and must not do any decoding itself.
       - name: Restore release keystore
         working-directory: android-ide/android
         env:
@@ -177,10 +178,7 @@ jobs:
           else
             echo "No release keystore configured. Using debug signing fallback."
           fi
-          
-      # Pass the four signing secrets as environment variables.
-      # Gradle's signingConfigs.release block reads these at configuration time.
-      # When any variable is empty/absent, Gradle falls back to the debug keystore.
+
       - name: Build release APK
         working-directory: android-ide/android
         env:

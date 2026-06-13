@@ -31,6 +31,7 @@ import dev.androidide.viewmodel.model.FileNode
 import dev.androidide.viewmodel.model.FileOpDialog
 import dev.androidide.viewmodel.model.FileSearchResult
 import dev.androidide.viewmodel.model.IdeUiState
+import dev.androidide.viewmodel.model.ancestorsOf
 import dev.androidide.viewmodel.model.findNode
 import dev.androidide.viewmodel.model.pathTo
 import dev.androidide.viewmodel.model.removeNode
@@ -150,13 +151,13 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update { it.copy(recoveryEntries = emptyList()) }
     }
 
-    // ── Session ────────────────────────────────────────────────────────────
+    // ── Session — per-project scoped ────────────────────────────────────────
 
     private fun restoreSession() {
         val projectUri = sessionRepository.getProjectUri() ?: return
-        val tabUris    = sessionRepository.getOpenTabUris()
-        val activeUri  = sessionRepository.getActiveTabUri()
         val screenName = sessionRepository.getScreenName()
+        val tabUris    = sessionRepository.getOpenTabUrisForProject(projectUri)
+        val activeUri  = sessionRepository.getActiveTabUriForProject(projectUri)
 
         val screen = screenName?.let { runCatching { AppScreen.valueOf(it) }.getOrNull() }
         if (screen != null) _uiState.update { it.copy(currentScreen = screen) }
@@ -174,6 +175,20 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
             openTabUris  = state.openTabs.filter { !it.isBlank }.map { it.documentUri },
             activeTabUri = state.openTabs.firstOrNull { it.isActive && !it.isBlank }?.documentUri,
             screenName   = state.currentScreen.name,
+        )
+    }
+
+    /**
+     * Save the current project's workspace state before switching to another project.
+     * Called internally whenever openProjectInternal runs with a different URI.
+     */
+    private fun saveCurrentProjectSession() {
+        val state = _uiState.value
+        val projectUri = state.projectRootUri ?: return
+        sessionRepository.saveTabsForProject(
+            projectUri   = projectUri,
+            openTabUris  = state.openTabs.filter { !it.isBlank }.map { it.documentUri },
+            activeTabUri = state.openTabs.firstOrNull { it.isActive && !it.isBlank }?.documentUri,
         )
     }
 
@@ -241,36 +256,82 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
     // ── Project management ─────────────────────────────────────────────────
 
     fun openProject(treeUriString: String) {
+        saveCurrentProjectSession()
         viewModelScope.launch { openProjectInternal(treeUriString) }
     }
 
     private suspend fun openProjectInternal(treeUriString: String) {
         val name = extractProjectName(treeUriString)
-        _uiState.update { it.copy(projectName = name, projectRootUri = treeUriString, currentScreen = AppScreen.EDITOR) }
+        // Close tabs from the previous project; restore tabs for the new project.
+        _uiState.value.openTabs.forEach { pendingContent.remove(it.id) }
+        _uiState.update { it.copy(
+            projectName    = name,
+            projectRootUri = treeUriString,
+            currentScreen  = AppScreen.EDITOR,
+            openTabs       = emptyList(),
+            activeTabId    = null,
+            isEditorReady  = false,
+        ) }
         projectRepository.upsert(Project(name = name, uri = treeUriString))
         _uiState.update { it.copy(recentProjects = projectRepository.getAll()) }
         val nodes = safRepository.listChildren(treeUriString)
         _uiState.update { it.copy(fileTree = nodes.sortedForTree()) }
+
+        // Restore this project's workspace state.
+        val tabUris   = sessionRepository.getOpenTabUrisForProject(treeUriString)
+        val activeUri = sessionRepository.getActiveTabUriForProject(treeUriString)
+        tabUris.forEach { uri ->
+            openFileInternal(uri, markActive = uri == activeUri)
+        }
     }
 
     /**
-     * Create a new blank project folder in the app's workspace directory with the given [name],
-     * then open it as the active project.
+     * Create a new blank project folder using [defaultProjectDir] from settings
+     * (falling back to the app-specific external storage directory).
      *
-     * No folder picker is shown — the project is created automatically under
-     * [getExternalFilesDir("Projects")], falling back to [filesDir]/projects if external storage
-     * is unavailable. No special runtime permission is required for these app-owned locations.
+     * The new project gets a minimal `package.json` template so it behaves like
+     * a Node project out of the box.
      */
     fun createBlankProject(name: String) {
         val trimmed = name.trim().ifEmpty { "Project" }
-        val projectsDir = getApplication<Application>().getExternalFilesDir("Projects")
-            ?: File(getApplication<Application>().filesDir, "projects")
+        val settings = _uiState.value.editorSettings
+
+        // Determine the parent directory.
+        val projectsDir = when {
+            settings.defaultProjectDir.isNotEmpty() -> File(settings.defaultProjectDir)
+            else -> getApplication<Application>().getExternalFilesDir("Projects")
+                ?: File(getApplication<Application>().filesDir, "projects")
+        }
         projectsDir.mkdirs()
+
         val newDir = File(projectsDir, trimmed)
         if (!newDir.exists() && !newDir.mkdirs()) {
             _uiState.update { it.copy(statusMessage = "Could not create project folder") }
             return
         }
+
+        // Write a minimal package.json template.
+        val packageJson = File(newDir, "package.json")
+        if (!packageJson.exists()) {
+            packageJson.writeText(
+                """{
+  "name": "${trimmed.lowercase().replace(Regex("[^a-z0-9-]"), "-")}",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
+}
+""",
+                Charsets.UTF_8,
+            )
+        }
+
+        saveCurrentProjectSession()
         val newDirUri = Uri.fromFile(newDir).toString()
         viewModelScope.launch { openProjectInternal(newDirUri) }
     }
@@ -295,6 +356,7 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun closeCurrentProject() {
+        saveCurrentProjectSession()
         _uiState.value.openTabs.forEach { pendingContent.remove(it.id) }
         _uiState.update { state ->
             state.copy(
@@ -333,55 +395,96 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    // ── File tree clipboard ─────────────────────────────────────────────────
+    // ── File tree clipboard — supports multi-item ───────────────────────────
 
-    fun copyFileNode(node: FileNode) = _uiState.update { it.copy(clipboard = node, clipboardIsCut = false) }
-    fun cutFileNode(node: FileNode)  = _uiState.update { it.copy(clipboard = node, clipboardIsCut = true) }
-    fun clearClipboard()             = _uiState.update { it.copy(clipboard = null, clipboardIsCut = false) }
+    /**
+     * Copy [node] (or all selected nodes if in multi-select mode) to the clipboard.
+     * Exits multi-select mode immediately so the user can navigate to a destination.
+     */
+    fun copyFileNode(node: FileNode) {
+        val state = _uiState.value
+        val items = if (state.isMultiSelectMode && state.selectedUris.isNotEmpty()) {
+            state.selectedUris.mapNotNull { state.fileTree.findNode(it) }
+        } else {
+            listOf(node)
+        }
+        _uiState.update { it.copy(
+            clipboardItems  = items,
+            clipboardIsCut  = false,
+            isMultiSelectMode = false,
+            selectedUris    = emptySet(),
+        ) }
+    }
 
+    /**
+     * Cut [node] (or all selected nodes if in multi-select mode) to the clipboard.
+     * Exits multi-select mode immediately so the user can navigate to a destination.
+     */
+    fun cutFileNode(node: FileNode) {
+        val state = _uiState.value
+        val items = if (state.isMultiSelectMode && state.selectedUris.isNotEmpty()) {
+            state.selectedUris.mapNotNull { state.fileTree.findNode(it) }
+        } else {
+            listOf(node)
+        }
+        _uiState.update { it.copy(
+            clipboardItems  = items,
+            clipboardIsCut  = true,
+            isMultiSelectMode = false,
+            selectedUris    = emptySet(),
+        ) }
+    }
+
+    fun clearClipboard() = _uiState.update { it.copy(clipboardItems = emptyList(), clipboardIsCut = false) }
+
+    /**
+     * Paste all items in [clipboardItems] into [targetDir].
+     * Supports cut (move) and copy. Works within a project, across projects,
+     * into the project root, and into nested folders.
+     */
     fun pasteFileNode(targetDir: FileNode) {
-        val source = _uiState.value.clipboard ?: return
+        val items  = _uiState.value.clipboardItems
         val isCut  = _uiState.value.clipboardIsCut
+        if (items.isEmpty()) return
         viewModelScope.launch {
-            if (isCut) {
-                val sourceParent = source.parentDocumentUri ?: run {
-                    _uiState.update { it.copy(statusMessage = "Move failed: unknown parent") }
-                    return@launch
-                }
-                val newUri = safRepository.moveDocument(source.documentUri, sourceParent, targetDir.documentUri) ?: run {
-                    _uiState.update { it.copy(statusMessage = "Move failed") }
-                    return@launch
-                }
-                _uiState.update { state ->
-                    state.copy(
-                        openTabs       = state.openTabs.map { tab ->
+            var successCount = 0
+            items.forEach { source ->
+                if (isCut) {
+                    val sourceParent = source.parentDocumentUri ?: run {
+                        _uiState.update { it.copy(statusMessage = "Move failed: unknown parent for ${source.displayName}") }
+                        return@forEach
+                    }
+                    val newUri = safRepository.moveDocument(source.documentUri, sourceParent, targetDir.documentUri) ?: run {
+                        _uiState.update { it.copy(statusMessage = "Move failed: ${source.displayName}") }
+                        return@forEach
+                    }
+                    _uiState.update { state ->
+                        state.copy(openTabs = state.openTabs.map { tab ->
                             if (tab.documentUri == source.documentUri) tab.copy(documentUri = newUri) else tab
-                        },
-                        clipboard      = null,
-                        clipboardIsCut = false,
-                        statusMessage  = "Moved ${source.displayName}",
-                    )
+                        })
+                    }
+                    refreshDirectory(sourceParent)
+                    successCount++
+                } else {
+                    safRepository.copyDocument(source.documentUri, targetDir.documentUri) ?: run {
+                        _uiState.update { it.copy(statusMessage = "Copy failed: ${source.displayName}") }
+                        return@forEach
+                    }
+                    successCount++
                 }
-                refreshDirectory(sourceParent)
-                refreshDirectory(targetDir.documentUri)
-            } else {
-                safRepository.copyDocument(source.documentUri, targetDir.documentUri) ?: run {
-                    _uiState.update { it.copy(statusMessage = "Copy failed") }
-                    return@launch
-                }
-                refreshDirectory(targetDir.documentUri)
-                _uiState.update { it.copy(statusMessage = "Copied ${source.displayName}") }
             }
+            refreshDirectory(targetDir.documentUri)
+            val verb = if (isCut) "Moved" else "Copied"
+            _uiState.update { it.copy(
+                clipboardItems = emptyList(),
+                clipboardIsCut = false,
+                statusMessage  = "$verb $successCount item(s)",
+            ) }
         }
     }
 
     // ── Import / Export ────────────────────────────────────────────────────
 
-    /**
-     * Copy each file from [sourceUris] into [targetDirUri].
-     * Requires read permission on each source URI (caller must have called
-     * ContentResolver.takePersistableUriPermission before invoking this).
-     */
     fun importFiles(targetDirUri: String, sourceUris: List<String>) {
         viewModelScope.launch {
             var count = 0
@@ -492,10 +595,6 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
         tab?.let { sendEditorCommand(EditorOutbound.CloseTab(it.documentUri)) }
     }
 
-    /**
-     * Close with dirty-check.
-     * Shows UnsavedClose confirmation if the tab has unsaved changes.
-     */
     fun closeTabSafe(tabId: String) {
         val tab = _uiState.value.openTabs.find { it.id == tabId } ?: return
         if (tab.isDirty) {
@@ -505,7 +604,6 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** User chose "Save & Close" in the UnsavedClose dialog. */
     fun saveAndCloseTab(tabId: String) {
         val tab     = _uiState.value.openTabs.find { it.id == tabId } ?: run {
             _uiState.update { it.copy(fileOpDialog = null) }
@@ -524,7 +622,6 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** User chose "Discard" in the UnsavedClose dialog. */
     fun confirmCloseTab(tabId: String) {
         _uiState.update { it.copy(fileOpDialog = null) }
         closeTab(tabId)
@@ -679,11 +776,6 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
 
     // ── Preview / Run ──────────────────────────────────────────────────────
 
-    /**
-     * Toggle the preview panel for the active tab.
-     * Supports HTML (raw render) and Markdown (converted to styled HTML).
-     * Other file types show a status message.
-     */
     fun togglePreview() {
         val active = _uiState.value.openTabs.firstOrNull { it.isActive }
         if (active == null) {
@@ -718,10 +810,6 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update { it.copy(isSearchVisible = false, fileSearchQuery = "", fileSearchResults = emptyList()) }
     }
 
-    /**
-     * Search file names (not content) in the loaded file tree.
-     * Results are updated synchronously — no I/O.
-     */
     fun searchFiles(query: String) {
         _uiState.update { it.copy(fileSearchQuery = query) }
         if (query.isBlank()) {
@@ -736,7 +824,7 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
                     results += FileSearchResult(
                         documentUri  = node.documentUri,
                         displayName  = node.displayName,
-                        relativePath = nodePath,
+                        relativePath = "/$nodePath",
                     )
                 }
                 if (node.isDirectory && node.children.isNotEmpty()) {
@@ -750,11 +838,6 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
 
     // ── Reveal active file ─────────────────────────────────────────────────
 
-    /**
-     * Expand all parent directories in the file tree that contain the active file,
-     * making the active file visible in the sidebar.
-     * Only operates on the currently-loaded (non-lazy) subtree.
-     */
     fun revealActiveFile() {
         val activeUri = _uiState.value.openTabs.firstOrNull { it.isActive }?.documentUri ?: run {
             _uiState.update { it.copy(statusMessage = "No active file") }
@@ -803,7 +886,7 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
     fun toggleNodeSelection(uri: String) {
         _uiState.update { state ->
             val updated = if (uri in state.selectedUris) state.selectedUris - uri else state.selectedUris + uri
-            // Enter selection mode automatically on first selection.
+            // Enter selection mode automatically on first selection; exit when all deselected.
             state.copy(isMultiSelectMode = updated.isNotEmpty(), selectedUris = updated)
         }
     }
@@ -811,25 +894,41 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
     // ── Clipboard path copy ────────────────────────────────────────────────
 
     /**
-     * Copy the display path of [documentUri] to the system clipboard.
-     * Uses the tree's relative path if the node is loaded; falls back to the raw URI.
+     * Copy the absolute display path of [documentUri] to the system clipboard.
+     * Paths always start with "/" (e.g. "/src/pages/home.html").
      */
     fun copyPathToClipboard(documentUri: String) {
-        val path = _uiState.value.fileTree.pathTo(documentUri) ?: Uri.decode(documentUri)
+        val path = _uiState.value.fileTree.pathTo(documentUri)
+            ?: run {
+                // pathTo returns null for root-level nodes; decode URI as fallback.
+                val raw = Uri.decode(documentUri).substringAfterLast('/')
+                "/$raw"
+            }
         val clipboard = getApplication<Application>()
             .getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         clipboard.setPrimaryClip(ClipData.newPlainText("File Path", path))
-        _uiState.update { it.copy(statusMessage = "Path copied") }
+        _uiState.update { it.copy(statusMessage = "Path copied: $path") }
+    }
+
+    /**
+     * Read the Android clipboard text and insert it into Monaco as a text operation.
+     * This avoids the WebView clipboard API (which requires permission and is slow).
+     */
+    fun pasteFromKotlinClipboard() {
+        val clipboard = getApplication<Application>()
+            .getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        val text = clipboard.primaryClip?.getItemAt(0)?.coerceToText(getApplication())?.toString()
+        if (!text.isNullOrEmpty()) {
+            sendEditorCommand(EditorOutbound.InsertText(text))
+        }
     }
 
     // ── Remove project (with confirmation) ────────────────────────────────
 
-    /** Ask the user to confirm removing [uri] from the project registry. */
     fun requestRemoveProject(uri: String) {
         _uiState.update { it.copy(confirmRemoveProjectUri = uri) }
     }
 
-    /** User confirmed — remove from registry and close if currently open. */
     fun confirmRemoveProject() {
         val uri = _uiState.value.confirmRemoveProjectUri ?: return
         projectRepository.remove(uri)
@@ -846,7 +945,6 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** User cancelled — dismiss the confirmation dialog. */
     fun cancelRemoveProject() {
         _uiState.update { it.copy(confirmRemoveProjectUri = null) }
     }
@@ -984,11 +1082,6 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
 
     // ── Markdown preview converter ─────────────────────────────────────────
 
-    /**
-     * Convert a Markdown string to a self-contained HTML page for the preview WebView.
-     * Supports headings, bold, italic, inline code, fenced code blocks,
-     * blockquotes, unordered lists, horizontal rules, and links/images.
-     */
     private fun markdownToPreviewHtml(markdown: String): String {
         val sb = StringBuilder()
         sb.append(
