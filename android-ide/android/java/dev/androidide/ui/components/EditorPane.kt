@@ -1,49 +1,57 @@
 // android-ide/android/java/dev/androidide/ui/components/EditorPane.kt
 //
-// Monaco editor WebView + keyboard toolbar + optional live-preview WebView.
+// Monaco editor WebView + keyboard toolbar + symbol shortcut bar + optional live-preview WebView.
 //
 // Layout: Column
 //   Content area (editor ± preview) — weight(1f)
-//     • No preview:   AndroidView(editor) fills the area.
-//     • Landscape:    Row — editor | separator | preview (side by side).
-//     • Portrait:     Column — preview / editor or editor / preview depending
-//                     on editorSettings.previewLayout.
-//   KeyboardToolbar (fixed 40dp, only shown when a tab is active)
+//   SymbolBar    (optional, above keyboard toolbar)
+//   KeyboardToolbar (optional, 13 fixed-action icon buttons)
+//
+// Preview crash safety:
+//   WebViewClient.onRenderProcessGone returns true to prevent app termination.
+//   Preview content is loaded via loadDataWithBaseURL (no URL-length limit issues
+//   that affect data: scheme URLs with large base64 payloads).
 //
 // Architecture decisions:
 //   Both WebViews are wrapped in remember{} so they survive recompositions.
-//   The preview WebView is always remembered (not conditional) so it
-//   persists correctly through orientation changes.
-//   The AndroidView update lambda is a no-op for the editor — all state
-//   changes are driven via evaluateJavascript() by EditorBridge.
-//
-//   editorCommands: SharedFlow emitted by IdeViewModel and collected here.
-//   Each command is forwarded to Monaco so the ViewModel never holds a
-//   WebView reference.
-//
-// WebView settings:
-//   useWideViewPort / loadWithOverviewMode are intentionally false — setting
-//   them true causes Monaco to render at "viewport" width (4000 px on some
-//   devices) instead of the container width, making all text tiny.
+//   editor commands are driven via evaluateJavascript() by EditorBridge.
 
 package dev.androidide.ui.components
 
 import android.annotation.SuppressLint
 import android.webkit.WebChromeClient
+import android.webkit.WebResourceError
+import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.ContentCut
+import androidx.compose.material.icons.filled.ContentPaste
+import androidx.compose.material.icons.filled.FormatIndentIncrease
+import androidx.compose.material.icons.filled.Keyboard
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.KeyboardHide
+import androidx.compose.material.icons.filled.Redo
+import androidx.compose.material.icons.filled.SelectAll
+import androidx.compose.material.icons.filled.Undo
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import dev.androidide.data.model.EditorSettings
 import dev.androidide.data.model.PreviewLayout
 import dev.androidide.editor.EditorBridge
 import dev.androidide.editor.EditorInbound
@@ -53,21 +61,25 @@ import dev.androidide.viewmodel.model.EditorTab
 import kotlinx.coroutines.flow.SharedFlow
 
 // SetJavaScriptEnabled: Monaco requires JS.
-// JavascriptInterface: EditorBridge.onMessage IS annotated @JavascriptInterface; lint sees T not
-//   EditorBridge through the generic remember<T>{}, producing a false-positive.
+// JavascriptInterface: EditorBridge.onMessage IS annotated @JavascriptInterface; lint produces a
+//   false-positive through the generic remember<T>{}.
 @SuppressLint("SetJavaScriptEnabled", "JavascriptInterface", "WebViewClientOnReceivedSslError")
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun EditorPane(
     activeTab: EditorTab?,
     isEditorReady: Boolean,
     isPreviewVisible: Boolean,
-    previewUrl: String,
+    previewHtmlContent: String,
     previewLayout: PreviewLayout,
     editorCommands: SharedFlow<EditorOutbound>,
     onEditorReady: () -> Unit,
     onEditorMessage: (EditorInbound) -> Unit,
     onInsertText: (String) -> Unit,
     onExecuteCommand: (String) -> Unit,
+    showKeyboardToolbar: Boolean = true,
+    showSymbolBar: Boolean = true,
+    customSymbols: List<String> = EditorSettings.DEFAULT_SYMBOLS,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -76,8 +88,6 @@ fun EditorPane(
     // ── EditorBridge — survives recompositions ─────────────────────────────
     val editorBridge: EditorBridge = remember { EditorBridge() }
 
-    // onEditorMessage already dispatches Ready → onEditorReady() in IdeViewModel.
-    // Assigning it directly avoids a redundant second call.
     DisposableEffect(onEditorMessage) {
         editorBridge.messageListener = onEditorMessage
         onDispose { editorBridge.messageListener = null }
@@ -91,9 +101,6 @@ fun EditorPane(
                 domStorageEnabled                = true
                 allowFileAccessFromFileURLs      = true
                 allowUniversalAccessFromFileURLs = true
-                // Do NOT set useWideViewPort/loadWithOverviewMode to true: the WebView
-                // would treat the layout width as "desktop wide" (~4000 px) and Monaco
-                // would render at tiny scale to fit it.
                 useWideViewPort                  = false
                 loadWithOverviewMode             = false
                 setSupportZoom(false)
@@ -109,12 +116,31 @@ fun EditorPane(
     }
 
     // ── Preview WebView — always remembered for orientation stability ───────
+    var previewCrashed by remember { mutableStateOf(false) }
     val previewWebView = remember {
         WebView(context).apply {
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
             webChromeClient = WebChromeClient()
-            webViewClient   = WebViewClient()
+            webViewClient = object : WebViewClient() {
+                override fun onReceivedError(
+                    view: WebView,
+                    request: WebResourceRequest,
+                    error: WebResourceError,
+                ) {
+                    // Errors in the render thread are non-fatal here; the WebView still displays.
+                }
+
+                // API 26+ — returns true to tell Android we handled the crash gracefully.
+                // Without this override, a render process crash terminates the entire app.
+                override fun onRenderProcessGone(
+                    view: WebView,
+                    detail: android.webkit.RenderProcessGoneDetail,
+                ): Boolean {
+                    previewCrashed = true
+                    return true
+                }
+            }
         }
     }
 
@@ -139,10 +165,23 @@ fun EditorPane(
         }
     }
 
-    // ── Reload preview when previewUrl changes ──────────────────────────────
-    LaunchedEffect(previewUrl, isPreviewVisible) {
-        if (isPreviewVisible && previewUrl.isNotEmpty()) {
-            previewWebView.post { previewWebView.loadUrl(previewUrl) }
+    // ── Load preview content when it changes ───────────────────────────────
+    // Uses loadDataWithBaseURL instead of loadUrl("data:...") to avoid the
+    // URL-length limit that causes crashes with large base64-encoded pages.
+    LaunchedEffect(previewHtmlContent, isPreviewVisible) {
+        if (isPreviewVisible && previewHtmlContent.isNotEmpty()) {
+            previewCrashed = false
+            previewWebView.post {
+                runCatching {
+                    previewWebView.loadDataWithBaseURL(
+                        "about:blank",
+                        previewHtmlContent,
+                        "text/html",
+                        "UTF-8",
+                        null,
+                    )
+                }
+            }
         }
     }
 
@@ -155,7 +194,6 @@ fun EditorPane(
 
         when {
             !isPreviewVisible -> {
-                // No preview — editor fills entire content area
                 AndroidView(
                     factory  = { editorWebView },
                     update   = { /* no-op — all updates via evaluateJavascript */ },
@@ -164,29 +202,26 @@ fun EditorPane(
             }
 
             isLandscape -> {
-                // Landscape: editor left, preview right — side by side
                 Row(modifier = Modifier.weight(1f).fillMaxWidth()) {
                     AndroidView(
                         factory  = { editorWebView },
                         update   = { },
                         modifier = Modifier.weight(1f).fillMaxHeight(),
                     )
-                    Box(
-                        modifier = Modifier
-                            .width(1.dp)
-                            .fillMaxHeight()
-                            .background(colors.separator),
-                    )
-                    AndroidView(
-                        factory  = { previewWebView },
-                        update   = { },
-                        modifier = Modifier.weight(1f).fillMaxHeight(),
-                    )
+                    Box(modifier = Modifier.width(1.dp).fillMaxHeight().background(colors.separator))
+                    if (previewCrashed) {
+                        PreviewErrorBox(modifier = Modifier.weight(1f).fillMaxHeight())
+                    } else {
+                        AndroidView(
+                            factory  = { previewWebView },
+                            update   = { },
+                            modifier = Modifier.weight(1f).fillMaxHeight(),
+                        )
+                    }
                 }
             }
 
             else -> {
-                // Portrait: stacked order controlled by previewLayout setting
                 Column(modifier = Modifier.weight(1f).fillMaxSize()) {
                     if (previewLayout == PreviewLayout.EDITOR_ABOVE) {
                         AndroidView(
@@ -194,30 +229,27 @@ fun EditorPane(
                             update   = { },
                             modifier = Modifier.weight(1f).fillMaxWidth(),
                         )
-                        Box(
-                            modifier = Modifier
-                                .height(1.dp)
-                                .fillMaxWidth()
-                                .background(colors.separator),
-                        )
-                        AndroidView(
-                            factory  = { previewWebView },
-                            update   = { },
-                            modifier = Modifier.weight(1f).fillMaxWidth(),
-                        )
+                        Box(modifier = Modifier.height(1.dp).fillMaxWidth().background(colors.separator))
+                        if (previewCrashed) {
+                            PreviewErrorBox(modifier = Modifier.weight(1f).fillMaxWidth())
+                        } else {
+                            AndroidView(
+                                factory  = { previewWebView },
+                                update   = { },
+                                modifier = Modifier.weight(1f).fillMaxWidth(),
+                            )
+                        }
                     } else {
-                        // PREVIEW_ABOVE (default)
-                        AndroidView(
-                            factory  = { previewWebView },
-                            update   = { },
-                            modifier = Modifier.weight(1f).fillMaxWidth(),
-                        )
-                        Box(
-                            modifier = Modifier
-                                .height(1.dp)
-                                .fillMaxWidth()
-                                .background(colors.separator),
-                        )
+                        if (previewCrashed) {
+                            PreviewErrorBox(modifier = Modifier.weight(1f).fillMaxWidth())
+                        } else {
+                            AndroidView(
+                                factory  = { previewWebView },
+                                update   = { },
+                                modifier = Modifier.weight(1f).fillMaxWidth(),
+                            )
+                        }
+                        Box(modifier = Modifier.height(1.dp).fillMaxWidth().background(colors.separator))
                         AndroidView(
                             factory  = { editorWebView },
                             update   = { },
@@ -228,8 +260,17 @@ fun EditorPane(
             }
         }
 
-        // Keyboard toolbar — only shown when a tab is active
-        if (activeTab != null) {
+        // Symbol shortcut bar — shown above keyboard toolbar when a tab is active
+        if (activeTab != null && showSymbolBar) {
+            HorizontalDivider(thickness = 1.dp, color = colors.separator)
+            SymbolBar(
+                symbols         = customSymbols,
+                onInsertSymbol  = onInsertText,
+            )
+        }
+
+        // Keyboard toolbar — 13 fixed-action icon buttons
+        if (activeTab != null && showKeyboardToolbar) {
             HorizontalDivider(thickness = 1.dp, color = colors.separator)
             KeyboardToolbar(
                 onInsertText     = onInsertText,
@@ -239,73 +280,82 @@ fun EditorPane(
     }
 }
 
-// ── Keyboard toolbar ──────────────────────────────────────────────────────────
+// ── Preview error placeholder ─────────────────────────────────────────────────
 
-private sealed class ToolbarAction {
-    data class Insert(val label: String, val text: String) : ToolbarAction()
-    data class Command(val label: String, val commandId: String) : ToolbarAction()
-    object Separator : ToolbarAction()
+@Composable
+private fun PreviewErrorBox(modifier: Modifier = Modifier) {
+    val colors = LocalIdeColors.current
+    Box(
+        modifier         = modifier.background(colors.background),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text  = "Preview unavailable.\nThe render process terminated.",
+            style = MaterialTheme.typography.bodySmall,
+            color = colors.textDisabled,
+        )
+    }
 }
 
-private val TOOLBAR_ACTIONS = listOf(
-    // Cursor navigation
-    ToolbarAction.Command("\u2190",  "cursorLeft"),                  // ←
-    ToolbarAction.Command("\u2192",  "cursorRight"),                 // →
-    ToolbarAction.Command("\u2191",  "cursorUp"),                    // ↑
-    ToolbarAction.Command("\u2193",  "cursorDown"),                  // ↓
-    ToolbarAction.Command("Home",    "cursorHome"),
-    ToolbarAction.Command("End",     "cursorEnd"),
-    ToolbarAction.Separator,
-    // Indentation
-    ToolbarAction.Command("\u21e5",  "editor.action.indentLines"),   // ⇥ indent
-    ToolbarAction.Command("\u21e4",  "editor.action.outdentLines"),  // ⇤ outdent
-    ToolbarAction.Separator,
-    // Delete
-    ToolbarAction.Command("\u232b",  "deleteLeft"),                  // ⌫
-    ToolbarAction.Command("\u2326",  "deleteRight"),                 // ⌦
-    ToolbarAction.Separator,
-    // Undo / Redo
-    ToolbarAction.Command("\u21a9",  "undo"),                        // ↩
-    ToolbarAction.Command("\u21aa",  "redo"),                        // ↪
-    ToolbarAction.Separator,
-    // Clipboard
-    ToolbarAction.Command("Cut",     "editor.action.clipboardCutAction"),
-    ToolbarAction.Command("Copy",    "editor.action.clipboardCopyAction"),
-    ToolbarAction.Command("Paste",   "editor.action.clipboardPasteAction"),
-    ToolbarAction.Command("All",     "editor.action.selectAll"),
-    ToolbarAction.Separator,
-    // Keyboard control
-    ToolbarAction.Command("\u2328",  "focusEditor"),                 // ⌨ open keyboard
-    ToolbarAction.Command("\u2328\u2715", "blurEditor"),             // ⌨✕ close keyboard
-    ToolbarAction.Separator,
-    // Common symbols
-    ToolbarAction.Insert("(",  "("),
-    ToolbarAction.Insert(")",  ")"),
-    ToolbarAction.Insert("{",  "{"),
-    ToolbarAction.Insert("}",  "}"),
-    ToolbarAction.Insert("[",  "["),
-    ToolbarAction.Insert("]",  "]"),
-    ToolbarAction.Insert(";",  ";"),
-    ToolbarAction.Insert(":",  ":"),
-    ToolbarAction.Insert(",",  ","),
-    ToolbarAction.Insert(".",  "."),
-    ToolbarAction.Insert("\"", "\""),
-    ToolbarAction.Insert("'",  "'"),
-    ToolbarAction.Insert("=",  "="),
-    ToolbarAction.Insert("+",  "+"),
-    ToolbarAction.Insert("-",  "-"),
-    ToolbarAction.Insert("_",  "_"),
-    ToolbarAction.Insert("@",  "@"),
-    ToolbarAction.Insert("!",  "!"),
-    ToolbarAction.Insert("/",  "/"),
-    ToolbarAction.Insert("\\", "\\"),
-    ToolbarAction.Insert("?",  "?"),
-    ToolbarAction.Insert("|",  "|"),
-    ToolbarAction.Insert("&",  "&"),
-    ToolbarAction.Insert("<",  "<"),
-    ToolbarAction.Insert(">",  ">"),
+// ── Symbol shortcut bar ───────────────────────────────────────────────────────
+
+@Composable
+private fun SymbolBar(
+    symbols: List<String>,
+    onInsertSymbol: (String) -> Unit,
+) {
+    val colors = LocalIdeColors.current
+    Row(
+        modifier = Modifier
+            .height(36.dp)
+            .fillMaxWidth()
+            .background(colors.surface)
+            .horizontalScroll(rememberScrollState()),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Spacer(Modifier.width(4.dp))
+        symbols.forEach { symbol ->
+            TextButton(
+                onClick        = { onInsertSymbol(symbol) },
+                modifier       = Modifier.height(32.dp).widthIn(min = 32.dp),
+                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp),
+            ) {
+                Text(
+                    text  = symbol,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = colors.accent,
+                )
+            }
+        }
+        Spacer(Modifier.width(4.dp))
+    }
+}
+
+// ── Keyboard toolbar ──────────────────────────────────────────────────────────
+
+private data class KeyboardAction(
+    val icon: ImageVector,
+    val label: String,
+    val commandId: String,
 )
 
+private val KEYBOARD_TOOLBAR_ACTIONS = listOf(
+    KeyboardAction(Icons.Default.FormatIndentIncrease, "Indent",      "editor.action.indentLines"),
+    KeyboardAction(Icons.Default.KeyboardArrowUp,      "Cursor Up",   "cursorUp"),
+    KeyboardAction(Icons.Default.KeyboardArrowDown,    "Cursor Down", "cursorDown"),
+    KeyboardAction(Icons.Default.KeyboardArrowLeft,    "Cursor Left", "cursorLeft"),
+    KeyboardAction(Icons.Default.KeyboardArrowRight,   "Cursor Right","cursorRight"),
+    KeyboardAction(Icons.Default.Undo,                 "Undo",        "undo"),
+    KeyboardAction(Icons.Default.Redo,                 "Redo",        "redo"),
+    KeyboardAction(Icons.Default.ContentCut,           "Cut",         "editor.action.clipboardCutAction"),
+    KeyboardAction(Icons.Default.ContentCopy,          "Copy",        "editor.action.clipboardCopyAction"),
+    KeyboardAction(Icons.Default.ContentPaste,         "Paste",       "editor.action.clipboardPasteAction"),
+    KeyboardAction(Icons.Default.SelectAll,            "Select All",  "editor.action.selectAll"),
+    KeyboardAction(Icons.Default.Keyboard,             "Show Keyboard","focusEditor"),
+    KeyboardAction(Icons.Default.KeyboardHide,         "Hide Keyboard","blurEditor"),
+)
+
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun KeyboardToolbar(
     onInsertText: (String) -> Unit,
@@ -321,39 +371,47 @@ private fun KeyboardToolbar(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Spacer(Modifier.width(4.dp))
-        TOOLBAR_ACTIONS.forEach { action ->
-            when (action) {
-                is ToolbarAction.Separator -> {
-                    VerticalDivider(
-                        modifier  = Modifier.height(20.dp).padding(horizontal = 2.dp),
-                        thickness = 1.dp,
-                        color     = colors.separator,
-                    )
-                }
-                is ToolbarAction.Insert -> {
-                    ToolbarButton(label = action.label, onClick = { onInsertText(action.text) })
-                }
-                is ToolbarAction.Command -> {
-                    ToolbarButton(label = action.label, onClick = { onExecuteCommand(action.commandId) })
-                }
-            }
+        KEYBOARD_TOOLBAR_ACTIONS.forEach { action ->
+            ToolbarIconButton(
+                icon             = action.icon,
+                label            = action.label,
+                onExecuteCommand = onExecuteCommand,
+                commandId        = action.commandId,
+            )
         }
         Spacer(Modifier.width(4.dp))
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ToolbarButton(label: String, onClick: () -> Unit) {
+private fun ToolbarIconButton(
+    icon: ImageVector,
+    label: String,
+    commandId: String,
+    onExecuteCommand: (String) -> Unit,
+) {
     val colors = LocalIdeColors.current
-    TextButton(
-        onClick  = onClick,
-        modifier = Modifier.height(36.dp).widthIn(min = 36.dp),
-        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp),
+    val tooltipState = rememberTooltipState()
+    TooltipBox(
+        positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
+        tooltip = {
+            PlainTooltip {
+                Text(label, style = MaterialTheme.typography.labelSmall)
+            }
+        },
+        state = tooltipState,
     ) {
-        Text(
-            text  = label,
-            style = MaterialTheme.typography.labelSmall,
-            color = colors.textSecondary,
-        )
+        IconButton(
+            onClick  = { onExecuteCommand(commandId) },
+            modifier = Modifier.size(40.dp),
+        ) {
+            Icon(
+                imageVector        = icon,
+                contentDescription = label,
+                tint               = colors.textSecondary,
+                modifier           = Modifier.size(18.dp),
+            )
+        }
     }
 }

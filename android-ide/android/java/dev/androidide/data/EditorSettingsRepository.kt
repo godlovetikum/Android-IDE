@@ -12,42 +12,59 @@ import dev.androidide.data.model.VolumeKeyMode
 class EditorSettingsRepository(context: Context) {
 
     companion object {
-        private const val PREFS               = "editor_settings"
-        private const val KEY_FONT_SIZE       = "font_size"
-        private const val KEY_TAB_SIZE        = "tab_size"
-        private const val KEY_WORD_WRAP       = "word_wrap"
-        private const val KEY_LINE_NUMBERS    = "line_numbers"
-        private const val KEY_AUTO_SAVE       = "auto_save"
-        private const val KEY_EDITOR_THEME    = "editor_theme"
-        private const val KEY_PREVIEW_LAYOUT  = "preview_layout"
-        private const val KEY_VOLUME_MODE     = "volume_key_mode"
+        private const val PREFS                    = "editor_settings"
+        private const val KEY_FONT_SIZE            = "font_size"
+        private const val KEY_TAB_SIZE             = "tab_size"
+        private const val KEY_WORD_WRAP            = "word_wrap"
+        private const val KEY_LINE_NUMBERS         = "line_numbers"
+        private const val KEY_AUTO_SAVE            = "auto_save"
+        private const val KEY_EDITOR_THEME         = "editor_theme"
+        private const val KEY_PREVIEW_LAYOUT       = "preview_layout"
+        private const val KEY_VOLUME_MODE          = "volume_key_mode"
+        private const val KEY_SHOW_KEYBOARD_BAR    = "show_keyboard_toolbar"
+        private const val KEY_SHOW_SYMBOL_BAR      = "show_symbol_bar"
+        private const val KEY_HIDE_GIT_FOLDER      = "hide_git_folder"
+        private const val KEY_CUSTOM_SYMBOLS       = "custom_symbols"
+        private const val SYMBOL_SEPARATOR         = "|"
     }
 
     private val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
     fun getEditorSettings(): EditorSettings = EditorSettings(
-        fontSize      = prefs.getInt(KEY_FONT_SIZE, 14),
-        tabSize       = prefs.getInt(KEY_TAB_SIZE, 4),
-        wordWrap      = prefs.getBoolean(KEY_WORD_WRAP, false),
-        lineNumbers   = prefs.getBoolean(KEY_LINE_NUMBERS, true),
-        autoSave      = prefs.getBoolean(KEY_AUTO_SAVE, false),
-        editorTheme   = prefs.getString(KEY_EDITOR_THEME, "system") ?: "system",
-        previewLayout = runCatching {
+        fontSize             = prefs.getInt(KEY_FONT_SIZE, 14),
+        tabSize              = prefs.getInt(KEY_TAB_SIZE, 4),
+        wordWrap             = prefs.getBoolean(KEY_WORD_WRAP, false),
+        lineNumbers          = prefs.getBoolean(KEY_LINE_NUMBERS, true),
+        autoSave             = prefs.getBoolean(KEY_AUTO_SAVE, false),
+        editorTheme          = prefs.getString(KEY_EDITOR_THEME, "system") ?: "system",
+        previewLayout        = runCatching {
             PreviewLayout.valueOf(
                 prefs.getString(KEY_PREVIEW_LAYOUT, PreviewLayout.PREVIEW_ABOVE.name) ?: "PREVIEW_ABOVE"
             )
         }.getOrElse { PreviewLayout.PREVIEW_ABOVE },
+        showKeyboardToolbar  = prefs.getBoolean(KEY_SHOW_KEYBOARD_BAR, true),
+        showSymbolBar        = prefs.getBoolean(KEY_SHOW_SYMBOL_BAR, true),
+        hideGitFolder        = prefs.getBoolean(KEY_HIDE_GIT_FOLDER, true),
+        customSymbols        = prefs.getString(KEY_CUSTOM_SYMBOLS, null)
+            ?.split(SYMBOL_SEPARATOR)
+            ?.filter { it.isNotEmpty() }
+            ?.ifEmpty { EditorSettings.DEFAULT_SYMBOLS }
+            ?: EditorSettings.DEFAULT_SYMBOLS,
     )
 
     fun setEditorSettings(settings: EditorSettings) {
         prefs.edit()
-            .putInt(KEY_FONT_SIZE,      settings.fontSize)
-            .putInt(KEY_TAB_SIZE,       settings.tabSize)
-            .putBoolean(KEY_WORD_WRAP,     settings.wordWrap)
-            .putBoolean(KEY_LINE_NUMBERS,  settings.lineNumbers)
-            .putBoolean(KEY_AUTO_SAVE,     settings.autoSave)
-            .putString(KEY_EDITOR_THEME,   settings.editorTheme)
-            .putString(KEY_PREVIEW_LAYOUT, settings.previewLayout.name)
+            .putInt    (KEY_FONT_SIZE,           settings.fontSize)
+            .putInt    (KEY_TAB_SIZE,            settings.tabSize)
+            .putBoolean(KEY_WORD_WRAP,           settings.wordWrap)
+            .putBoolean(KEY_LINE_NUMBERS,        settings.lineNumbers)
+            .putBoolean(KEY_AUTO_SAVE,           settings.autoSave)
+            .putString (KEY_EDITOR_THEME,        settings.editorTheme)
+            .putString (KEY_PREVIEW_LAYOUT,      settings.previewLayout.name)
+            .putBoolean(KEY_SHOW_KEYBOARD_BAR,   settings.showKeyboardToolbar)
+            .putBoolean(KEY_SHOW_SYMBOL_BAR,     settings.showSymbolBar)
+            .putBoolean(KEY_HIDE_GIT_FOLDER,     settings.hideGitFolder)
+            .putString (KEY_CUSTOM_SYMBOLS,      settings.customSymbols.joinToString(SYMBOL_SEPARATOR))
             .apply()
     }
 

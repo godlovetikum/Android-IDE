@@ -12,6 +12,7 @@ import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Extension
+import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.MergeType
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.*
@@ -34,6 +35,7 @@ import dev.androidide.viewmodel.model.IdeUiState
 fun SettingsScreen(
     uiState: IdeUiState,
     ideViewModel: IdeViewModel,
+    onNavigationIconClick: (() -> Unit)? = null,
 ) {
     val colors = LocalIdeColors.current
 
@@ -41,6 +43,17 @@ fun SettingsScreen(
         topBar = {
             TopAppBar(
                 title  = { Text("Settings", color = colors.textPrimary) },
+                navigationIcon = {
+                    if (onNavigationIconClick != null) {
+                        IconButton(onClick = onNavigationIconClick) {
+                            Icon(
+                                imageVector        = Icons.Default.Menu,
+                                contentDescription = "Open sidebar",
+                                tint               = colors.accent,
+                            )
+                        }
+                    }
+                },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = colors.surface),
             )
         },
@@ -186,6 +199,63 @@ fun SettingsScreen(
                             Text("Save on every edit (300 ms debounce)", color = colors.textSecondary, style = MaterialTheme.typography.bodySmall)
                         }
                         Switch(checked = s.autoSave, onCheckedChange = { ideViewModel.setEditorSettings(s.copy(autoSave = it)) })
+                    }
+
+                    HorizontalDivider(color = colors.separator)
+
+                    // Show keyboard toolbar
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .selectable(selected = s.showKeyboardToolbar, role = Role.Switch, onClick = {
+                                ideViewModel.setEditorSettings(s.copy(showKeyboardToolbar = !s.showKeyboardToolbar))
+                            }),
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Keyboard Toolbar", color = colors.textPrimary, style = MaterialTheme.typography.bodyMedium)
+                            Text("Show cursor navigation & edit buttons above the keyboard", color = colors.textSecondary, style = MaterialTheme.typography.bodySmall)
+                        }
+                        Switch(checked = s.showKeyboardToolbar, onCheckedChange = { ideViewModel.setEditorSettings(s.copy(showKeyboardToolbar = it)) })
+                    }
+
+                    HorizontalDivider(color = colors.separator)
+
+                    // Show symbol bar
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .selectable(selected = s.showSymbolBar, role = Role.Switch, onClick = {
+                                ideViewModel.setEditorSettings(s.copy(showSymbolBar = !s.showSymbolBar))
+                            }),
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Symbol Bar", color = colors.textPrimary, style = MaterialTheme.typography.bodyMedium)
+                            Text("Show one-tap common character shortcuts above the keyboard", color = colors.textSecondary, style = MaterialTheme.typography.bodySmall)
+                        }
+                        Switch(checked = s.showSymbolBar, onCheckedChange = { ideViewModel.setEditorSettings(s.copy(showSymbolBar = it)) })
+                    }
+                }
+            }
+
+            // ── File Tree ──────────────────────────────────────────────────
+            SectionHeader("File Tree")
+            Card(colors = CardDefaults.cardColors(containerColor = colors.surface)) {
+                Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .selectable(selected = s.hideGitFolder, role = Role.Switch, onClick = {
+                                ideViewModel.setEditorSettings(s.copy(hideGitFolder = !s.hideGitFolder))
+                            }),
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Hide .git Folder", color = colors.textPrimary, style = MaterialTheme.typography.bodyMedium)
+                            Text("Remove the .git directory from the file tree", color = colors.textSecondary, style = MaterialTheme.typography.bodySmall)
+                        }
+                        Switch(checked = s.hideGitFolder, onCheckedChange = { ideViewModel.setEditorSettings(s.copy(hideGitFolder = it)) })
                     }
                 }
             }

@@ -29,6 +29,23 @@ data class IdeUiState(
     /** Root nodes of the file tree sidebar. */
     val fileTree: List<FileNode> = emptyList(),
 
+    // ── File search ────────────────────────────────────────────────────────
+    /** Whether the file-name search panel is visible in the sidebar. */
+    val isSearchVisible: Boolean = false,
+
+    /** Current search query (file name search only). */
+    val fileSearchQuery: String = "",
+
+    /** Matching files for the current search query. */
+    val fileSearchResults: List<FileSearchResult> = emptyList(),
+
+    // ── Multi-selection ────────────────────────────────────────────────────
+    /** Whether multi-select mode is active in the file tree. */
+    val isMultiSelectMode: Boolean = false,
+
+    /** Set of document URIs currently selected in multi-select mode. */
+    val selectedUris: Set<String> = emptySet(),
+
     // ── Editor ─────────────────────────────────────────────────────────────
     /** All open editor tabs. */
     val openTabs: List<EditorTab> = emptyList(),
@@ -42,8 +59,12 @@ data class IdeUiState(
     /** Whether the live-preview WebView is visible. */
     val isPreviewVisible: Boolean = false,
 
-    /** URL loaded in the preview WebView. */
-    val previewUrl: String = "about:blank",
+    /**
+     * Raw HTML content for the preview WebView.
+     * Passed directly to WebView.loadDataWithBaseURL — not base64 encoded.
+     * Empty when preview is not active.
+     */
+    val previewHtmlContent: String = "",
 
     // ── Cursor ─────────────────────────────────────────────────────────────
     val cursorLine: Int = 1,
@@ -81,6 +102,14 @@ data class IdeUiState(
      * Triggers the "You have unsaved changes. Exit anyway?" dialog.
      */
     val showExitConfirmation: Boolean = false,
+
+    // ── Remove project confirmation ─────────────────────────────────────────
+    /**
+     * Non-null when the user has requested to remove a project from the registry.
+     * The value is the project URI pending removal.
+     * Triggers the remove confirmation dialog.
+     */
+    val confirmRemoveProjectUri: String? = null,
 
     // ── Crash recovery ──────────────────────────────────────────────────────
     /**

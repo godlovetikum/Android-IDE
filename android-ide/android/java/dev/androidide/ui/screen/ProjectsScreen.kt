@@ -15,6 +15,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -37,6 +38,7 @@ fun ProjectsScreen(
     ideViewModel: IdeViewModel,
     onOpenProjectFolder: () -> Unit,
     onCreateBlankProject: () -> Unit,
+    onNavigationIconClick: (() -> Unit)? = null,
 ) {
     val colors = LocalIdeColors.current
 
@@ -48,6 +50,17 @@ fun ProjectsScreen(
         topBar = {
             TopAppBar(
                 title = { Text("Projects", color = colors.textPrimary) },
+                navigationIcon = {
+                    if (onNavigationIconClick != null) {
+                        IconButton(onClick = onNavigationIconClick) {
+                            Icon(
+                                imageVector        = Icons.Default.Menu,
+                                contentDescription = "Open sidebar",
+                                tint               = colors.accent,
+                            )
+                        }
+                    }
+                },
                 actions = {
                     IconButton(onClick = onCreateBlankProject) {
                         Icon(

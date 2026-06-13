@@ -79,6 +79,62 @@ Future contributors must be able to understand previous mistakes without redisco
 
 ---
 
+### BUG-005 — `application` property inaccessible in `IdeViewModel.isSystemDark()`
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-06-13 |
+| **Subsystem** | viewmodel |
+| **Issue** | `compileDebugKotlin` failed with `Cannot access 'application': it is invisible (private in a supertype) in 'IdeViewModel'` at `IdeViewModel.kt:95`. |
+| **Root Cause** | `AndroidViewModel.application` was made `private` in the supertype as of `androidx.lifecycle:lifecycle-viewmodel:2.6.0`. The project uses `lifecycle-viewmodel-compose:2.7.0`, which carries this visibility change. `isSystemDark()` accessed `application` as though it were a `protected` property, which it no longer is. |
+| **Files Modified** | `viewmodel/IdeViewModel.kt` |
+| **Solution** | Replaced `application.resources.configuration.uiMode` with `getApplication<Application>().resources.configuration.uiMode`. `AndroidViewModel.getApplication<T>()` is the stable public accessor that has always been available and is not affected by the visibility change. |
+| **Prevention** | Never access `AndroidViewModel.application` as a property directly. Always use `getApplication<Application>()`. The `application` property was historically `protected` but this is not guaranteed across lifecycle versions. The public method is the only stable API. |
+
+---
+
+### BUG-006 — Preview WebView crash terminates app
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-06-13 |
+| **Subsystem** | editor |
+| **Issue** | App terminates without a Java stack trace when the live-preview WebView renders a malformed or resource-heavy HTML page. |
+| **Root Cause** | `WebViewClient.onRenderProcessGone` was not overridden. Android's default implementation returns `false`, which terminates the entire application process when the WebView renderer crashes or is killed by the OS. |
+| **Files Modified** | `ui/components/EditorPane.kt` |
+| **Solution** | Override `onRenderProcessGone` on the preview WebView's `WebViewClient` to return `true` (crash handled) and set a `previewCrashed` state flag. When `previewCrashed` is true, the WebView is replaced by an error placeholder composable instead of rendering invisibly or crashing. |
+| **Prevention** | Any production `WebView` that loads arbitrary content must override `onRenderProcessGone` and return `true`. The default `false` terminates the app. This applies especially to preview/sandbox WebViews. |
+
+---
+
+### BUG-007 — `loadUrl("data:...")` with large HTML caused OOM and URL-length issues
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-06-13 |
+| **Subsystem** | editor |
+| **Issue** | The preview WebView was loaded via a `data:text/html;base64,...` URL. For large HTML files (~50 kB), this produced ~70 kB URL strings, causing GC pressure and occasional `OutOfMemoryError` on low-RAM devices. |
+| **Root Cause** | Base64 encoding a large HTML document creates a ~1.33× larger string, held in memory during both encoding and URL construction. URL-based loading also limits content to what can fit in a URI. |
+| **Files Modified** | `viewmodel/IdeViewModel.kt` (removed base64 encoding), `viewmodel/model/IdeUiState.kt` (renamed `previewUrl` → `previewHtmlContent`), `ui/components/EditorPane.kt` (use `loadDataWithBaseURL`) |
+| **Solution** | Pass raw HTML string directly as `previewHtmlContent` in `IdeUiState`. Load in the WebView via `loadDataWithBaseURL("about:blank", html, "text/html", "UTF-8", null)`. No base64 encoding, no URL length limit, no extra memory for the encoded string. |
+| **Prevention** | Never use `data:` URL scheme for loading arbitrary HTML into a WebView. Always use `loadData()` or `loadDataWithBaseURL()` which accept the content directly. |
+
+---
+
+### BUG-008 — Horizontal swipe in Monaco editor accidentally opens the sidebar drawer
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-06-13 |
+| **Subsystem** | ui |
+| **Issue** | Horizontal swipe in the Monaco editor (scrolling a long code line) triggered the `ModalNavigationDrawer` to open, interrupting editing. |
+| **Root Cause** | `ModalNavigationDrawer` defaults to `gesturesEnabled = true`, intercepts horizontal swipe events that start near the left edge of the screen. Monaco's horizontal scroll (which starts from anywhere in the editor) is indistinguishable from a drawer-open gesture. |
+| **Files Modified** | `ui/IdeScreen.kt` |
+| **Solution** | Set `gesturesEnabled = false` on the `ModalNavigationDrawer`. The sidebar is opened exclusively via the hamburger icon in the top app bar. |
+| **Prevention** | Always set `gesturesEnabled = false` on `ModalNavigationDrawer` when the content area contains a horizontally-scrollable surface (e.g. WebView, HorizontalPager, Map). |
+
+---
+
 ## Architectural Corrections
 
 ### AC-001 — Tech Stack Migration: Slint/Rust → Kotlin/Jetpack Compose
@@ -100,4 +156,23 @@ Future contributors must be able to understand previous mistakes without redisco
 
 **Consequence:** All Rust/Slint source files removed. Build pipeline simplified to standard `./gradlew assembleRelease`. See TECH_STACK_MIGRATION.md for the full migration record.
 
-Last updated: 2026-06-12
+---
+
+### AC-002 — Navigation refactor: bottom NavigationBar removed, sidebar-only navigation
+
+**Date:** 2026-06-13
+
+**Original design:**
+- Bottom `NavigationBar` with Projects / Editor / Settings tabs
+- `AppRoot` switched between `ProjectsScreen`, `IdeScreen`, `SettingsScreen` at the top level
+- Sidebar existed only within `IdeScreen` (editor screen only)
+
+**New design:**
+- `IdeScreen` is always the root screen — `AppRoot` renders nothing else
+- A persistent sidebar (always accessible via drawer or permanent column on wide screens) handles all navigation
+- Navigation buttons in the sidebar: Projects, Editor, Git (Phase 2), Terminal (Phase 2), Settings
+- No bottom `NavigationBar`
+
+**Rationale:** On mobile developer tools, bottom tabs consume vertical space needed for code. A sidebar keeps navigation reachable via one tap from any screen while maximising editor real estate. The drawer gesture (`gesturesEnabled = false`) prevents accidental opens from editor swipes.
+
+Last updated: 2026-06-13

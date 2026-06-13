@@ -1,7 +1,7 @@
 # STATUS_TRACKER.md — Android IDE
 
-**Current Date:** 2026-06-12
-**Active Phase:** Phase 2 — Linux Runtime and Terminal (not started)
+**Current Date:** 2026-06-13
+**Active Phase:** Phase 1 UI Correction Pass (complete) → Phase 2 — Linux Runtime and Terminal (not started)
 **Stack:** Kotlin 1.9.22 + Jetpack Compose + Material3 + Monaco WebView
 
 ---
@@ -11,6 +11,7 @@
 | Phase | Status | Completed / Total Tasks |
 |-------|--------|------------------------|
 | Phase 1 — Foundation | **COMPLETE** ✅ | All deliverables verified |
+| Phase 1 — UI Correction Pass | **COMPLETE** ✅ | 2026-06-13 |
 | Tech Stack Migration (Slint/Rust → Kotlin/Compose) | **COMPLETE** ✅ | 2026-06-12 |
 | Phase 2 — Linux Runtime | Not Started | 0 / 5 |
 | Phase 3 — Git | Not Started | 0 / 8 |
@@ -36,13 +37,23 @@
 | 011 | GitHub Actions CI — lint + debug APK + release APK | ci | 2026-06-12 |
 | 012 | Monaco offline bundle (fetch-monaco.sh, git-ignored vs/) | editor/ci | 2026-06-11 |
 | 013 | Tech stack migration: Slint/Rust → Kotlin/Jetpack Compose | migration | 2026-06-12 |
-| 014 | Fix subdirectory expansion bug in SafRepository.listChildren (docId extraction) | filesystem | 2026-06-12 |
+| 014 | Fix subdirectory expansion bug in SafRepository.listChildren | filesystem | 2026-06-12 |
+| 015 | Fix compileDebugKotlin failure — `application` property visibility (BUG-005) | viewmodel | 2026-06-13 |
+| 016 | UI Correction: data models — EditorSettings (3 new flags + customSymbols), FileSearchResult, IdeUiState (search/selection/previewHtmlContent fields) | data/viewmodel | 2026-06-13 |
+| 017 | UI Correction: repository layer — EditorSettingsRepository persists new booleans + symbols, SafRepository file:// URI support | filesystem | 2026-06-13 |
+| 018 | UI Correction: ViewModel — IdeViewModel createBlankProject auto-path, togglePreview uses loadDataWithBaseURL, search/reveal/select/copyPath/removeProject methods | viewmodel | 2026-06-13 |
+| 019 | UI Correction: AppRoot — remove bottom NavigationBar, IdeScreen always root, create project direct to name dialog, confirmRemoveProject dialog | ui | 2026-06-13 |
+| 020 | UI Correction: IdeScreen — sidebar restructured (large nav buttons + Files header), gesturesEnabled=false, Run always visible, file path dropdown, integrated Projects/Settings screens | ui | 2026-06-13 |
+| 021 | UI Correction: EditorPane — fix preview crash (onRenderProcessGone), loadDataWithBaseURL, split toolbar into KeyboardToolbar (icons) + SymbolBar (custom symbols), showKeyboardToolbar/showSymbolBar params | editor/ui | 2026-06-13 |
+| 022 | UI Correction: FileTreePanel — root project node, corrected file/folder menus (Rename/CopyPath/Copy/Cut/Delete/Select for files; +NewFile/NewFolder/Import/Export/Paste for folders), active file highlight, .git filter, multi-select mode, file search results panel | ui | 2026-06-13 |
+| 023 | UI Correction: SettingsScreen — Keyboard Toolbar toggle, Symbol Bar toggle, File Tree section with Hide .git Folder toggle, sidebar navigation icon | ui | 2026-06-13 |
+| 024 | UI Correction: ProjectsScreen — sidebar navigation icon callback | ui | 2026-06-13 |
 
 ---
 
 ## In Progress Tasks
 
-None. Phase 1 and migration are complete. Ready to begin Phase 2.
+None. Phase 1 UI Correction Pass complete. Ready to begin Phase 2.
 
 ---
 
@@ -106,6 +117,8 @@ None. Phase 1 and migration are complete. Ready to begin Phase 2.
 
 **2026-06-12:** Full tech stack migration — Slint/Rust replaced by Kotlin/Jetpack Compose. All Phase 1 deliverables ported and verified. See TECH_STACK_MIGRATION.md for the full migration record.
 
-**2026-06-12:** Post-migration audit — fixed subdirectory expansion bug in SafRepository.listChildren (getTreeDocumentId was returning root ID for child directory URIs; fixed by checking for "document" path segment). Removed unused imports in IdeViewModel. Updated all doc/asset comments to remove Rust/Slint references.
+**2026-06-12:** Post-migration audit — fixed subdirectory expansion bug in SafRepository.listChildren. Removed unused imports in IdeViewModel.
 
-Last updated: 2026-06-12
+**2026-06-13:** Phase 1 UI Correction Pass complete. All 9 file groups updated: data models, repository layer, ViewModel, AppRoot, IdeScreen, EditorPane, FileTreePanel, SettingsScreen, ProjectsScreen. Key fixes: preview crash (BUG-006), base64 URL issue (BUG-007), drawer gesture conflict (BUG-008), sidebar restructure, multi-select mode, .git filtering, file search panel, corrected context menus.
+
+Last updated: 2026-06-13

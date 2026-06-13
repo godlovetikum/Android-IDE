@@ -6,9 +6,11 @@
 package dev.androidide.viewmodel
 
 import android.app.Application
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.res.Configuration
 import android.net.Uri
-import android.util.Base64
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dev.androidide.data.CrashRecoveryRepository
@@ -27,8 +29,10 @@ import dev.androidide.viewmodel.model.AppScreen
 import dev.androidide.viewmodel.model.EditorTab
 import dev.androidide.viewmodel.model.FileNode
 import dev.androidide.viewmodel.model.FileOpDialog
+import dev.androidide.viewmodel.model.FileSearchResult
 import dev.androidide.viewmodel.model.IdeUiState
 import dev.androidide.viewmodel.model.findNode
+import dev.androidide.viewmodel.model.pathTo
 import dev.androidide.viewmodel.model.removeNode
 import dev.androidide.viewmodel.model.replaceNode
 import dev.androidide.viewmodel.model.setChildren
@@ -42,6 +46,7 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.io.File
 import java.util.UUID
 
 class IdeViewModel(application: Application) : AndroidViewModel(application) {
@@ -249,18 +254,25 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * Create a new blank project folder inside [parentUri] with the given [name],
+     * Create a new blank project folder in the app's workspace directory with the given [name],
      * then open it as the active project.
+     *
+     * No folder picker is shown — the project is created automatically under
+     * [getExternalFilesDir("Projects")], falling back to [filesDir]/projects if external storage
+     * is unavailable. No special runtime permission is required for these app-owned locations.
      */
-    fun createBlankProject(parentUri: String, name: String) {
-        viewModelScope.launch {
-            val newDirUri = safRepository.createFile(parentUri, name, "vnd.android.document/directory")
-            if (newDirUri != null) {
-                openProjectInternal(newDirUri)
-            } else {
-                _uiState.update { it.copy(statusMessage = "Could not create project folder") }
-            }
+    fun createBlankProject(name: String) {
+        val trimmed = name.trim().ifEmpty { "Project" }
+        val projectsDir = getApplication<Application>().getExternalFilesDir("Projects")
+            ?: File(getApplication<Application>().filesDir, "projects")
+        projectsDir.mkdirs()
+        val newDir = File(projectsDir, trimmed)
+        if (!newDir.exists() && !newDir.mkdirs()) {
+            _uiState.update { it.copy(statusMessage = "Could not create project folder") }
+            return
         }
+        val newDirUri = Uri.fromFile(newDir).toString()
+        viewModelScope.launch { openProjectInternal(newDirUri) }
     }
 
     /**
@@ -692,9 +704,151 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
                 "markdown" -> markdownToPreviewHtml(content)
                 else       -> return
             }
-            val encoded = Base64.encodeToString(htmlContent.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
-            _uiState.update { it.copy(isPreviewVisible = true, previewUrl = "data:text/html;base64,$encoded") }
+            _uiState.update { it.copy(isPreviewVisible = true, previewHtmlContent = htmlContent) }
         }
+    }
+
+    // ── File search ────────────────────────────────────────────────────────
+
+    fun showFileSearch() {
+        _uiState.update { it.copy(isSearchVisible = true, fileSearchQuery = "", fileSearchResults = emptyList()) }
+    }
+
+    fun hideFileSearch() {
+        _uiState.update { it.copy(isSearchVisible = false, fileSearchQuery = "", fileSearchResults = emptyList()) }
+    }
+
+    /**
+     * Search file names (not content) in the loaded file tree.
+     * Results are updated synchronously — no I/O.
+     */
+    fun searchFiles(query: String) {
+        _uiState.update { it.copy(fileSearchQuery = query) }
+        if (query.isBlank()) {
+            _uiState.update { it.copy(fileSearchResults = emptyList()) }
+            return
+        }
+        val results = mutableListOf<FileSearchResult>()
+        fun searchNodes(nodes: List<FileNode>, path: String) {
+            for (node in nodes) {
+                val nodePath = if (path.isEmpty()) node.displayName else "$path/${node.displayName}"
+                if (!node.isDirectory && node.displayName.contains(query, ignoreCase = true)) {
+                    results += FileSearchResult(
+                        documentUri  = node.documentUri,
+                        displayName  = node.displayName,
+                        relativePath = nodePath,
+                    )
+                }
+                if (node.isDirectory && node.children.isNotEmpty()) {
+                    searchNodes(node.children, nodePath)
+                }
+            }
+        }
+        searchNodes(_uiState.value.fileTree, "")
+        _uiState.update { it.copy(fileSearchResults = results) }
+    }
+
+    // ── Reveal active file ─────────────────────────────────────────────────
+
+    /**
+     * Expand all parent directories in the file tree that contain the active file,
+     * making the active file visible in the sidebar.
+     * Only operates on the currently-loaded (non-lazy) subtree.
+     */
+    fun revealActiveFile() {
+        val activeUri = _uiState.value.openTabs.firstOrNull { it.isActive }?.documentUri ?: run {
+            _uiState.update { it.copy(statusMessage = "No active file") }
+            return
+        }
+        val path = findPathToNode(_uiState.value.fileTree, activeUri)
+        if (path == null) {
+            _uiState.update { it.copy(statusMessage = "File not found in tree — try expanding folders first") }
+            return
+        }
+        for (dirUri in path) {
+            val node = _uiState.value.fileTree.findNode(dirUri)
+            if (node != null && node.isDirectory && !node.isExpanded) {
+                _uiState.update { state ->
+                    state.copy(fileTree = state.fileTree.toggleExpanded(dirUri))
+                }
+            }
+        }
+    }
+
+    private fun findPathToNode(
+        nodes: List<FileNode>,
+        targetUri: String,
+        path: List<String> = emptyList(),
+    ): List<String>? {
+        for (node in nodes) {
+            if (node.documentUri == targetUri) return path
+            if (node.isDirectory && node.children.isNotEmpty()) {
+                val found = findPathToNode(node.children, targetUri, path + node.documentUri)
+                if (found != null) return found
+            }
+        }
+        return null
+    }
+
+    // ── Multi-selection ────────────────────────────────────────────────────
+
+    fun enterSelectionMode() {
+        _uiState.update { it.copy(isMultiSelectMode = true, selectedUris = emptySet()) }
+    }
+
+    fun exitSelectionMode() {
+        _uiState.update { it.copy(isMultiSelectMode = false, selectedUris = emptySet()) }
+    }
+
+    fun toggleNodeSelection(uri: String) {
+        _uiState.update { state ->
+            val updated = if (uri in state.selectedUris) state.selectedUris - uri else state.selectedUris + uri
+            // Enter selection mode automatically on first selection.
+            state.copy(isMultiSelectMode = updated.isNotEmpty(), selectedUris = updated)
+        }
+    }
+
+    // ── Clipboard path copy ────────────────────────────────────────────────
+
+    /**
+     * Copy the display path of [documentUri] to the system clipboard.
+     * Uses the tree's relative path if the node is loaded; falls back to the raw URI.
+     */
+    fun copyPathToClipboard(documentUri: String) {
+        val path = _uiState.value.fileTree.pathTo(documentUri) ?: Uri.decode(documentUri)
+        val clipboard = getApplication<Application>()
+            .getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText("File Path", path))
+        _uiState.update { it.copy(statusMessage = "Path copied") }
+    }
+
+    // ── Remove project (with confirmation) ────────────────────────────────
+
+    /** Ask the user to confirm removing [uri] from the project registry. */
+    fun requestRemoveProject(uri: String) {
+        _uiState.update { it.copy(confirmRemoveProjectUri = uri) }
+    }
+
+    /** User confirmed — remove from registry and close if currently open. */
+    fun confirmRemoveProject() {
+        val uri = _uiState.value.confirmRemoveProjectUri ?: return
+        projectRepository.remove(uri)
+        _uiState.update { state ->
+            val wasCurrent = state.projectRootUri == uri
+            state.copy(
+                recentProjects          = projectRepository.getAll(),
+                confirmRemoveProjectUri = null,
+                projectRootUri          = if (wasCurrent) null else state.projectRootUri,
+                projectName             = if (wasCurrent) "" else state.projectName,
+                fileTree                = if (wasCurrent) emptyList() else state.fileTree,
+                statusMessage           = "Project removed",
+            )
+        }
+    }
+
+    /** User cancelled — dismiss the confirmation dialog. */
+    fun cancelRemoveProject() {
+        _uiState.update { it.copy(confirmRemoveProjectUri = null) }
     }
 
     // ── File operations ────────────────────────────────────────────────────

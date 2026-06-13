@@ -5,8 +5,8 @@
 // Owns all ActivityResultLaunchers so they are registered at the root
 // composable level and shared with child screens via callbacks.
 //
-// Bottom NavigationBar is only shown on PROJECTS and SETTINGS screens — the
-// EDITOR screen uses its sidebar for navigation.
+// IdeScreen is always the root screen — no bottom NavigationBar.
+// Navigation between Projects / Editor / Settings is handled by the sidebar.
 
 package dev.androidide.ui
 
@@ -14,20 +14,13 @@ import android.content.Intent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.FolderOpen
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.viewmodel.compose.viewModel
-import dev.androidide.ui.screen.ProjectsScreen
-import dev.androidide.ui.screen.SettingsScreen
 import dev.androidide.ui.theme.AndroidIDETheme
-import dev.androidide.ui.theme.LocalIdeColors
 import dev.androidide.viewmodel.IdeViewModel
-import dev.androidide.viewmodel.model.AppScreen
 import dev.androidide.viewmodel.model.FileNode
 
 @Composable
@@ -36,10 +29,9 @@ fun AppRoot(ideViewModel: IdeViewModel = viewModel()) {
     val context  = LocalContext.current
 
     // ── State for multi-step flows ──────────────────────────────────────────
-    var importTargetDirUri       by remember { mutableStateOf("") }
-    var createProjectParentUri   by remember { mutableStateOf("") }
-    var showCreateProjectDialog  by remember { mutableStateOf(false) }
-    var createProjectName        by remember { mutableStateOf("") }
+    var importTargetDirUri      by remember { mutableStateOf("") }
+    var showCreateProjectDialog by remember { mutableStateOf(false) }
+    var createProjectName       by remember { mutableStateOf("") }
 
     // ── Open existing project folder ────────────────────────────────────────
     val openProjectLauncher = rememberLauncherForActivityResult(
@@ -84,82 +76,27 @@ fun AppRoot(ideViewModel: IdeViewModel = viewModel()) {
         importTargetDirUri = ""
     }
 
-    // ── Create blank project — pick parent folder then enter a name ─────────
-    val createProjectLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.OpenDocumentTree()
-    ) { uri ->
-        if (uri != null) {
-            context.contentResolver.takePersistableUriPermission(
-                uri,
-                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
-            )
-            createProjectParentUri  = uri.toString()
-            createProjectName       = "MyProject"
-            showCreateProjectDialog = true
-        }
-    }
-
     AndroidIDETheme(appTheme = uiState.appTheme) {
-        val colors = LocalIdeColors.current
-
-        Column(modifier = Modifier.fillMaxSize().systemBarsPadding()) {
-            // ── Screen content ──────────────────────────────────────────────
-            Box(modifier = Modifier.weight(1f)) {
-                when (uiState.currentScreen) {
-                    AppScreen.PROJECTS -> ProjectsScreen(
-                        uiState             = uiState,
-                        ideViewModel        = ideViewModel,
-                        onOpenProjectFolder = { openProjectLauncher.launch(null) },
-                        onCreateBlankProject = { createProjectLauncher.launch(null) },
-                    )
-                    AppScreen.EDITOR -> IdeScreen(
-                        ideViewModel        = ideViewModel,
-                        uiState             = uiState,
-                        onOpenProjectFolder = { openProjectLauncher.launch(null) },
-                        onSaveAs            = { saveAsLauncher.launch(activeTabName) },
-                        onImportFilesAt     = { node ->
-                            importTargetDirUri = node.documentUri
-                            importFilesLauncher.launch(arrayOf("*/*"))
-                        },
-                    )
-                    AppScreen.SETTINGS -> SettingsScreen(
-                        uiState      = uiState,
-                        ideViewModel = ideViewModel,
-                    )
-                }
-            }
-
-            // ── Bottom navigation bar (only on non-editor screens) ──────────
-            if (uiState.currentScreen != AppScreen.EDITOR) {
-                NavigationBar(containerColor = colors.surface) {
-                    NavigationBarItem(
-                        icon     = { Icon(Icons.Default.FolderOpen, contentDescription = "Projects") },
-                        label    = { Text("Projects") },
-                        selected = uiState.currentScreen == AppScreen.PROJECTS,
-                        onClick  = { ideViewModel.navigateTo(AppScreen.PROJECTS) },
-                        colors   = NavigationBarItemDefaults.colors(
-                            selectedIconColor   = colors.accent,
-                            selectedTextColor   = colors.accent,
-                            unselectedIconColor = colors.textSecondary,
-                            unselectedTextColor = colors.textSecondary,
-                            indicatorColor      = colors.activeHighlight,
-                        ),
-                    )
-                    NavigationBarItem(
-                        icon     = { Icon(Icons.Default.Settings, contentDescription = "Settings") },
-                        label    = { Text("Settings") },
-                        selected = uiState.currentScreen == AppScreen.SETTINGS,
-                        onClick  = { ideViewModel.navigateTo(AppScreen.SETTINGS) },
-                        colors   = NavigationBarItemDefaults.colors(
-                            selectedIconColor   = colors.accent,
-                            selectedTextColor   = colors.accent,
-                            unselectedIconColor = colors.textSecondary,
-                            unselectedTextColor = colors.textSecondary,
-                            indicatorColor      = colors.activeHighlight,
-                        ),
-                    )
-                }
-            }
+        Box(modifier = Modifier.fillMaxSize().systemBarsPadding()) {
+            // IdeScreen is always the root — sidebar handles all navigation.
+            IdeScreen(
+                ideViewModel        = ideViewModel,
+                uiState             = uiState,
+                onOpenProjectFolder = { openProjectLauncher.launch(null) },
+                onCreateBlankProject = {
+                    createProjectName       = "MyProject"
+                    showCreateProjectDialog = true
+                },
+                onSaveAs            = { saveAsLauncher.launch(activeTabName) },
+                onImportFilesAt     = { node ->
+                    importTargetDirUri = node.documentUri
+                    importFilesLauncher.launch(arrayOf("*/*"))
+                },
+                onImportFilesAtRoot = {
+                    importTargetDirUri = uiState.projectRootUri ?: ""
+                    if (importTargetDirUri.isNotEmpty()) importFilesLauncher.launch(arrayOf("*/*"))
+                },
+            )
         }
     }
 
@@ -181,10 +118,7 @@ fun AppRoot(ideViewModel: IdeViewModel = viewModel()) {
                 TextButton(
                     onClick = {
                         if (createProjectName.isNotBlank()) {
-                            ideViewModel.createBlankProject(
-                                createProjectParentUri,
-                                createProjectName.trim(),
-                            )
+                            ideViewModel.createBlankProject(createProjectName.trim())
                             showCreateProjectDialog = false
                         }
                     },
@@ -193,6 +127,27 @@ fun AppRoot(ideViewModel: IdeViewModel = viewModel()) {
             },
             dismissButton = {
                 TextButton(onClick = { showCreateProjectDialog = false }) { Text("Cancel") }
+            },
+        )
+    }
+
+    // ── Remove Project confirmation dialog ──────────────────────────────────
+    val removeUri = uiState.confirmRemoveProjectUri
+    if (removeUri != null) {
+        AlertDialog(
+            onDismissRequest = { ideViewModel.cancelRemoveProject() },
+            title   = { Text("Remove Project") },
+            text    = {
+                Text("Remove this project from the list? The files on disk will NOT be deleted.")
+            },
+            confirmButton = {
+                TextButton(
+                    onClick  = { ideViewModel.confirmRemoveProject() },
+                    colors   = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                ) { Text("Remove") }
+            },
+            dismissButton = {
+                TextButton(onClick = { ideViewModel.cancelRemoveProject() }) { Text("Cancel") }
             },
         )
     }
