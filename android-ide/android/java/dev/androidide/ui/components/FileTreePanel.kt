@@ -25,17 +25,21 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Article
 import androidx.compose.material.icons.filled.CheckBox
 import androidx.compose.material.icons.filled.CheckBoxOutlineBlank
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -85,6 +89,8 @@ fun FileTreePanel(
     onRefresh: () -> Unit,
     onRenameProject: () -> Unit,
     onRemoveProject: () -> Unit,
+    // F012: root-folder paste; restriction that disallowed pasting at root removed.
+    onPasteAtRoot: () -> Unit,
     // ── Search / selection / path callbacks ───────────────────────────────
     onCopyPath: (String) -> Unit,
     onToggleNodeSelection: (String) -> Unit,
@@ -177,12 +183,14 @@ fun FileTreePanel(
                     item {
                         RootProjectNode(
                             projectName    = projectName,
+                            clipboardItems = clipboardItems,
                             onNewFile      = onNewFileAtRoot,
                             onNewFolder    = onNewFolderAtRoot,
                             onImportFiles  = onImportFilesAtRoot,
                             onExport       = onExportProject,
                             onRename       = onRenameProject,
                             onRemove       = onRemoveProject,
+                            onPasteAtRoot  = onPasteAtRoot,
                         )
                         HorizontalDivider(thickness = 0.5.dp, color = colors.separator)
                     }
@@ -269,12 +277,14 @@ private fun SearchResultRow(
 @Composable
 private fun RootProjectNode(
     projectName: String,
+    clipboardItems: List<FileNode>,
     onNewFile: () -> Unit,
     onNewFolder: () -> Unit,
     onImportFiles: () -> Unit,
     onExport: () -> Unit,
     onRename: () -> Unit,
     onRemove: () -> Unit,
+    onPasteAtRoot: () -> Unit,
 ) {
     val colors     = LocalIdeColors.current
     var menuOpen   by remember { mutableStateOf(false) }
@@ -325,6 +335,17 @@ private fun RootProjectNode(
                     text    = { Text("Import Files") },
                     onClick = { menuOpen = false; onImportFiles() },
                 )
+                // F012: root-folder paste — the spec prohibits restricting paste at project root.
+                if (clipboardItems.isNotEmpty()) {
+                    val count = clipboardItems.size
+                    DropdownMenuItem(
+                        text = {
+                            if (count == 1) Text("Paste \u201c${clipboardItems[0].displayName}\u201d here")
+                            else Text("Paste $count items here")
+                        },
+                        onClick = { menuOpen = false; onPasteAtRoot() },
+                    )
+                }
                 HorizontalDivider()
                 DropdownMenuItem(
                     text    = { Text("Export Project\u2026") },
@@ -435,7 +456,7 @@ private fun FileTreeRow(
             imageVector = when {
                 node.isDirectory && node.isExpanded -> Icons.Default.FolderOpen
                 node.isDirectory                    -> Icons.Default.Folder
-                else                                -> Icons.Default.InsertDriveFile
+                else                                -> fileIconFor(node.displayName)
             },
             contentDescription = null,
             // Dim clipboard items to signal they are pending cut/copy.
@@ -538,11 +559,22 @@ private fun FileTreeRow(
                         text    = { Text("Delete", color = LocalIdeColors.current.error) },
                         onClick = { menuOpen = false; onShowDeleteDialog(node) },
                     )
+                    // F026: folders were missing Select; multi-select must work for both files and folders.
+                    HorizontalDivider()
+                    DropdownMenuItem(
+                        text    = { Text("Select") },
+                        onClick = { menuOpen = false; onSelect(node.documentUri) },
+                    )
                 } else {
                     // ── File menu ────────────────────────────────────────
                     DropdownMenuItem(
                         text    = { Text("Rename") },
                         onClick = { menuOpen = false; onShowRenameDialog(node) },
+                    )
+                    // F023: Duplicate was wired through all callback layers but the menu item was absent.
+                    DropdownMenuItem(
+                        text    = { Text("Duplicate") },
+                        onClick = { menuOpen = false; onShowDuplicateDialog(node) },
                     )
                     DropdownMenuItem(
                         text    = { Text("Copy Path") },
@@ -570,6 +602,37 @@ private fun FileTreeRow(
                 }
             }
         }
+    }
+}
+
+// ── File type icon ─────────────────────────────────────────────────────────────
+
+/**
+ * F013: return a Material icon that gives a visual cue about the file's purpose.
+ *
+ * Priority: image formats → text/docs → code → generic.
+ * Uses only icons confirmed present in material-icons-extended.
+ */
+private fun fileIconFor(displayName: String): ImageVector {
+    val ext = displayName.substringAfterLast('.', "").lowercase()
+    return when (ext) {
+        // Image files
+        "png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "ico", "tiff", "tif" ->
+            Icons.Default.Image
+        // Prose / text
+        "md", "mdx", "txt", "rst", "adoc" ->
+            Icons.Default.Article
+        // Source code and data (includes HTML/CSS/JS/TS, Kotlin, Java, XML, JSON, …)
+        "kt", "kts", "java",
+        "js", "cjs", "mjs", "ts", "tsx", "jsx",
+        "html", "htm", "css", "scss", "less", "sass",
+        "json", "jsonc", "yaml", "yml", "toml",
+        "xml", "gradle", "plist", "properties",
+        "py", "rb", "go", "rs", "c", "cpp", "cc", "h", "hpp",
+        "sh", "bash", "zsh", "fish", "bat", "ps1" ->
+            Icons.Default.Code
+        // Default: generic document icon
+        else -> Icons.Default.InsertDriveFile
     }
 }
 

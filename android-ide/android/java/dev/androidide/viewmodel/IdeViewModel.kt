@@ -164,10 +164,31 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
         val screen = screenName?.let { runCatching { AppScreen.valueOf(it) }.getOrNull() }
         if (screen != null) _uiState.update { it.copy(currentScreen = screen) }
 
-        viewModelScope.launch { openProjectInternal(projectUri) }
-        tabUris.forEach { uri ->
-            viewModelScope.launch { openFileInternal(uri, markActive = uri == activeUri) }
+        // F020: validate that the saved project URI still has a persisted SAF permission
+        // grant before attempting to open it.  Grants can be revoked after device reboot
+        // (if the provider does not survive reboot) or an explicit permission reset.
+        val hasPermission = getApplication<Application>().contentResolver
+            .persistedUriPermissions
+            .any { it.uri.toString() == projectUri && it.isReadPermission && it.isWritePermission }
+        if (!hasPermission) {
+            _uiState.update {
+                it.copy(statusMessage = "Previous project no longer accessible — re-open it from Projects")
+            }
+            return
         }
+
+        // F002: single sequential coroutine prevents race where parallel launches
+        // reset openTabs mid-flight (openProjectInternal wipes tabs; parallel
+        // openFileInternal calls may have already added tabs before the wipe).
+        viewModelScope.launch {
+            openProjectInternal(projectUri)
+            tabUris.forEach { uri -> openFileInternal(uri, markActive = uri == activeUri) }
+        }
+    }
+
+    // F022: surface a status-bar message from click handlers that have no ViewModel action yet.
+    fun noteStatusMessage(msg: String) {
+        _uiState.update { it.copy(statusMessage = msg) }
     }
 
     fun saveSession() {
@@ -218,11 +239,16 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
         editorSettingsRepo.setEditorSettings(settings)
         _uiState.update { it.copy(editorSettings = settings) }
         sendEditorCommand(EditorOutbound.SetEditorOptions(
-            tabSize          = settings.tabSize,
-            wordWrap         = settings.wordWrap,
-            lineNumbers      = settings.lineNumbers,
-            fontSize         = settings.fontSize,
-            renderWhitespace = settings.renderWhitespace,
+            tabSize                = settings.tabSize,
+            wordWrap               = settings.wordWrap,
+            lineNumbers            = settings.lineNumbers,
+            fontSize               = settings.fontSize,
+            renderWhitespace       = settings.renderWhitespace,
+            minimapEnabled         = settings.minimapEnabled,
+            scrollBeyondLastLine   = settings.scrollBeyondLastLine,
+            cursorStyle            = settings.cursorStyle,
+            bracketPairColorization= settings.bracketPairColorization,
+            autoClosingBrackets    = settings.autoClosingBrackets,
         ))
         if (_uiState.value.isEditorReady && settings.editorTheme != previousTheme) {
             sendEditorCommand(EditorOutbound.SetTheme(resolveMonacoTheme()))
@@ -265,6 +291,10 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
 
     private suspend fun openProjectInternal(treeUriString: String) {
         val name = extractProjectName(treeUriString)
+        // F019: dispose all Monaco models from the previous project before clearing
+        // tabs — prevents stale models from leaking into the new project (same filename
+        // in both projects would reuse the old model and show wrong content).
+        sendEditorCommand(EditorOutbound.CloseAllModels)
         // Close tabs from the previous project; restore tabs for the new project.
         _uiState.value.openTabs.forEach { pendingContent.remove(it.id) }
         _uiState.update { it.copy(
@@ -575,6 +605,20 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         val bytes = safRepository.readFile(documentUri) ?: return
+
+        // F005-A: size guard — reject files larger than 5 MB to prevent OOM in
+        // Monaco and the Kotlin string allocation that precedes it.
+        if (bytes.size > 5 * 1024 * 1024) {
+            _uiState.update { it.copy(statusMessage = "Cannot open: file is ${bytes.size / 1_048_576} MB (5 MB limit)") }
+            return
+        }
+        // F005-B: binary detection — scan the first 8 KB for null bytes.
+        // Binary content (.apk, .class, compiled assets) corrupts Monaco's text model.
+        if (bytes.take(8192).any { it == 0.toByte() }) {
+            _uiState.update { it.copy(statusMessage = "Cannot open binary file in text editor") }
+            return
+        }
+
         val content = String(bytes, Charsets.UTF_8)
         val displayName = _uiState.value.fileTree.findNode(documentUri)?.displayName
             ?: safRepository.getDisplayName(documentUri)
@@ -707,11 +751,16 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update { it.copy(isEditorReady = true) }
         val settings = _uiState.value.editorSettings
         sendEditorCommand(EditorOutbound.SetEditorOptions(
-            tabSize          = settings.tabSize,
-            wordWrap         = settings.wordWrap,
-            lineNumbers      = settings.lineNumbers,
-            fontSize         = settings.fontSize,
-            renderWhitespace = settings.renderWhitespace,
+            tabSize                = settings.tabSize,
+            wordWrap               = settings.wordWrap,
+            lineNumbers            = settings.lineNumbers,
+            fontSize               = settings.fontSize,
+            renderWhitespace       = settings.renderWhitespace,
+            minimapEnabled         = settings.minimapEnabled,
+            scrollBeyondLastLine   = settings.scrollBeyondLastLine,
+            cursorStyle            = settings.cursorStyle,
+            bracketPairColorization= settings.bracketPairColorization,
+            autoClosingBrackets    = settings.autoClosingBrackets,
         ))
         sendEditorCommand(EditorOutbound.SetTheme(resolveMonacoTheme()))
         sendEditorCommand(EditorOutbound.ForceLayout)
@@ -741,6 +790,15 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
             }
 
             is EditorInbound.FileSaved -> saveFile(message.path)
+
+            // F016: Monaco posted selected text; write it to the Android clipboard.
+            // isCut=true means Monaco has already deleted the selection — nothing else
+            // to do on the Kotlin side after placing the text in the clipboard.
+            is EditorInbound.TextCopied -> {
+                val clipboard = getApplication<Application>()
+                    .getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                clipboard.setPrimaryClip(ClipData.newPlainText("code", message.text))
+            }
         }
     }
 
@@ -834,17 +892,46 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
     //   Each branch should launch its provider safely (coroutine + runCatching).
     //   The Run action must never terminate the application under any failure.
     fun requestRun() {
-        val active = _uiState.value.openTabs.firstOrNull { it.isActive }
-        if (active == null) {
-            _uiState.update { it.copy(statusMessage = "Open a file to run or preview") }
+        val state  = _uiState.value
+        val active = state.openTabs.firstOrNull { it.isActive }
+
+        // Active file is directly previewable — just toggle the preview.
+        if (active != null && active.language in listOf("html", "markdown")) {
+            togglePreview()
             return
         }
-        when (active.language) {
-            "html", "markdown" -> togglePreview()
-            else -> _uiState.update {
-                it.copy(statusMessage = "No run provider for ${active.language} files")
+
+        // F006: project-scoped run — search the in-memory (expanded) file tree for
+        // the first .html file.  When found, open it as the active tab so the user
+        // can press Run once more to preview it.  This covers the common case where
+        // a .css or .js file is active inside an HTML project.
+        val htmlNode = findFirstHtmlNode(state.fileTree)
+        if (htmlNode != null) {
+            viewModelScope.launch {
+                openFileInternal(htmlNode.documentUri, markActive = true, temporary = true)
+                _uiState.update {
+                    it.copy(statusMessage = "Opened ${htmlNode.displayName} — press Run to preview")
+                }
             }
+            return
         }
+
+        _uiState.update {
+            it.copy(statusMessage = when {
+                active == null              -> "Open a file to run or preview"
+                state.projectRootUri == null -> "Open a project first"
+                else -> "No HTML or Markdown files found — open one to preview"
+            })
+        }
+    }
+
+    /** Recursively searches [nodes] for the first non-directory .html file. */
+    private fun findFirstHtmlNode(nodes: List<FileNode>): FileNode? {
+        for (node in nodes) {
+            if (!node.isDirectory && node.displayName.endsWith(".html", ignoreCase = true)) return node
+            if (node.isDirectory) { findFirstHtmlNode(node.children)?.let { return it } }
+        }
+        return null
     }
 
     // ── Preview provider ───────────────────────────────────────────────────
@@ -1053,6 +1140,22 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
     fun dismissFileOpDialog()                    = _uiState.update { it.copy(fileOpDialog = null) }
 
     fun renameNode(node: FileNode, newName: String) {
+        // F025: leading "/" on a rename means "move to absolute path" — Phase 2.
+        if (newName.startsWith("/")) {
+            _uiState.update { it.copy(statusMessage = "Move-by-path is available in Phase 2") }
+            return
+        }
+        // F007: pre-flight duplicate check among siblings.
+        val parentUri = node.parentDocumentUri
+        val siblings = if (parentUri != null) {
+            _uiState.value.fileTree.findNode(parentUri)?.children ?: emptyList()
+        } else {
+            _uiState.value.fileTree  // node is at the project root level
+        }
+        if (siblings.any { it.documentUri != node.documentUri && it.displayName.equals(newName, ignoreCase = true) }) {
+            _uiState.update { it.copy(statusMessage = "\u201c$newName\u201d already exists") }
+            return
+        }
         viewModelScope.launch {
             val newUri = safRepository.renameDocument(node.documentUri, newName) ?: run {
                 _uiState.update { it.copy(fileOpDialog = null, statusMessage = "Rename failed") }
@@ -1090,6 +1193,36 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun createFileInDirectory(parentNode: FileNode, name: String) {
+        // F025: leading "/" means absolute path from the project root.
+        val rootUri = _uiState.value.projectRootUri
+        if (name.startsWith("/") && rootUri != null) {
+            val segments = name.removePrefix("/").split("/").filter { it.isNotBlank() }
+            if (segments.isEmpty()) { _uiState.update { it.copy(statusMessage = "Invalid path") }; return }
+            viewModelScope.launch {
+                val (targetParentUri, leafName) = safRepository.resolveOrCreatePath(rootUri, segments) ?: run {
+                    _uiState.update { it.copy(fileOpDialog = null, statusMessage = "Could not resolve path") }
+                    return@launch
+                }
+                val existing = safRepository.listChildren(targetParentUri)
+                if (existing.any { it.displayName.equals(leafName, ignoreCase = true) }) {
+                    _uiState.update { it.copy(statusMessage = "\u201c$leafName\u201d already exists") }
+                    return@launch
+                }
+                safRepository.createFile(targetParentUri, leafName, mimeTypeForName(leafName)) ?: run {
+                    _uiState.update { it.copy(fileOpDialog = null, statusMessage = "Create failed") }
+                    return@launch
+                }
+                refreshDirectory(targetParentUri)
+                _uiState.update { it.copy(fileOpDialog = null, statusMessage = "Created $leafName") }
+            }
+            return
+        }
+        // F007: reject duplicate names pre-flight so the dialog stays open with an error.
+        val siblings = _uiState.value.fileTree.findNode(parentNode.documentUri)?.children ?: emptyList()
+        if (siblings.any { it.displayName.equals(name, ignoreCase = true) }) {
+            _uiState.update { it.copy(statusMessage = "\u201c$name\u201d already exists in this folder") }
+            return
+        }
         viewModelScope.launch {
             safRepository.createFile(parentNode.documentUri, name, mimeTypeForName(name)) ?: run {
                 _uiState.update { it.copy(fileOpDialog = null, statusMessage = "Create failed") }
@@ -1101,6 +1234,36 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun createFolderInDirectory(parentNode: FileNode, name: String) {
+        // F025: leading "/" means absolute path from the project root.
+        val rootUri = _uiState.value.projectRootUri
+        if (name.startsWith("/") && rootUri != null) {
+            val segments = name.removePrefix("/").split("/").filter { it.isNotBlank() }
+            if (segments.isEmpty()) { _uiState.update { it.copy(statusMessage = "Invalid path") }; return }
+            viewModelScope.launch {
+                val (targetParentUri, leafName) = safRepository.resolveOrCreatePath(rootUri, segments) ?: run {
+                    _uiState.update { it.copy(fileOpDialog = null, statusMessage = "Could not resolve path") }
+                    return@launch
+                }
+                val existing = safRepository.listChildren(targetParentUri)
+                if (existing.any { it.displayName.equals(leafName, ignoreCase = true) }) {
+                    _uiState.update { it.copy(statusMessage = "\u201c$leafName\u201d already exists") }
+                    return@launch
+                }
+                safRepository.createFile(targetParentUri, leafName, "vnd.android.document/directory") ?: run {
+                    _uiState.update { it.copy(fileOpDialog = null, statusMessage = "Create failed") }
+                    return@launch
+                }
+                refreshDirectory(targetParentUri)
+                _uiState.update { it.copy(fileOpDialog = null, statusMessage = "Created folder $leafName") }
+            }
+            return
+        }
+        // F007: reject duplicate names pre-flight.
+        val siblings = _uiState.value.fileTree.findNode(parentNode.documentUri)?.children ?: emptyList()
+        if (siblings.any { it.displayName.equals(name, ignoreCase = true) }) {
+            _uiState.update { it.copy(statusMessage = "\u201c$name\u201d already exists in this folder") }
+            return
+        }
         viewModelScope.launch {
             safRepository.createFile(parentNode.documentUri, name, "vnd.android.document/directory") ?: run {
                 _uiState.update { it.copy(fileOpDialog = null, statusMessage = "Create failed") }
@@ -1114,6 +1277,11 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
     fun createFileAtRoot(name: String) {
         val rootUri = _uiState.value.projectRootUri ?: run {
             _uiState.update { it.copy(statusMessage = "No project open") }
+            return
+        }
+        // F007: reject duplicate name at project root.
+        if (_uiState.value.fileTree.any { it.displayName.equals(name, ignoreCase = true) }) {
+            _uiState.update { it.copy(statusMessage = "\u201c$name\u201d already exists in the project root") }
             return
         }
         viewModelScope.launch {
@@ -1131,6 +1299,11 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
             _uiState.update { it.copy(statusMessage = "No project open") }
             return
         }
+        // F007: reject duplicate name at project root.
+        if (_uiState.value.fileTree.any { it.displayName.equals(name, ignoreCase = true) }) {
+            _uiState.update { it.copy(statusMessage = "\u201c$name\u201d already exists in the project root") }
+            return
+        }
         viewModelScope.launch {
             safRepository.createFile(rootUri, name, "vnd.android.document/directory") ?: run {
                 _uiState.update { it.copy(statusMessage = "Create failed") }
@@ -1146,6 +1319,13 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
             _uiState.update { it.copy(fileOpDialog = null, statusMessage = "Cannot duplicate: no parent") }
             return
         }
+        // F007: reject duplicate name in the same parent directory.
+        val parentSiblings = _uiState.value.fileTree.findNode(parentUri)?.children
+            ?: _uiState.value.fileTree
+        if (parentSiblings.any { it.displayName.equals(newName, ignoreCase = true) }) {
+            _uiState.update { it.copy(statusMessage = "\u201c$newName\u201d already exists in this folder") }
+            return
+        }
         viewModelScope.launch {
             val bytes  = safRepository.readFile(node.documentUri) ?: run {
                 _uiState.update { it.copy(fileOpDialog = null, statusMessage = "Duplicate: read error") }
@@ -1158,6 +1338,73 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
             safRepository.writeFile(newUri, bytes)
             refreshDirectory(parentUri)
             _uiState.update { it.copy(fileOpDialog = null, statusMessage = "Duplicated as $newName") }
+        }
+    }
+
+    // ── F003: SAF-backed path navigator ───────────────────────────────────────
+
+    /**
+     * Load the immediate children of [parentUri] directly from SAF.
+     * Called by IdeTopBar's path-navigator dropdown, so it always returns
+     * live data regardless of which tree nodes are expanded.
+     */
+    suspend fun loadNavChildren(parentUri: String): List<FileNode> =
+        safRepository.listChildren(parentUri)
+
+    // ── F004: Project-relative Save As ────────────────────────────────────────
+
+    /** Open the inline Save-As dialog pre-filled with the active tab name. */
+    fun showSaveAsDialog() {
+        val name = _uiState.value.openTabs.firstOrNull { it.isActive }?.displayName ?: "untitled"
+        _uiState.update { it.copy(fileOpDialog = FileOpDialog.SaveAs(name)) }
+    }
+
+    /**
+     * Write active file content to [relativePath] within the project root.
+     * Supports "newname.kt" (creates in root) or "src/utils/Foo.kt" (creates
+     * intermediate dirs if needed).
+     */
+    fun saveAsAtPath(relativePath: String) {
+        val rootUri = _uiState.value.projectRootUri ?: run {
+            _uiState.update { it.copy(statusMessage = "No project open") }
+            return
+        }
+        val active  = _uiState.value.openTabs.firstOrNull { it.isActive } ?: return
+        val content = pendingContent[active.id] ?: active.content ?: return
+        val segments = relativePath.trimStart('/').split("/").filter { it.isNotBlank() }
+        if (segments.isEmpty()) { _uiState.update { it.copy(statusMessage = "Invalid path") }; return }
+        viewModelScope.launch {
+            val (targetParentUri, leafName) = safRepository.resolveOrCreatePath(rootUri, segments) ?: run {
+                _uiState.update { it.copy(fileOpDialog = null, statusMessage = "Could not resolve path") }
+                return@launch
+            }
+            val existing = safRepository.listChildren(targetParentUri)
+            if (existing.any { it.displayName.equals(leafName, ignoreCase = true) }) {
+                _uiState.update { it.copy(statusMessage = "\u201c$leafName\u201d already exists — choose a different name") }
+                return@launch
+            }
+            val newUri = safRepository.createFile(targetParentUri, leafName, mimeTypeForName(leafName)) ?: run {
+                _uiState.update { it.copy(fileOpDialog = null, statusMessage = "Save As: could not create file") }
+                return@launch
+            }
+            val ok = safRepository.writeFile(newUri, content.toByteArray(Charsets.UTF_8))
+            if (!ok) { _uiState.update { it.copy(fileOpDialog = null, statusMessage = "Save As: write failed") }; return@launch }
+            val newLang = languageForExtension(leafName.substringAfterLast('.', ""))
+            pendingContent.remove(active.id)
+            crashRecovery.clearUnsavedContent(active.id)
+            refreshDirectory(targetParentUri)
+            _uiState.update { state ->
+                state.copy(
+                    openTabs     = state.openTabs.map {
+                        if (it.id == active.id) it.copy(
+                            documentUri = newUri, displayName = leafName,
+                            language = newLang, isDirty = false, isBlank = false,
+                        ) else it
+                    },
+                    fileOpDialog  = null,
+                    statusMessage = "Saved as $leafName",
+                )
+            }
         }
     }
 

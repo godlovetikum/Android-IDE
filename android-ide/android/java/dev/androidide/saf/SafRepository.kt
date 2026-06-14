@@ -408,6 +408,37 @@ class SafRepository(private val context: Context) {
                 null
             }
         }
+
+    // ── F025: Absolute-path resolution ────────────────────────────────────────
+
+    /**
+     * Walk [segments] from [treeUriString], creating intermediate directories as
+     * needed. Returns [Pair(parentDirUri, leafName)] so the caller can create or
+     * check for the final path component without creating it here.
+     * Returns null on any SAF failure.
+     *
+     * Example: resolveOrCreatePath(rootUri, ["src","utils","Foo.kt"])
+     *   → ensures src/ and src/utils/ exist, returns (src/utils URI, "Foo.kt")
+     */
+    suspend fun resolveOrCreatePath(
+        treeUriString: String,
+        segments: List<String>,
+    ): Pair<String, String>? = withContext(Dispatchers.IO) {
+        if (segments.isEmpty()) return@withContext null
+        if (segments.size == 1) return@withContext Pair(treeUriString, segments[0])
+        var currentUri = treeUriString
+        for (segment in segments.dropLast(1)) {
+            val children = listChildren(currentUri)
+            val existing = children.firstOrNull { it.isDirectory && it.displayName == segment }
+            currentUri = if (existing != null) {
+                existing.documentUri
+            } else {
+                // Create missing intermediate directory.
+                createFile(currentUri, segment, MIME_DIR) ?: return@withContext null
+            }
+        }
+        Pair(currentUri, segments.last())
+    }
 }
 
 // ── InputStream extension ─────────────────────────────────────────────────────

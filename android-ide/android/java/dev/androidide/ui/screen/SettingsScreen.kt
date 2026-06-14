@@ -268,6 +268,98 @@ fun SettingsScreen(
 
                     HorizontalDivider(color = colors.separator)
 
+                    // F017: Minimap
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .selectable(selected = s.minimapEnabled, role = Role.Switch, onClick = {
+                                ideViewModel.setEditorSettings(s.copy(minimapEnabled = !s.minimapEnabled))
+                            }),
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Minimap", color = colors.textPrimary, style = MaterialTheme.typography.bodyMedium)
+                            Text("Show code overview panel on the right edge", color = colors.textSecondary, style = MaterialTheme.typography.bodySmall)
+                        }
+                        Switch(checked = s.minimapEnabled, onCheckedChange = { ideViewModel.setEditorSettings(s.copy(minimapEnabled = it)) })
+                    }
+
+                    HorizontalDivider(color = colors.separator)
+
+                    // F017: Scroll beyond last line
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .selectable(selected = s.scrollBeyondLastLine, role = Role.Switch, onClick = {
+                                ideViewModel.setEditorSettings(s.copy(scrollBeyondLastLine = !s.scrollBeyondLastLine))
+                            }),
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Scroll Past Last Line", color = colors.textPrimary, style = MaterialTheme.typography.bodyMedium)
+                            Text("Allow scrolling so the last line can sit at centre", color = colors.textSecondary, style = MaterialTheme.typography.bodySmall)
+                        }
+                        Switch(checked = s.scrollBeyondLastLine, onCheckedChange = { ideViewModel.setEditorSettings(s.copy(scrollBeyondLastLine = it)) })
+                    }
+
+                    HorizontalDivider(color = colors.separator)
+
+                    // F017: Bracket pair colorization
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .selectable(selected = s.bracketPairColorization, role = Role.Switch, onClick = {
+                                ideViewModel.setEditorSettings(s.copy(bracketPairColorization = !s.bracketPairColorization))
+                            }),
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Bracket Pair Colors", color = colors.textPrimary, style = MaterialTheme.typography.bodyMedium)
+                            Text("Colour each nested bracket level differently", color = colors.textSecondary, style = MaterialTheme.typography.bodySmall)
+                        }
+                        Switch(checked = s.bracketPairColorization, onCheckedChange = { ideViewModel.setEditorSettings(s.copy(bracketPairColorization = it)) })
+                    }
+
+                    HorizontalDivider(color = colors.separator)
+
+                    // F017: Cursor style
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Cursor Style", color = colors.textPrimary, style = MaterialTheme.typography.bodyMedium)
+                            Text("Cursor appearance in the editor", color = colors.textSecondary, style = MaterialTheme.typography.bodySmall)
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            listOf("Line" to "line", "Block" to "block", "Underline" to "underline").forEach { (label, value) ->
+                                FilterChip(
+                                    selected = s.cursorStyle == value,
+                                    onClick  = { ideViewModel.setEditorSettings(s.copy(cursorStyle = value)) },
+                                    label    = { Text(label) },
+                                )
+                            }
+                        }
+                    }
+
+                    HorizontalDivider(color = colors.separator)
+
+                    // F017: Auto-closing brackets
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Auto-close Brackets", color = colors.textPrimary, style = MaterialTheme.typography.bodyMedium)
+                            Text("Insert matching bracket automatically", color = colors.textSecondary, style = MaterialTheme.typography.bodySmall)
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            listOf("Always" to "always", "Smart" to "languageDefined", "Never" to "never").forEach { (label, value) ->
+                                FilterChip(
+                                    selected = s.autoClosingBrackets == value,
+                                    onClick  = { ideViewModel.setEditorSettings(s.copy(autoClosingBrackets = value)) },
+                                    label    = { Text(label) },
+                                )
+                            }
+                        }
+                    }
+
+                    HorizontalDivider(color = colors.separator)
+
                     // Auto save
                     Row(
                         verticalAlignment = Alignment.CenterVertically,

@@ -253,22 +253,52 @@ require(['vs/editor/editor.main'], function () {
 
   // --- Tap-to-focus: clicking anywhere in the editor focuses the Monaco
   //     textarea so the soft keyboard appears immediately on Android. ---
+  //
+  // F024: Three guards protect Android text selection handles:
+  //   1. isSelectingText — set via 'selectionchange' as soon as a DOM selection
+  //      appears (this fires before 'click' and before the setTimeout below).
+  //   2. editor.getSelection() — Monaco's internal selection model.
+  //   3. document.getSelection() — the browser/Android DOM selection, which
+  //      reflects handle drags before Monaco's model has processed them.
+  // All three must be empty before we call editor.focus(), which repositions
+  // Monaco's cursor and would dismiss any visible selection handles.
+  var isSelectingText = false;
+  document.addEventListener('selectionchange', function () {
+    var domSel = window.getSelection ? window.getSelection() : null;
+    isSelectingText = !!(domSel && domSel.toString().length > 0);
+  });
+
+  // Clear the flag when Monaco itself collapses its selection (e.g. cursor tap).
+  editor.onDidChangeCursorSelection(function (e) {
+    if (e.selection.isEmpty()) {
+      isSelectingText = false;
+    }
+  });
+
   var editorDom = editor.getDomNode();
   if (editorDom) {
     editorDom.addEventListener('click', function () {
-      editor.focus();
+      // F024: click fires AFTER Android selection handles appear (long-press
+      // sequence: touchstart → touchend → [handles] → click). Without this
+      // guard, editor.focus() collapses the selection on every long-press.
+      var monacoSel = editor.getSelection();
+      var domSel    = window.getSelection ? window.getSelection() : null;
+      if (!isSelectingText && (!monacoSel || monacoSel.isEmpty()) && !(domSel && domSel.toString().length > 0)) {
+        editor.focus();
+      }
     }, { passive: true });
 
     editorDom.addEventListener('touchend', function () {
-      // C016: delay allows Monaco to process the tap/selection before we call
-      // focus(). Do NOT request focus if the user has made a text selection —
-      // that would dismiss the selection handles on Android.
+      // C016 + F024: delay allows Android to settle the selection state before
+      // we inspect it. 150 ms (up from 50 ms) gives slow devices enough time
+      // for Monaco's model to reflect DOM selectionchange events.
       setTimeout(function () {
-        var sel = editor.getSelection();
-        if (!sel || sel.isEmpty()) {
+        var monacoSel = editor.getSelection();
+        var domSel    = window.getSelection ? window.getSelection() : null;
+        if (!isSelectingText && (!monacoSel || monacoSel.isEmpty()) && !(domSel && domSel.toString().length > 0)) {
           editor.focus();
         }
-      }, 50);
+      }, 150);
     }, { passive: true });
   }
 
@@ -320,6 +350,12 @@ window.androidIDE = {
           if (msg.fontSize         != null) opts.fontSize          = msg.fontSize;
           // C014: render whitespace — "none" | "selection" | "all" | "boundary"
           if (msg.renderWhitespace != null) opts.renderWhitespace  = msg.renderWhitespace;
+          // F017: new Monaco settings surface options
+          if (msg.minimapEnabled         != null) opts.minimap              = { enabled: msg.minimapEnabled };
+          if (msg.scrollBeyondLastLine   != null) opts.scrollBeyondLastLine = msg.scrollBeyondLastLine;
+          if (msg.cursorStyle            != null) opts.cursorStyle          = msg.cursorStyle;
+          if (msg.bracketPairColorization!= null) opts.bracketPairColorization = { enabled: msg.bracketPairColorization };
+          if (msg.autoClosingBrackets    != null) opts.autoClosingBrackets  = msg.autoClosingBrackets;
           if (Object.keys(opts).length > 0) {
             editor.updateOptions(opts);
             // C015: wordWrap changes alter line-height and column count — must
@@ -353,6 +389,14 @@ window.androidIDE = {
         }
         break;
 
+      // F019: dispose all Monaco models — sent on project switch so stale models
+      // from the previous project cannot leak into the new one.
+      case 'closeAllModels':
+        monaco.editor.getModels().forEach(function (m) { m.dispose(); });
+        if (editor) editor.setModel(null);
+        currentPath = null;
+        break;
+
       case 'forceLayout':
         applyLayout();
         requestAnimationFrame(applyLayout);
@@ -366,6 +410,29 @@ window.androidIDE = {
         }
         if (msg.command === 'blurEditor') {
           window.androidIDE.blurEditor();
+          break;
+        }
+        // F016: requestCopy — read selection from Monaco and post to Kotlin clipboard.
+        if (msg.command === 'requestCopy') {
+          var copyModel = editor.getModel();
+          var copySel   = editor.getSelection();
+          if (copyModel && copySel && !copySel.isEmpty()) {
+            var copyText = copyModel.getValueInRange(copySel);
+            if (copyText) postToNative({ type: 'textCopied', text: copyText, isCut: false });
+          }
+          break;
+        }
+        // F016: requestCut — read selection, post to Kotlin clipboard, then delete selection.
+        if (msg.command === 'requestCut') {
+          var cutModel = editor.getModel();
+          var cutSel   = editor.getSelection();
+          if (cutModel && cutSel && !cutSel.isEmpty()) {
+            var cutText = cutModel.getValueInRange(cutSel);
+            if (cutText) {
+              postToNative({ type: 'textCopied', text: cutText, isCut: true });
+              editor.executeEdits('cut', [{ range: cutSel, text: '', forceMoveMarkers: true }]);
+            }
+          }
           break;
         }
         // C017: smart indent — insert tab-width spaces when no selection,

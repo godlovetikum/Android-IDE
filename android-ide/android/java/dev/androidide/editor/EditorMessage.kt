@@ -40,6 +40,13 @@ sealed class EditorInbound {
     /** User pressed Ctrl+S / Cmd+S in Monaco. */
     data class FileSaved(val path: String) : EditorInbound()
 
+    /**
+     * F016: Monaco has read the current selection and is asking Kotlin to put
+     * [text] on the Android clipboard.  [isCut] is true when Monaco has already
+     * deleted the selection (cut); false for a plain copy.
+     */
+    data class TextCopied(val text: String, val isCut: Boolean) : EditorInbound()
+
     companion object {
         /**
          * Parse a JSON string from [AndroidBridge.onMessage] into an [EditorInbound].
@@ -58,6 +65,10 @@ sealed class EditorInbound {
                     column = obj.getInt("column"),
                 )
                 "fileSaved"      -> FileSaved(path = obj.getString("path"))
+                "textCopied"     -> TextCopied(
+                    text  = obj.getString("text"),
+                    isCut = obj.optBoolean("isCut", false),
+                )
                 else             -> null
             }
         }.getOrNull()
@@ -99,6 +110,17 @@ sealed class EditorOutbound {
         val fontSize: Int?          = null,
         /** C014: "none" | "selection" | "all" | "boundary" */
         val renderWhitespace: String? = null,
+        // ── F017: additional Monaco settings surface ────────────────────────
+        /** Show/hide the code minimap on the right side of the editor. */
+        val minimapEnabled: Boolean? = null,
+        /** Allow scrolling past the last line of the file. */
+        val scrollBeyondLastLine: Boolean? = null,
+        /** Cursor render shape: "line" | "block" | "underline" */
+        val cursorStyle: String? = null,
+        /** Enable bracket-pair colourisation (one colour per nesting level). */
+        val bracketPairColorization: Boolean? = null,
+        /** Auto-close brackets: "always" | "languageDefined" | "never" */
+        val autoClosingBrackets: String? = null,
     ) : EditorOutbound()
 
     // ── Layout ─────────────────────────────────────────────────────────────
@@ -142,6 +164,14 @@ sealed class EditorOutbound {
     /** Show Monaco's built-in find + replace widget. */
     object ShowReplace : EditorOutbound()
 
+    /**
+     * F019: Dispose every Monaco model that was created for the previous project.
+     * Sent at the start of [openProjectInternal] before tabs are cleared, so stale
+     * models from project A cannot leak into project B (would cause wrong content
+     * or corrupt undo history when the same filename exists in both projects).
+     */
+    object CloseAllModels : EditorOutbound()
+
     // ── Serialisation ──────────────────────────────────────────────────────
 
     /**
@@ -169,13 +199,20 @@ sealed class EditorOutbound {
                 msg.lineNumbers?.let      { put("lineNumbers", if (it) "on" else "off") }
                 msg.fontSize?.let         { put("fontSize", it) }
                 // C014: expose renderWhitespace to Monaco
-                msg.renderWhitespace?.let { put("renderWhitespace", it) }
+                msg.renderWhitespace?.let         { put("renderWhitespace", it) }
+                // F017: new Monaco settings surface options
+                msg.minimapEnabled?.let           { put("minimapEnabled", it) }
+                msg.scrollBeyondLastLine?.let     { put("scrollBeyondLastLine", it) }
+                msg.cursorStyle?.let              { put("cursorStyle", it) }
+                msg.bracketPairColorization?.let  { put("bracketPairColorization", it) }
+                msg.autoClosingBrackets?.let      { put("autoClosingBrackets", it) }
             }
             is ForceLayout     -> put("type", "forceLayout")
             is ExecuteCommand  -> { put("type", "executeCommand"); put("command", msg.command) }
             is InsertText      -> { put("type", "insertText");     put("text", msg.text) }
             is ShowFind        -> put("type", "showFind")
             is ShowReplace     -> put("type", "showReplace")
+            is CloseAllModels  -> put("type", "closeAllModels")
         }
     }
 

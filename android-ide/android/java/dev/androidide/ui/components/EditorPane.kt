@@ -69,6 +69,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import dev.androidide.data.model.EditorSettings
@@ -246,7 +247,23 @@ fun EditorPane(
     LaunchedEffect(previewHtmlContent, isPreviewVisible) {
         if (isPreviewVisible && previewHtmlContent.isNotEmpty()) {
             previewCrashed = false
+
+            // F001-B: cap content at 2 MB (ASCII length ≈ byte count for the
+            // HTML markdownToPreviewHtml produces). Prevents OOM on low-RAM
+            // devices and avoids Binder-layer edge cases on some OEM firmwares.
+            if (previewHtmlContent.length > 2_097_152) {
+                previewCrashed = true
+                return@LaunchedEffect
+            }
+
+            // F001-A: post() defers until the WebView is attached to the view
+            // hierarchy via AndroidView factory — prevents RuntimeException
+            // from calling loadDataWithBaseURL on an unattached WebView during
+            // the first Compose frame where isPreviewVisible flips to true.
             previewWebView.post {
+                // F001-C: catch RuntimeException thrown by loadDataWithBaseURL
+                // itself (malformed content, renderer not ready) and surface it
+                // as a crash overlay rather than terminating the process.
                 runCatching {
                     previewWebView.loadDataWithBaseURL(
                         "about:blank",
@@ -255,6 +272,8 @@ fun EditorPane(
                         "UTF-8",
                         null,
                     )
+                }.onFailure {
+                    previewCrashed = true
                 }
             }
         }
@@ -444,9 +463,13 @@ private val TOOLBAR_PAGE_1 = listOf(
 )
 
 // Page 2: clipboard + selection + keyboard toggle (5 actions)
+// F016: cut/copy now use requestCut/requestCopy so Monaco posts the selected
+// text to the Kotlin layer where it is written to the Android ClipboardManager.
+// The old editor.action.clipboardCutAction / clipboardCopyAction use the browser
+// Clipboard API which is gated behind a user-permission prompt and fails silently.
 private val TOOLBAR_PAGE_2 = listOf(
-    KeyboardAction(Icons.Default.ContentCut,    "Cut",              "editor.action.clipboardCutAction"),
-    KeyboardAction(Icons.Default.ContentCopy,   "Copy",             "editor.action.clipboardCopyAction"),
+    KeyboardAction(Icons.Default.ContentCut,    "Cut",              "requestCut"),
+    KeyboardAction(Icons.Default.ContentCopy,   "Copy",             "requestCopy"),
     KeyboardAction(Icons.Default.ContentPaste,  "Paste",            null, isPaste = true),
     KeyboardAction(Icons.Default.SelectAll,     "Select All",       "editor.action.selectAll"),
     // C017: single toggle replaces the former "Show Keyboard" + "Hide Keyboard" pair.
@@ -464,8 +487,11 @@ private fun KeyboardToolbar(
 ) {
     val colors     = LocalIdeColors.current
     val pagerState = rememberPagerState(pageCount = { TOOLBAR_PAGES.size })
-    // C017: single keyboard toggle button tracks its own shown/hidden state.
-    var keyboardShowing by remember { mutableStateOf(true) }
+    // F015: read actual IME visibility from window insets.  The local-bool approach
+    // used previously goes out of sync when the system dismisses the keyboard (Back
+    // button, predictive-back gesture, navigation) without our code knowing.
+    val density         = LocalDensity.current
+    val keyboardShowing = WindowInsets.ime.getBottom(density) > 0
 
     Column(
         modifier = Modifier
@@ -482,8 +508,12 @@ private fun KeyboardToolbar(
             ) {
                 TOOLBAR_PAGES[pageIndex].forEach { action ->
                     ToolbarIconButton(
-                        icon             = if (action.isKeyboardToggle && !keyboardShowing)
-                                               Icons.Default.KeyboardHide
+                        // F015: correct icon — show KeyboardHide when keyboard is visible
+                        // (tap hides it) and the Keyboard icon when hidden (tap shows it).
+                        // Previous code had the logic inverted.
+                        icon             = if (action.isKeyboardToggle)
+                                               if (keyboardShowing) Icons.Default.KeyboardHide
+                                               else action.icon
                                            else action.icon,
                         label            = action.label,
                         isPaste          = action.isPaste,
@@ -497,7 +527,8 @@ private fun KeyboardToolbar(
                                 } else {
                                     onExecuteCommand("focusEditor")
                                 }
-                                keyboardShowing = !keyboardShowing
+                                // F015: no local-state flip — WindowInsets.ime updates
+                                // automatically after the IME transition completes.
                             }
                         } else null,
                     )

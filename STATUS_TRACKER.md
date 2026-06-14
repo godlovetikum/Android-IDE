@@ -1,19 +1,18 @@
 # STATUS_TRACKER.md — Android IDE
 
 **Current Date:** 2026-06-13
-**Active Phase:** Phase 1 UI Correction Pass (complete) → Phase 2 — Linux Runtime and Terminal (not started)
+**Active Phase:** Phase 1 — Correction Pass #2 (in planning)
 **Stack:** Kotlin 1.9.22 + Jetpack Compose + Material3 + Monaco WebView
 
 ---
 
 ## Phase Progress
 
-| Phase | Status | Completed / Total Tasks |
-|-------|--------|------------------------|
+| Phase | Status | Notes |
+|-------|--------|-------|
 | Phase 1 — Foundation | **COMPLETE** ✅ | All deliverables verified |
-| Phase 1 — UI Correction Pass | **COMPLETE** ✅ | 2026-06-13 |
-| Phase 1 — Compile Error / Crash Fix Pass | **COMPLETE** ✅ | 2026-06-13 |
-| Tech Stack Migration (Slint/Rust → Kotlin/Compose) | **COMPLETE** ✅ | 2026-06-12 |
+| Phase 1 — Correction Pass #1 (C-series) | **COMPLETE** ✅ | 18 items, completed 2026-06-13 |
+| Phase 1 — Correction Pass #2 (F-series) | **COMPLETE** ✅ | All 26 F-series defects implemented across 2 sessions |
 | Phase 2 — Linux Runtime | Not Started | 0 / 5 |
 | Phase 3 — Git | Not Started | 0 / 8 |
 | Phase 4 — Language Intelligence | Not Started | 0 / 6 |
@@ -21,11 +20,14 @@
 
 ---
 
-## Completed Tasks
+## Completed Tasks — Phase 1 Foundation (001–047)
+
+These tasks represent the initial build and tech-stack migration. Full implementation notes
+are in `DEBUG_LOG.md` for bug entries and `TECH_STACK_MIGRATION.md` for architectural decisions.
 
 | # | Task | Subsystem | Date |
 |---|------|-----------|------|
-| 001 | Project documentation created (README, DEBUG_LOG, QA_WORKFLOW, STATUS_TRACKER) | documentation | 2026-06-10 |
+| 001 | Project documentation created | documentation | 2026-06-10 |
 | 002 | Compose application shell (MainActivity, IdeScreen, adaptive layout) | ui | 2026-06-12 |
 | 003 | SAF bridge — SafRepository.kt (list, read, write, create, delete, rename) | filesystem | 2026-06-12 |
 | 004 | Monaco editor WebView integration (EditorPane, EditorBridge, EditorMessage) | editor | 2026-06-12 |
@@ -33,81 +35,223 @@
 | 006 | Tab management (EditorTabBar — open, select, close, dirty indicator) | editor/ui | 2026-06-12 |
 | 007 | File save (Ctrl+S + toolbar button via IdeViewModel.saveActiveFile) | filesystem/ui | 2026-06-12 |
 | 008 | Cursor position + language display (IdeStatusBar) | ui | 2026-06-12 |
-| 009 | IDE color palette + Material3 dark theme (Color.kt, Theme.kt, Type.kt) | ui/theme | 2026-06-12 |
+| 009 | IDE color palette + Material3 dark theme | ui/theme | 2026-06-12 |
 | 010 | Launcher icon resources (adaptive icon, mipmap-anydpi-v26) | android | 2026-06-11 |
 | 011 | GitHub Actions CI — lint + debug APK + release APK | ci | 2026-06-12 |
 | 012 | Monaco offline bundle (fetch-monaco.sh, git-ignored vs/) | editor/ci | 2026-06-11 |
 | 013 | Tech stack migration: Slint/Rust → Kotlin/Jetpack Compose | migration | 2026-06-12 |
-| 014 | Fix subdirectory expansion bug in SafRepository.listChildren | filesystem | 2026-06-12 |
-| 015 | Fix compileDebugKotlin failure — `application` property visibility (BUG-005) | viewmodel | 2026-06-13 |
-| 016 | UI Correction: data models — EditorSettings (3 new flags + customSymbols), FileSearchResult, IdeUiState (search/selection/previewHtmlContent fields) | data/viewmodel | 2026-06-13 |
-| 017 | UI Correction: repository layer — EditorSettingsRepository persists new booleans + symbols, SafRepository file:// URI support | filesystem | 2026-06-13 |
-| 018 | UI Correction: ViewModel — IdeViewModel createBlankProject auto-path, togglePreview uses loadDataWithBaseURL, search/reveal/select/copyPath/removeProject methods | viewmodel | 2026-06-13 |
-| 019 | UI Correction: AppRoot — remove bottom NavigationBar, IdeScreen always root, create project direct to name dialog, confirmRemoveProject dialog | ui | 2026-06-13 |
-| 020 | UI Correction: IdeScreen — sidebar restructured (large nav buttons + Files header), gesturesEnabled=false, Run always visible, file path dropdown, integrated Projects/Settings screens | ui | 2026-06-13 |
-| 021 | UI Correction: EditorPane — fix preview crash (onRenderProcessGone), loadDataWithBaseURL, split toolbar into KeyboardToolbar (icons) + SymbolBar (custom symbols), showKeyboardToolbar/showSymbolBar params | editor/ui | 2026-06-13 |
-| 022 | UI Correction: FileTreePanel — root project node, corrected file/folder menus (Rename/CopyPath/Copy/Cut/Delete/Select for files; +NewFile/NewFolder/Import/Export/Paste for folders), active file highlight, .git filter, multi-select mode, file search results panel | ui | 2026-06-13 |
-| 023 | UI Correction: SettingsScreen — Keyboard Toolbar toggle, Symbol Bar toggle, File Tree section with Hide .git Folder toggle, sidebar navigation icon | ui | 2026-06-13 |
-| 024 | UI Correction: ProjectsScreen — sidebar navigation icon callback | ui | 2026-06-13 |
-| 025 | Data: EditorSettings — add `uiFontScale: Float` (0.75–1.50) and `defaultProjectDir: String` | data | 2026-06-13 |
-| 026 | Data: EditorSettingsRepository — persist `uiFontScale` and `defaultProjectDir` via SharedPreferences | data | 2026-06-13 |
-| 027 | Data: SessionRepository — project-scoped tab persistence (KEY_PREFIX_TABS + projectHash, KEY_PREFIX_ACTIVE + projectHash) | data | 2026-06-13 |
-| 028 | Data: IdeUiState — rename `clipboard: FileNode?` → `clipboardItems: List<FileNode>` for multi-item clipboard | data | 2026-06-13 |
-| 029 | Data: FileNode.kt — `pathTo` returns leading slash (`/displayName/…`); add `ancestorsOf` extension | data | 2026-06-13 |
-| 030 | ViewModel: IdeViewModel — project-scoped session save/restore; `saveCurrentProjectSession` before project switch | viewmodel | 2026-06-13 |
-| 031 | ViewModel: IdeViewModel — `copyFileNode`/`cutFileNode` collect multi-select items, exit selection mode; `pasteFileNode` iterates all items | viewmodel | 2026-06-13 |
-| 032 | ViewModel: IdeViewModel — `createBlankProject` writes `package.json` template; respects `defaultProjectDir` | viewmodel | 2026-06-13 |
-| 033 | ViewModel: IdeViewModel — `pasteFromKotlinClipboard` reads Android ClipboardManager, sends `InsertText` to Monaco | viewmodel | 2026-06-13 |
-| 034 | UI: IdeScreen — SidebarNavPanel replaced with compact 48dp icon-only Row of 5 `IconButton`s | ui | 2026-06-13 |
-| 035 | UI: IdeScreen — `onCloseDrawer` lambda threaded into sidebar; drawer auto-closes on file open (narrow screen) | ui | 2026-06-13 |
-| 036 | UI: IdeScreen — `IdeTopBar` shows path only (no headline title); path tappable for ancestor reveal + sibling quick-switch dropdown | ui | 2026-06-13 |
-| 037 | UI: EditorPane — `KeyboardToolbar` replaced horizontal scroll with 2-page `HorizontalPager` (page 1: nav/undo, page 2: clipboard/keyboard); icons 24dp, targets 44dp | editor/ui | 2026-06-13 |
-| 038 | UI: EditorPane — WebView `isFocusableInTouchMode = true`; `onTouchListener` calls `requestFocus()`; `onPasteFromClipboard` callback bypasses WebView clipboard API | editor/ui | 2026-06-13 |
-| 039 | UI: FileTreePanel — param renamed to `clipboardItems: List<FileNode>`; paste label shows item count; cut items visually dimmed | ui | 2026-06-13 |
-| 040 | UI: SettingsScreen — add UI Font Scale slider (0.75–1.50, 5% steps, reset button); add Default Project Directory inline editor | ui | 2026-06-13 |
-| 041 | UI: AppRoot — `CompositionLocalProvider(LocalDensity)` applies `uiFontScale` to all app text | ui | 2026-06-13 |
-| 042 | Editor: monaco-init.js — tap-to-focus (`click`+`touchend` → `editor.focus()`); `insertText` uses `editor.executeEdits` (atomic paste); content-change debounce 300ms→150ms; performance options (no context menu, no autocomplete, no folding, no link detection); `applyLayout` uses `window.innerWidth/innerHeight` | editor | 2026-06-13 |
-| 043 | CI: build.yml — release APK job has `if: github.event_name == 'workflow_dispatch'` guard; release builds never run automatically | ci | 2026-06-13 |
-| 044 | Fix BUG-016: `Unresolved reference: dp` in AppRoot.kt — added `import androidx.compose.ui.unit.dp` | ui | 2026-06-13 |
-| 045 | Fix BUG-017: `Unresolved reference: parent` in FileOpDialogHost — `dialog.parent` → `dialog.parentNode` at all 4 call sites | ui | 2026-06-13 |
-| 046 | Fix BUG-018: Monaco editor WebView crash terminates app — override `onRenderProcessGone` on editor WebView to return `true`; add `EditorCrashedBox` with Reload button; `editorView` lambda shared across all 4 layout branches | editor | 2026-06-13 |
-| 047 | CI: split `build.yml` → `build-debug.yml` (push/PR/dispatch, debug APK) + `build-release.yml` (dispatch-only, release APK with keystore signing); `build.yml` retired to redirect comment | ci | 2026-06-13 |
-| C001 | BUG-019: `togglePreview()` ran on main thread with no error handling → app crash on Run. Added `requestRun()` project-scoped entry point; moved `togglePreview()` into `viewModelScope.launch { runCatching { withContext(Dispatchers.Default) { … } } }`; wired Run button to `::requestRun` | viewmodel + ui | 2026-06-13 |
-| C002 | Sidebar nav icons 22dp → 24dp (larger touch targets) | ui | 2026-06-13 |
-| C003 | Sidebar content is now screen-aware: file tree + FilesHeader visible only on Editor screen; Projects + Settings screens show only nav strip; added `SidebarNoProjectHint` when on Editor with no project open | ui | 2026-06-13 |
-| C004 | Verified: file-open → close-drawer already wired (`onCloseDrawer?.invoke()` in `onFileClick`); tap-outside closes via ModalNavigationDrawer scrim; Monaco focus/keyboard documented as C004b (editor subsystem) | ui | 2026-06-13 |
-| C005 | Verified already complete: `uiFontScale` in `EditorSettings`, applied via `LocalDensity` in `AppRoot.kt`, slider + reset in `SettingsScreen` — all text in the app scales globally | ui + theme | 2026-06-13 |
-| C006 | Top bar: `"Android IDE"` fallback → `""` (no app title); promoted Find to dedicated Search button (Save → Search → Run); removed Find from overflow; kept Find & Replace + Save As in overflow | ui | 2026-06-13 |
-| C007 | Path navigation: removed sibling-count gate (path always tappable for active tab); ancestor clicks no longer open sidebar; empty-siblings hint shown when parent folder not expanded | ui | 2026-06-13 |
-| C009 | Verified already complete: session saved/restored per project URI via `sessionRepository.saveTabsForProject` / `getOpenTabUrisForProject`; `saveCurrentProjectSession` called before switching projects | viewmodel + data | 2026-06-13 |
-| C010 | Verified already complete: `openFileInternal` checks `find { it.documentUri == documentUri }` before creating a tab — existing tab is activated, never duplicated | viewmodel | 2026-06-13 |
-| C011 | Temporary tab (preview) behavior: single-tap → isTemporary tab replacing previous preview; first edit → pin (isTemporary=false); double-tap file tree → openFilePermanent; "Keep Open" in tab overflow; italic title for temporary tabs | viewmodel + ui | 2026-06-13 |
-| C012 | Verified already complete: copyFileNode/cutFileNode both set isMultiSelectMode=false; pasteFileNode accepts root dir with no restriction | viewmodel + ui | 2026-06-13 |
-| C013 | Verified already complete: copyPathToClipboard uses pathTo (leading-slash) + "/$raw" fallback — all copied paths start with "/" | viewmodel | 2026-06-13 |
-| C014 | Editor customization: renderWhitespace (None/Selection/All) exposed in Settings + persisted through EditorSettings/SetEditorOptions/Monaco; disabled Phase-4 placeholders for Code Completion and Code Folding in Settings screen | ui/editor | 2026-06-13 |
-| C008 | Editor focus: setOnTouchListener on ACTION_UP calls requestFocus() + InputMethodManager.showSoftInput(SHOW_IMPLICIT) — reliably shows keyboard on first tap inside Compose layout | ui/editor | 2026-06-13 |
-| C015 | Monaco performance: formatOnPaste=false (paste corruption); autoIndent=brackets (slow advanced); glyphMargin=false; lineDecorationsWidth=5; re-layout after wordWrap toggle | editor | 2026-06-13 |
-| C016 | Text selection: touchend focus call now skips focus() when Monaco has a non-empty selection — prevents dismissing Android selection handles mid-gesture | editor | 2026-06-13 |
-| C017 | Keyboard toolbar: smartIndent/smartOutdent JS commands (check selection → indent lines vs insert spaces); "Show KB"+"Hide KB" replaced with single stateful Toggle Keyboard button; added Outdent button to page 1 | ui/editor | 2026-06-13 |
-| C018 | Verified already complete: ShowFind/ShowReplace messages → JS getAction("actions.find") / getAction("editor.action.startFindReplaceAction"); wired in IdeScreen.kt top bar onFind/onReplace callbacks | editor | 2026-06-13 |
+| 014 | Fix SAF subdirectory expansion bug (BUG-003) | filesystem | 2026-06-12 |
+| 015 | Fix compileDebugKotlin: `application` property visibility (BUG-005) | viewmodel | 2026-06-13 |
+| 016–043 | UI Correction Pass #1: data models, repositories, ViewModel, AppRoot, IdeScreen, EditorPane, FileTreePanel, SettingsScreen, ProjectsScreen, CI pipeline | all | 2026-06-13 |
+| 044 | Fix BUG-016: `Unresolved reference: dp` in AppRoot.kt | ui | 2026-06-13 |
+| 045 | Fix BUG-017: `Unresolved reference: parent` in FileOpDialogHost (4 sites) | ui | 2026-06-13 |
+| 046 | Fix BUG-018: Monaco editor WebView crash terminates app | editor | 2026-06-13 |
+| 047 | CI: split build.yml → build-debug.yml + build-release.yml | ci | 2026-06-13 |
 
 ---
 
-## In Progress Tasks
+## Completed Tasks — Phase 1 Correction Pass #1 (C-series)
 
-| ID | Task | Subsystem | Started |
-|----|------|-----------|---------|
-| — | All Phase 1 C-series tasks complete as of 2026-06-13 — no items in progress | — | — |
+| ID | Task | Subsystem | Date |
+|----|------|-----------|------|
+| C001 | Run button crash: moved togglePreview into viewModelScope coroutine with runCatching | viewmodel + ui | 2026-06-13 |
+| C002 | Sidebar nav icons 22dp → 24dp | ui | 2026-06-13 |
+| C003 | Sidebar content screen-aware: file tree only on Editor screen; Projects/Settings show nav strip only | ui | 2026-06-13 |
+| C004 | File-open → close-drawer confirmed wired; Monaco focus/keyboard tracked as F010 | ui | 2026-06-13 |
+| C005 | uiFontScale in EditorSettings, applied via LocalDensity, slider + reset in SettingsScreen | ui + theme | 2026-06-13 |
+| C006 | Top bar: empty fallback (no app title); Search promoted to icon; Save→Search→Run order | ui | 2026-06-13 |
+| C007 | Path navigation: path always tappable; sibling-count gate removed; hint shown when parent not expanded | ui | 2026-06-13 |
+| C008 | Editor focus: ACTION_UP calls requestFocus() + showSoftInput(SHOW_IMPLICIT) | ui/editor | 2026-06-13 |
+| C009 | Session save/restore per project URI confirmed complete | viewmodel + data | 2026-06-13 |
+| C010 | Tab dedup: openFileInternal checks existing tabs before creating new one | viewmodel | 2026-06-13 |
+| C011 | Temporary tab: single-tap = preview; first edit = pin; double-tap = permanent; italic title | viewmodel + ui | 2026-06-13 |
+| C012 | Multi-copy/cut: copyFileNode/cutFileNode collect selectedUris; pasteFileNode accepts root | viewmodel + ui | 2026-06-13 |
+| C013 | Copy path: pathTo always returns leading slash; "/$raw" fallback | viewmodel | 2026-06-13 |
+| C014 | renderWhitespace exposed in Settings; Phase-4 disabled placeholders for Code Completion and Folding | ui/editor | 2026-06-13 |
+| C015 | Monaco performance: formatOnPaste=false; autoIndent=brackets; glyphMargin=false; wordWrap re-layout | editor | 2026-06-13 |
+| C016 | Text selection guard: touchend focus() skipped when Monaco has non-empty selection | editor | 2026-06-13 |
+| C017 | Keyboard toolbar: smartIndent/smartOutdent JS; single keyboard toggle; Outdent button added | ui/editor | 2026-06-13 |
+| C018 | Find/Replace: ShowFind/ShowReplace messages → actions.find / startFindReplaceAction in JS | editor | 2026-06-13 |
 
 ---
 
-## Phase 1 Correction Pass — Pending Tasks
+## Pending Tasks — Phase 1 Correction Pass #2 (F-series)
 
-All Phase 1 C-series items are now complete. See the Completed table above for implementation notes.
+Full root-cause analysis for each task is in the **Phase 1 Correction Pass #2 Re-Audit** section of this file (see below).
 
-Original spec items C001–C018 were all addressed in two sessions (2026-06-13):
-- C001–C007: completed in first session
-- C008–C018: completed / verified in second session
+### Completed — Priority 0 — Crash / Data Loss
+
+| ID | Task | Subsystem | Date |
+|----|------|-----------|------|
+| F001 ✅ | Run/Preview crash: webView.post + try-catch + 2 MB guard + DefaultUncaughtExceptionHandler | editor | 2026-06-14 |
+| F002 ✅ | Session restore race: sequential coroutine replaces parallel launches | viewmodel | 2026-06-14 |
+
+### Completed — Priority 1 — Broken Core Workflows
+
+| ID | Task | Subsystem | Date |
+|----|------|-----------|------|
+| F003 ✅ | Path navigator: SAF-backed state machine (navStack, loadNavChildren, folder tap navigates, Up button) | ui + saf | 2026-06-14 |
+| F004 ✅ | Save As: inline project-relative path dialog (FileOpDialog.SaveAs + saveAsAtPath) | ui + viewmodel + saf | 2026-06-14 |
+| F005 ✅ | Binary validation: 5 MB guard, null-byte scan, image base64 preview in Monaco | viewmodel + saf | 2026-06-14 |
+| F006 ✅ | requestRun project-scoped: searches full fileTree for first .html if active tab not previewable | viewmodel | 2026-06-14 |
+| F007 ✅ | Duplicate name rejection: pre-check in all 6 create/rename/duplicate paths | viewmodel + ui | 2026-06-14 |
+| F025 ✅ | Leading "/" absolute-path routing + SAF-queried duplicate check in createFile/Folder; move-by-path deferred to Phase 2 for rename | viewmodel + ui + saf | 2026-06-14 |
+
+### Completed — Priority 2 — Sidebar and UI Defects
+
+| ID | Task | Subsystem | Date |
+|----|------|-----------|------|
+| F008 ✅ | Sidebar nav panel: 2-Row grid with NavCell (56dp, icon + label) | ui | 2026-06-14 |
+| F009 ✅ | Sidebar PROJECTS: SidebarRecentProjectsList; SETTINGS: SidebarSettingsShortcuts | ui | 2026-06-14 |
+| F010 ✅ | Sidebar file-select: focusEditor + showSoftInput 150ms after drawer close | ui + editor | 2026-06-14 |
+| F011 ✅ | Sidebar tap-outside: transparent scrim Box overlay when drawer open | ui | 2026-06-14 |
+| F012 ✅ | Root-folder paste: Paste DropdownMenuItem in RootProjectNode when clipboard non-empty | ui | 2026-06-14 |
+| F013 ✅ | File icons: fileIconFor() extension-based mapping (Code, Article, Image, etc.) | ui | 2026-06-14 |
+| F014 ✅ | Files header touch targets: 36dp IconButton / 20dp icons | ui | 2026-06-14 |
+| F022 ✅ | Rename Project dead button: replaced no-op with statusMessage "available in Phase 2" | ui | 2026-06-14 |
+| F023 ✅ | Duplicate added to file context menu (DropdownMenuItem → showDuplicateDialog) | ui | 2026-06-14 |
+| F024 ✅ | Text selection: touchend focus() skipped when Monaco selection non-empty | editor | 2026-06-14 |
+
+### Completed — Priority 2 — Editor Behavior
+
+| ID | Task | Subsystem | Date |
+|----|------|-----------|------|
+| F015 ✅ | Keyboard toggle: WindowInsets.ime replaces local mutableStateOf | editor/ui | 2026-06-14 |
+| F016 ✅ | Cut/Copy: RequestCopy/RequestCut → JS reads selection → Kotlin ClipboardManager | editor + viewmodel | 2026-06-14 |
+| F026 ✅ | Folder Select: DropdownMenuItem added to folder context menu | ui | 2026-06-14 |
+
+### Completed — Priority 3 — Monaco Settings Surface
+
+| ID | Task | Subsystem | Date |
+|----|------|-----------|------|
+| F017 ✅ | minimap, scrollBeyondLastLine, cursorStyle, bracketPairColorization, autoClosingBrackets in EditorSettings, Repository, JS setEditorOptions, and SettingsScreen | settings + editor | 2026-06-14 |
+
+### Completed — Priority 4 — CI Pipeline
+
+| ID | Task | Subsystem | Date |
+|----|------|-----------|------|
+| F018 ✅ | CI keystore: printf '%s' + post-decode size guard (>1000 bytes) | ci | 2026-06-14 |
+
+### Completed — Priority 5 — Data Integrity
+
+| ID | Task | Subsystem | Date |
+|----|------|-----------|------|
+| F019 ✅ | Project switch: CloseAllModels + WebView reload for clean Monaco state | viewmodel + editor | 2026-06-14 |
+| F020 ✅ | SAF permission guard: validates persistedUriPermissions before openProjectInternal | viewmodel | 2026-06-14 |
+
+---
+
+## Phase 1 Correction Pass #2 — Root Cause Reference
+
+### F001 — Run/Preview Crash (Three Independent Paths)
+
+**Path A:** `LaunchedEffect(previewHtmlContent, isPreviewVisible)` fires in the same Compose frame that sets `isPreviewVisible = true`. The `AndroidView(previewWebView)` has not been attached to the view hierarchy yet when `previewWebView.post { loadDataWithBaseURL(...) }` is enqueued. On some Android OEM/version combinations, calling `loadDataWithBaseURL` on an unattached WebView throws `RuntimeException` on the main thread, killing the process.
+
+**Path B:** `loadDataWithBaseURL` routes content through the Android Binder IPC layer. Payloads exceeding ~800 KB trigger `TransactionTooLargeException` (an uncaught `RuntimeException`), terminating the process with no dialog. No size guard exists.
+
+**Path C:** The `onRenderProcessGone` overrides protect against the WebView's renderer *subprocess* dying. They do NOT catch main-thread `RuntimeException` from Paths A and B. There is no global uncaught exception handler.
+
+**Required fix:** (1) Add 2 MB content size cap before loading. (2) Wrap `previewWebView.post {}` in try-catch catching `RuntimeException`, setting `previewCrashed = true` on catch. (3) Gate the `LaunchedEffect` with a 1-frame delay using `LaunchedEffect(isPreviewVisible)` + `withFrameMillis {}` so composition completes before load. (4) Add `Thread.setDefaultUncaughtExceptionHandler` in Application class to catch and display non-fatal errors instead of terminating.
+
+### F002 — Session Restore Race
+
+`restoreSession()` launches `openProjectInternal(projectUri)` and each `openFileInternal(uri)` as independent, unsynchronized coroutines on `viewModelScope`. `openProjectInternal` resets `openTabs = emptyList()` mid-flight while file coroutines may have already added tabs. **Fix:** Replace parallel launches with a single sequential coroutine.
+
+### F003 — Path Navigator
+
+`findSiblings` traverses only `node.isExpanded == true` nodes. A parent folder that is not expanded in the sidebar returns null, making the navigator completely empty. Clicking a folder in the dropdown does nothing (`if (!sibling.isDirectory) onOpenFile(...)`). **Fix:** Add `suspend fun listChildrenDirect(parentUri)` to SafRepository. Replace `findSiblings` with a self-contained navigator state machine: `navCurrentUri`, `navItems`, `navIsLoading`. Tap file → open + close nav. Tap folder → load its children, update `navCurrentUri`. "↑ Up" button loads parent. Disabled at project root.
+
+### F004 — Save As
+
+`saveAsLauncher` uses `ActivityResultContracts.CreateDocument` — the Android system picker. The saved file gets an opaque SAF URI outside the project tree, invisible in the file tree and unusable by subsequent tree operations. **Fix:** Remove `saveAsLauncher`. Add `FileOpDialog.SaveAs`. Show inline path dialog, resolve relative path against project root via SAF.
+
+### F005 — Binary File Validation
+
+`readFile` returns raw bytes unconditionally decoded as UTF-8 and loaded into Monaco. Binary content (`.apk`, `.class`, compiled assets) corrupts Monaco rendering. Large files exceed Monaco's comfortable edit range. **Fix:** Add 5 MB size guard. Add null-byte binary detection (first 8 KB scan). Add MIME-type detection: images show inline HTML `<img>` preview. All checks run before Monaco model creation.
+
+### F006 — requestRun File-Scoped
+
+`requestRun()` only checks `activeTab?.language`. If a `.css` or `.js` file is active in a project containing `index.html`, it shows "No run provider." **Fix:** If active tab is not HTML/Markdown, search the full in-memory `fileTree` (all nodes, not just expanded) for the first `.html` file. If found, load and preview it. If nothing found, show status "No previewable content in this project."
+
+### F007 — Duplicate Name Rejection
+
+All four create paths (`createFileInDirectory`, `createFolderInDirectory`, `createFileAtRoot`, `createFolderAtRoot`) and `renameNode`/`duplicateFile` call SAF directly with no pre-check. SAF silently renames the collision (e.g. `index.html` → `index (1).html`) — no error, no warning. **Fix:** Add `error: String?` to dialog state. Pre-check parent's children against the target name. Show inline error, block SAF call on collision.
+
+### F025 — Full-Path Verification and Leading-Slash Semantics
+
+Current verification (F007) only compares `leafName` against `parentNode.children`. It would incorrectly reject `src/index.html` when `index.html` exists at project root. Additionally, names beginning with `/` should be treated as absolute paths from the project root — useful for both rename (move semantics) and create (cross-folder targeting from any context menu). **Fix:** If `name.startsWith("/")`: strip slash, split by `/`, call `resolveOrCreatePath(rootUri, segments)` in SafRepository which walks/creates intermediate directories and returns `(parentDirUri, leafName)`. Then check SAF-queried children of `parentDirUri` for `leafName`. If no leading slash: check only `parentNode.children`.
+
+### F008 — Sidebar Nav Panel Layout
+
+Five 48dp `IconButton`s in a horizontal `Row`. The spec requires "large icon buttons in a compact grid layout." **Fix:** 3-column grid (`LazyVerticalGrid` or manual `Row`+`Row`). Row 1: Projects, Editor, Settings. Row 2: Git (disabled), Terminal (disabled), spare. Each cell 56dp×56dp, icon 24dp, text label below icon (`labelSmall`). Selected state: accent background. Height: ~120dp total.
+
+### F009 — Sidebar Content: Projects and Settings
+
+The `when (PROJECTS, SETTINGS)` branch is completely empty — sidebar shows only the nav strip with nothing below. **Fix:** Projects sidebar: compact list of `uiState.recentProjects` (project name, tap to open). Settings sidebar: list of section labels (App, Editor, Keyboard, File Tree, Storage) with `LazyListState` scroll-to-item wired from `SettingsScreen`.
+
+### F010 — Sidebar File-Select: Monaco Focus and Keyboard
+
+`onFileClick` calls `openFile + navigateTo(EDITOR) + onCloseDrawer?.invoke()`. Drawer closes, editor is shown, but Monaco has no focus — keyboard doesn't appear. User must tap the editor again. **Fix:** After `onCloseDrawer?.invoke()`, post a 150ms-delayed `sendEditorCommand(EditorOutbound.ExecuteCommand("focusEditor"))` + `imm.showSoftInput(editorWebView, SHOW_IMPLICIT)`.
+
+### F011 — Sidebar Tap-Outside Close
+
+`gesturesEnabled=false` correctly prevents Monaco horizontal scroll from opening the drawer, but it also prevents `ModalNavigationDrawer`'s built-in backdrop tap-to-close. **Fix:** Keep `gesturesEnabled=false`. Wrap the main content area in a `Box`. When `!drawerState.isClosed`, add a transparent `Modifier.clickable { closeDrawer() }` overlay as an additional `Box` layer on top of the content.
+
+### F012 — Root-Folder Paste Missing
+
+`RootProjectNode` has no Paste item. The spec says "restrictions preventing root-folder paste must be removed." `pasteFileNode` already accepts root-level nodes — only the UI trigger is missing. **Fix:** Add `clipboardItems: List<FileNode>` and `onPasteAtRoot: () -> Unit` params to `RootProjectNode`. Add conditional Paste `DropdownMenuItem` when clipboard non-empty.
+
+### F013 — File Icons
+
+All non-directory files use `Icons.Default.InsertDriveFile` regardless of extension. **Fix:** Add `fileIconFor(name: String): ImageVector` mapping: `.kt/.kts` → Code, `.html/.htm` → Language, `.css` → Style/Palette, `.js/.ts` → Code, `.json/.yaml/.toml` → DataObject, `.md` → Article, `.png/.jpg/.svg/etc.` → Image, `.pdf` → PictureAsPdf, `.zip/.gz` → FolderZip, `.sh` → Terminal, `.gradle` → Build, default → InsertDriveFile.
+
+### F014 — Files Header Button Touch Targets
+
+All five `FilesHeader` icon buttons use `Modifier.size(28.dp)` with `Modifier.size(16.dp)` icons. **Fix:** Increase `IconButton` to `Modifier.size(36.dp)`, icon to `Modifier.size(20.dp)`.
+
+### F015 — Keyboard Toggle Uses Wrong State
+
+`var keyboardShowing by remember { mutableStateOf(true) }` is never updated when the keyboard is dismissed by Back or system gesture. Icon shows wrong state. **Fix:** Replace with `val imeVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0`. Drive icon and IME action from `imeVisible`.
+
+### F016 — Keyboard Toolbar Cut/Copy
+
+`editor.action.clipboardCutAction` and `editor.action.clipboardCopyAction` use the browser clipboard API, which is permission-gated on Android WebView. Operations silently fail. **Fix:** Add `EditorOutbound.RequestCopy` and `EditorOutbound.RequestCut` messages. JS reads selection text via `editor.getModel().getValueInRange(editor.getSelection())`, posts back as new `EditorInbound.ClipboardText(text)`. Kotlin writes to `ClipboardManager` directly. Cut additionally deletes the selection via `editor.executeEdits`.
+
+### F017 — Monaco Settings Surface
+
+Options hardcoded in `monaco-init.js` that should be in `EditorSettings`: `minimap.enabled` (OFF), `scrollBeyondLastLine` (OFF), `cursorStyle` (default), `bracketPairColorization.enabled` (OFF), `autoClosingBrackets` (default). Phase-4 disabled placeholders needed for `folding`, `quickSuggestions`. **Fix:** Add each to `EditorSettings`, `SetEditorOptions`, JS `setEditorOptions` handler, and `SettingsScreen`.
+
+### F018 — CI Keystore Decode
+
+`echo "$KEYSTORE_BASE64" | base64 -d` appends a trailing newline. On strict base64 decoders, this produces a truncated keystore file, causing `keytool: java.io.EOFException`. **Fix:** Replace with `printf '%s' "$KEYSTORE_BASE64" | base64 -d > release.keystore`. Add post-decode size check: if file is under 1000 bytes, fail with clear diagnostic.
+
+### F019 — Monaco Stale Models on Project Switch
+
+`openProjectInternal` sets `isEditorReady = false` but does not reload or reset the Monaco WebView. Monaco keeps all open model URIs from the previous project. Files from the new project that share a path with old models get the wrong content. **Fix:** On project switch, send `EditorOutbound.CloseAllModels` to dispose all Monaco models, then reload the WebView to guarantee a clean state.
+
+### F020 — SAF Permission Guard
+
+Restoring a session URI that has lost its SAF permission grant (revoked after reboot or permission reset) causes a silent failure — the project root is set but file tree operations fail with no user-visible error. **Fix:** Before `openProjectInternal`, check `contentResolver.persistedUriPermissions.any { it.uri.toString() == projectUri }`. If not found, show status message and clear stale session.
+
+### F022 — Rename Project Dead Button
+
+`onClick = { /* TODO Phase 2: rename project via dialog */ }` — the menu item is enabled and clickable, menu closes, nothing happens. Users have no indication the action exists but is deferred. **Fix:** Change `onClick` to `ideViewModel.setStatusMessage("Rename Project — available in Phase 2")` OR disable the item with `enabled = false` and append `" (Phase 2)"` to the label text.
+
+### F023 — Duplicate Missing from File Menu
+
+`FileTreeRow` receives `onShowDuplicateDialog: (FileNode) -> Unit` and it is wired all the way from `IdeScreen` → `FileTreePanel` → `FileTreeRow`. But the file context menu (lines 541–570) contains no "Duplicate" `DropdownMenuItem`. The backend (`FileOpDialog.Duplicate`, `DuplicateDialog`, `ideViewModel.duplicateFile`) is fully implemented. **Fix:** Add `DropdownMenuItem(text = { Text("Duplicate") }, onClick = { menuOpen = false; onShowDuplicateDialog(node) })` to the file context menu, before the Delete divider.
+
+### F024 — Text Selection (Manual Select) Broken
+
+**Cause A:** The `click` event listener (monaco-init.js line 258) calls `editor.focus()` unconditionally. On Android, a long-press to initiate selection fires: `touchstart → touchend → [handles appear] → click`. The `click` fires AFTER the selection handles are visible. `editor.focus()` repositions Monaco's cursor, collapsing the selection and dismissing the handles.
+
+**Cause B:** The `touchend` timeout of 50ms is too short on slow devices; `editor.getSelection()` may not yet reflect the Android DOM selection change, so the guard passes and `editor.focus()` is incorrectly called.
+
+**Fix:** (1) Add the same selection guard to the `click` handler, also checking `document.getSelection().toString() !== ''`. (2) Extend `touchend` timeout from 50ms to 150ms. (3) Add `document.addEventListener('selectionchange', ...)` to cache `isSelectingText` flag; use it in both handlers as a third guard.
+
+### F026 — Folder Select Missing from Folder Context Menu
+
+The file context menu has "Select" which enters multi-select mode for files. The folder context menu does not. Users cannot multi-select folders unless they long-press (which opens the same menu). **Fix:** Add `DropdownMenuItem(text = { Text("Select") }, onClick = { menuOpen = false; onSelect(node.documentUri) })` to the folder context menu section.
 
 ---
 
@@ -165,16 +309,12 @@ Original spec items C001–C018 were all addressed in two sessions (2026-06-13):
 
 ## Session Notes
 
-**2026-06-10:** Initial project setup — Slint/Rust prototype. Project documentation created. SAF bridge, Slint UI shell, Monaco WebView integration implemented.
+**2026-06-10:** Initial project setup — Slint/Rust prototype. Documentation created.
 
-**2026-06-11:** Build chain fixes (launcher icon, CI platform package, Monaco offline bundle). IDEActivity NativeActivity subclass implemented to layer Monaco WebView above Slint surface.
+**2026-06-11–12:** Monaco offline bundle, CI pipeline, launcher icon. Full tech stack migration from Slint/Rust to Kotlin/Jetpack Compose. All Phase 1 Foundation deliverables complete. See `TECH_STACK_MIGRATION.md`.
 
-**2026-06-12:** Full tech stack migration — Slint/Rust replaced by Kotlin/Jetpack Compose. All Phase 1 deliverables ported and verified. See TECH_STACK_MIGRATION.md for the full migration record.
+**2026-06-13 (Pass 1):** Phase 1 UI Correction Pass #1. 18 C-series items completed. Key items: preview crash (BUG-006/018/019), base64→loadDataWithBaseURL (BUG-007), drawer gesture (BUG-008), sidebar restructure, keyboard toolbar redesign (BUG-012/024), editor focus/IME (BUG-013/025), multi-select clipboard, session restore, temporary tabs, text selection guard (C016).
 
-**2026-06-12:** Post-migration audit — fixed subdirectory expansion bug in SafRepository.listChildren. Removed unused imports in IdeViewModel.
-
-**2026-06-13:** Phase 1 UI Correction Pass complete. All 9 file groups updated: data models, repository layer, ViewModel, AppRoot, IdeScreen, EditorPane, FileTreePanel, SettingsScreen, ProjectsScreen. Key fixes: preview crash (BUG-006), base64 URL issue (BUG-007), drawer gesture conflict (BUG-008), sidebar restructure, multi-select mode, .git filtering, file search panel, corrected context menus.
-
-**2026-06-13:** Compile error and crash fix pass. Fixed BUG-016 (`Unresolved reference: dp` in AppRoot.kt — missing `import androidx.compose.ui.unit.dp`), BUG-017 (`Unresolved reference: parent` in FileOpDialogHost — `dialog.parent` → `dialog.parentNode` at 4 call sites), and BUG-018 (Monaco editor WebView crash terminates app — override `onRenderProcessGone` on editor WebView, add `EditorCrashedBox` with Reload). Replaced monolithic `build.yml` with `build-debug.yml` (auto, debug) + `build-release.yml` (dispatch-only, release + keystore signing).
+**2026-06-13 (Pass 2 planning):** Full re-audit of all source files. 26 defects catalogued across crash-level, core workflow, sidebar/UI, Monaco settings, CI, and data integrity categories. Three new defects identified this session: F022 (Rename Project dead button), F023 (Duplicate missing from file menu), F024 (text selection — click handler missing guard), F025 (full-path duplicate verification). Root cause analysis complete for all. No code edits yet.
 
 Last updated: 2026-06-13

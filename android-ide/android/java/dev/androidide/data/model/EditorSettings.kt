@@ -21,6 +21,28 @@ data class EditorSettings(
      * "boundary"  — whitespace at block boundaries
      */
     val renderWhitespace: String = "selection",
+    // ── F017: additional Monaco settings surface ────────────────────────────
+    /** Show/hide the minimap (code overview) on the right side of the editor. */
+    val minimapEnabled: Boolean           = true,
+    /** Allow scrolling past the last line so it can sit in the centre of the view. */
+    val scrollBeyondLastLine: Boolean     = false,
+    /**
+     * Cursor render shape.
+     * "line"       — thin vertical bar (default)
+     * "block"      — filled block that sits over the next character
+     * "underline"  — horizontal underline below the current character
+     */
+    val cursorStyle: String               = "line",
+    /** Enable bracket-pair colourisation — one colour per nesting level. */
+    val bracketPairColorization: Boolean  = true,
+    /**
+     * Auto-close brackets.
+     * "always"           — always insert the matching bracket
+     * "languageDefined"  — language grammar decides (default)
+     * "never"            — no auto-closing
+     */
+    val autoClosingBrackets: String       = "languageDefined",
+
     /** Portrait-mode stacking order for the preview panel. */
     val previewLayout: PreviewLayout = PreviewLayout.PREVIEW_ABOVE,
 

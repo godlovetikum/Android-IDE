@@ -54,19 +54,9 @@ fun AppRoot(ideViewModel: IdeViewModel = viewModel()) {
         }
     }
 
-    // ── Save As — creates a new document in SAF ────────────────────────────
-    val activeTabName  = uiState.openTabs.firstOrNull { it.isActive }?.displayName ?: "untitled"
-    val saveAsLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.CreateDocument("*/*")
-    ) { uri ->
-        if (uri != null) {
-            context.contentResolver.takePersistableUriPermission(
-                uri,
-                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
-            )
-            ideViewModel.saveActiveFileAs(uri.toString())
-        }
-    }
+    // ── F004: Save As — now handled by the inline project-relative dialog ─────
+    // The old ActivityResultContracts.CreateDocument launcher placed files outside
+    // the project tree. The new dialog resolves a relative path within the project.
 
     // ── Import multiple files into the tree ─────────────────────────────────
     val importFilesLauncher = rememberLauncherForActivityResult(
@@ -108,7 +98,7 @@ fun AppRoot(ideViewModel: IdeViewModel = viewModel()) {
                         createProjectName       = "MyProject"
                         showCreateProjectDialog = true
                     },
-                    onSaveAs            = { saveAsLauncher.launch(activeTabName) },
+                    onSaveAs            = { ideViewModel.showSaveAsDialog() },
                     onImportFilesAt     = { node ->
                         importTargetDirUri = node.documentUri
                         importFilesLauncher.launch(arrayOf("*/*"))

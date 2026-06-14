@@ -29,4 +29,11 @@ sealed class FileOpDialog {
      * unsaved changes. Options: Save and close, Discard and close, Cancel.
      */
     data class UnsavedClose(val tabId: String, val displayName: String) : FileOpDialog()
+
+    /**
+     * F004: Save-As dialog — allows the user to choose a project-relative path
+     * for saving the active file's content.  The [suggestedName] pre-fills the
+     * text field with the current tab's display name.
+     */
+    data class SaveAs(val suggestedName: String) : FileOpDialog()
 }

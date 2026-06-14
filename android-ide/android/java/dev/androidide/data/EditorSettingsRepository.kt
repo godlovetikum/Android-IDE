@@ -28,6 +28,13 @@ class EditorSettingsRepository(context: Context) {
         private const val KEY_UI_FONT_SCALE        = "ui_font_scale"
         private const val KEY_DEFAULT_PROJECT_DIR  = "default_project_dir"
         private const val SYMBOL_SEPARATOR         = "|"
+        // F017: new Monaco settings surface keys
+        private const val KEY_RENDER_WHITESPACE       = "render_whitespace"
+        private const val KEY_MINIMAP_ENABLED         = "minimap_enabled"
+        private const val KEY_SCROLL_BEYOND_LAST_LINE = "scroll_beyond_last_line"
+        private const val KEY_CURSOR_STYLE            = "cursor_style"
+        private const val KEY_BRACKET_PAIR_COLOR      = "bracket_pair_colorization"
+        private const val KEY_AUTO_CLOSING_BRACKETS   = "auto_closing_brackets"
     }
 
     private val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -55,6 +62,13 @@ class EditorSettingsRepository(context: Context) {
         uiFontScale          = prefs.getFloat(KEY_UI_FONT_SCALE, 1.0f)
             .coerceIn(EditorSettings.UI_FONT_SCALE_MIN, EditorSettings.UI_FONT_SCALE_MAX),
         defaultProjectDir    = prefs.getString(KEY_DEFAULT_PROJECT_DIR, "") ?: "",
+        // F017: additional Monaco settings surface
+        renderWhitespace       = prefs.getString(KEY_RENDER_WHITESPACE, "selection") ?: "selection",
+        minimapEnabled         = prefs.getBoolean(KEY_MINIMAP_ENABLED, true),
+        scrollBeyondLastLine   = prefs.getBoolean(KEY_SCROLL_BEYOND_LAST_LINE, false),
+        cursorStyle            = prefs.getString(KEY_CURSOR_STYLE, "line") ?: "line",
+        bracketPairColorization= prefs.getBoolean(KEY_BRACKET_PAIR_COLOR, true),
+        autoClosingBrackets    = prefs.getString(KEY_AUTO_CLOSING_BRACKETS, "languageDefined") ?: "languageDefined",
     )
 
     fun setEditorSettings(settings: EditorSettings) {
@@ -73,6 +87,13 @@ class EditorSettingsRepository(context: Context) {
             .putFloat  (KEY_UI_FONT_SCALE,       settings.uiFontScale
                 .coerceIn(EditorSettings.UI_FONT_SCALE_MIN, EditorSettings.UI_FONT_SCALE_MAX))
             .putString (KEY_DEFAULT_PROJECT_DIR, settings.defaultProjectDir)
+            // F017: additional Monaco settings surface
+            .putString (KEY_RENDER_WHITESPACE,       settings.renderWhitespace)
+            .putBoolean(KEY_MINIMAP_ENABLED,         settings.minimapEnabled)
+            .putBoolean(KEY_SCROLL_BEYOND_LAST_LINE, settings.scrollBeyondLastLine)
+            .putString (KEY_CURSOR_STYLE,            settings.cursorStyle)
+            .putBoolean(KEY_BRACKET_PAIR_COLOR,      settings.bracketPairColorization)
+            .putString (KEY_AUTO_CLOSING_BRACKETS,   settings.autoClosingBrackets)
             .apply()
     }
 
