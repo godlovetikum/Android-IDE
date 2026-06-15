@@ -87,6 +87,7 @@ fun IdeScreen(
     val screenWidthDp = LocalConfiguration.current.screenWidthDp
     val isWide        = screenWidthDp >= 600
     val activeTab     = uiState.openTabs.firstOrNull { it.isActive }
+    var settingsSectionTarget by remember { mutableStateOf<String?>(null) }
 
     // Back handler: when on EDITOR, confirm exit or go to Projects
     BackHandler(enabled = uiState.currentScreen == AppScreen.EDITOR) {
@@ -133,7 +134,7 @@ fun IdeScreen(
                         // F010: focus Monaco after the drawer closes so the soft keyboard
                         // appears immediately without requiring a second tap on the editor.
                         scope.launch {
-                            kotlinx.coroutines.delay(150)
+                            kotlinx.coroutines.delay(300)
                             ideViewModel.sendEditorCommand(EditorOutbound.ExecuteCommand("focusEditor"))
                         }
                     }
@@ -145,7 +146,7 @@ fun IdeScreen(
                     onCloseDrawer?.invoke()
                     // F010: same focus fix for double-tap.
                     scope.launch {
-                        kotlinx.coroutines.delay(150)
+                        kotlinx.coroutines.delay(300)
                         ideViewModel.sendEditorCommand(EditorOutbound.ExecuteCommand("focusEditor"))
                     }
                 },
@@ -184,7 +185,7 @@ fun IdeScreen(
                     onCloseDrawer?.invoke()
                     // F010: focus Monaco after search-select too.
                     scope.launch {
-                        kotlinx.coroutines.delay(150)
+                        kotlinx.coroutines.delay(300)
                         ideViewModel.sendEditorCommand(EditorOutbound.ExecuteCommand("focusEditor"))
                     }
                 },
@@ -244,7 +245,7 @@ fun IdeScreen(
                         )
                     }
                     AppScreen.SETTINGS -> {
-                        SidebarSettingsShortcuts()
+                        SidebarSettingsShortcuts(onSectionClick = { settingsSectionTarget = it })
                     }
                 }
             }
@@ -260,6 +261,7 @@ fun IdeScreen(
                             projectName      = uiState.projectName,
                             activeTab        = activeTab,
                             fileTree         = uiState.fileTree,
+                            projectRootUri   = uiState.projectRootUri,
                             isPreviewVisible = uiState.isPreviewVisible,
                             autoSave         = uiState.editorSettings.autoSave,
                             onSave           = ideViewModel::saveActiveFile,
@@ -301,9 +303,11 @@ fun IdeScreen(
                 }
                 AppScreen.SETTINGS -> {
                     SettingsScreen(
-                        uiState              = uiState,
-                        ideViewModel         = ideViewModel,
+                        uiState               = uiState,
+                        ideViewModel          = ideViewModel,
                         onNavigationIconClick = onToggleSidebar,
+                        scrollToSection       = settingsSectionTarget,
+                        onScrollConsumed      = { settingsSectionTarget = null },
                     )
                 }
             }
@@ -421,6 +425,8 @@ private fun EditorContent(
             showKeyboardToolbar     = s.showKeyboardToolbar,
             showSymbolBar           = s.showSymbolBar,
             customSymbols           = s.customSymbols,
+            tabCursorPositions      = uiState.tabCursorPositions,
+            tabScrollPositions      = uiState.tabScrollPositions,
             modifier                = Modifier.weight(1f).fillMaxWidth(),
         )
     }
@@ -625,15 +631,16 @@ private fun SidebarRecentProjectsList(
 // Displays the available settings sections as a visual index.
 
 @Composable
-private fun SidebarSettingsShortcuts() {
+private fun SidebarSettingsShortcuts(onSectionClick: (String) -> Unit = {}) {
     val colors = LocalIdeColors.current
+    // Each pair: (sectionKey matching SectionHeader title, sidebar display label).
     val sections = listOf(
-        "Appearance",
-        "Editor Display",
-        "Keyboard",
-        "File Tree",
-        "Project Storage",
-        "UI Scale",
+        "App Theme"       to "Appearance",
+        "UI Font Size"    to "UI Scale",
+        "Editor"          to "Editor Display",
+        "File Tree"       to "File Tree",
+        "Project Storage" to "Project Storage",
+        "Controls"        to "Keyboard",
     )
     Column(modifier = Modifier.fillMaxWidth()) {
         Text(
@@ -642,13 +649,14 @@ private fun SidebarSettingsShortcuts() {
             color    = colors.textSecondary,
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
         )
-        sections.forEach { section ->
+        sections.forEach { (sectionKey, label) ->
             Text(
-                text     = section,
+                text     = label,
                 style    = MaterialTheme.typography.bodySmall,
                 color    = colors.textPrimary,
                 modifier = Modifier
                     .fillMaxWidth()
+                    .clickable { onSectionClick(sectionKey) }
                     .padding(horizontal = 16.dp, vertical = 8.dp),
             )
         }
@@ -781,6 +789,7 @@ private fun IdeTopBar(
     projectName: String,
     activeTab: dev.androidide.viewmodel.model.EditorTab?,
     fileTree: List<FileNode>,
+    projectRootUri: String?,
     isPreviewVisible: Boolean,
     autoSave: Boolean,
     onSave: () -> Unit,
@@ -836,7 +845,7 @@ private fun IdeTopBar(
             navLoading = false
             return@LaunchedEffect
         }
-        val targetUri = navStack.lastOrNull() ?: activeParentUri ?: return@LaunchedEffect
+        val targetUri = navStack.lastOrNull() ?: activeParentUri ?: projectRootUri ?: return@LaunchedEffect
         navLoading = true
         navItems   = loadNavChildren(targetUri)
         navLoading = false
@@ -875,7 +884,7 @@ private fun IdeTopBar(
                             HorizontalDivider()
                         }
                         // ── Up button ────────────────────────────────────────────────
-                        if (navStack.size > 1) {
+                        if (navStack.isNotEmpty()) {
                             DropdownMenuItem(
                                 text    = { Text("\u2191 Up", color = colors.accent) },
                                 onClick = { scope.launch { navStack = navStack.dropLast(1) } },
@@ -1021,9 +1030,10 @@ private fun FileOpDialogHost(
 ) {
     when (dialog) {
         is FileOpDialog.Rename -> RenameDialog(
-            node      = dialog.node,
-            onConfirm = { ideViewModel.renameNode(dialog.node, it) },
-            onDismiss = ideViewModel::dismissFileOpDialog,
+            node         = dialog.node,
+            onConfirm    = { ideViewModel.renameNode(dialog.node, it) },
+            onDismiss    = ideViewModel::dismissFileOpDialog,
+            errorMessage = dialog.errorMessage,
         )
         is FileOpDialog.Delete -> DeleteDialog(
             node      = dialog.node,
@@ -1031,19 +1041,22 @@ private fun FileOpDialogHost(
             onDismiss = ideViewModel::dismissFileOpDialog,
         )
         is FileOpDialog.CreateFile -> CreateFileDialog(
-            parent    = dialog.parentNode,
-            onConfirm = { ideViewModel.createFileInDirectory(dialog.parentNode, it) },
-            onDismiss = ideViewModel::dismissFileOpDialog,
+            parent       = dialog.parentNode,
+            onConfirm    = { ideViewModel.createFileInDirectory(dialog.parentNode, it) },
+            onDismiss    = ideViewModel::dismissFileOpDialog,
+            errorMessage = dialog.errorMessage,
         )
         is FileOpDialog.CreateFolder -> CreateFolderDialog(
-            parent    = dialog.parentNode,
-            onConfirm = { ideViewModel.createFolderInDirectory(dialog.parentNode, it) },
-            onDismiss = ideViewModel::dismissFileOpDialog,
+            parent       = dialog.parentNode,
+            onConfirm    = { ideViewModel.createFolderInDirectory(dialog.parentNode, it) },
+            onDismiss    = ideViewModel::dismissFileOpDialog,
+            errorMessage = dialog.errorMessage,
         )
         is FileOpDialog.Duplicate -> DuplicateDialog(
-            node      = dialog.node,
-            onConfirm = { ideViewModel.duplicateFile(dialog.node, it) },
-            onDismiss = ideViewModel::dismissFileOpDialog,
+            node         = dialog.node,
+            onConfirm    = { ideViewModel.duplicateFile(dialog.node, it) },
+            onDismiss    = ideViewModel::dismissFileOpDialog,
+            errorMessage = dialog.errorMessage,
         )
         is FileOpDialog.UnsavedClose -> UnsavedCloseDialog(
             fileName  = dialog.displayName,
@@ -1102,18 +1115,28 @@ private fun SaveAsDialog(
 }
 
 @Composable
-private fun RenameDialog(node: FileNode, onConfirm: (String) -> Unit, onDismiss: () -> Unit) {
+private fun RenameDialog(
+    node: FileNode,
+    onConfirm: (String) -> Unit,
+    onDismiss: () -> Unit,
+    errorMessage: String? = null,
+) {
     var name by remember { mutableStateOf(node.displayName) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title   = { Text("Rename") },
         text    = {
-            OutlinedTextField(
-                value         = name,
-                onValueChange = { name = it },
-                label         = { Text("New name") },
-                singleLine    = true,
-            )
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                OutlinedTextField(
+                    value         = name,
+                    onValueChange = { name = it },
+                    label         = { Text("New name") },
+                    singleLine    = true,
+                )
+                if (errorMessage != null) {
+                    Text(text = errorMessage, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                }
+            }
         },
         confirmButton = {
             TextButton(onClick = { if (name.isNotBlank()) onConfirm(name.trim()) }, enabled = name.isNotBlank()) {
@@ -1141,19 +1164,29 @@ private fun DeleteDialog(node: FileNode, onConfirm: () -> Unit, onDismiss: () ->
 }
 
 @Composable
-private fun CreateFileDialog(parent: FileNode, onConfirm: (String) -> Unit, onDismiss: () -> Unit) {
+private fun CreateFileDialog(
+    parent: FileNode,
+    onConfirm: (String) -> Unit,
+    onDismiss: () -> Unit,
+    errorMessage: String? = null,
+) {
     var name by remember { mutableStateOf("") }
     AlertDialog(
         onDismissRequest = onDismiss,
         title   = { Text("New File") },
         text    = {
-            OutlinedTextField(
-                value         = name,
-                onValueChange = { name = it },
-                label         = { Text("File name") },
-                singleLine    = true,
-                placeholder   = { Text("main.kt") },
-            )
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                OutlinedTextField(
+                    value         = name,
+                    onValueChange = { name = it },
+                    label         = { Text("File name") },
+                    singleLine    = true,
+                    placeholder   = { Text("main.kt") },
+                )
+                if (errorMessage != null) {
+                    Text(text = errorMessage, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                }
+            }
         },
         confirmButton = {
             TextButton(onClick = { if (name.isNotBlank()) onConfirm(name.trim()) }, enabled = name.isNotBlank()) {
@@ -1165,18 +1198,28 @@ private fun CreateFileDialog(parent: FileNode, onConfirm: (String) -> Unit, onDi
 }
 
 @Composable
-private fun CreateFolderDialog(parent: FileNode, onConfirm: (String) -> Unit, onDismiss: () -> Unit) {
+private fun CreateFolderDialog(
+    parent: FileNode,
+    onConfirm: (String) -> Unit,
+    onDismiss: () -> Unit,
+    errorMessage: String? = null,
+) {
     var name by remember { mutableStateOf("") }
     AlertDialog(
         onDismissRequest = onDismiss,
         title   = { Text("New Folder") },
         text    = {
-            OutlinedTextField(
-                value         = name,
-                onValueChange = { name = it },
-                label         = { Text("Folder name") },
-                singleLine    = true,
-            )
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                OutlinedTextField(
+                    value         = name,
+                    onValueChange = { name = it },
+                    label         = { Text("Folder name") },
+                    singleLine    = true,
+                )
+                if (errorMessage != null) {
+                    Text(text = errorMessage, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                }
+            }
         },
         confirmButton = {
             TextButton(onClick = { if (name.isNotBlank()) onConfirm(name.trim()) }, enabled = name.isNotBlank()) {
@@ -1188,18 +1231,28 @@ private fun CreateFolderDialog(parent: FileNode, onConfirm: (String) -> Unit, on
 }
 
 @Composable
-private fun DuplicateDialog(node: FileNode, onConfirm: (String) -> Unit, onDismiss: () -> Unit) {
+private fun DuplicateDialog(
+    node: FileNode,
+    onConfirm: (String) -> Unit,
+    onDismiss: () -> Unit,
+    errorMessage: String? = null,
+) {
     var name by remember { mutableStateOf("copy_${node.displayName}") }
     AlertDialog(
         onDismissRequest = onDismiss,
         title   = { Text("Duplicate") },
         text    = {
-            OutlinedTextField(
-                value         = name,
-                onValueChange = { name = it },
-                label         = { Text("New name") },
-                singleLine    = true,
-            )
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                OutlinedTextField(
+                    value         = name,
+                    onValueChange = { name = it },
+                    label         = { Text("New name") },
+                    singleLine    = true,
+                )
+                if (errorMessage != null) {
+                    Text(text = errorMessage, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                }
+            }
         },
         confirmButton = {
             TextButton(onClick = { if (name.isNotBlank()) onConfirm(name.trim()) }, enabled = name.isNotBlank()) {

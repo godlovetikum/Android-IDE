@@ -47,6 +47,13 @@ sealed class EditorInbound {
      */
     data class TextCopied(val text: String, val isCut: Boolean) : EditorInbound()
 
+    /**
+     * Debounced scroll position report from Monaco.
+     * [scrollTop] is the pixel offset from the top of the editor content.
+     * Used to persist and restore scroll position per tab across sessions.
+     */
+    data class ScrollPositionReport(val scrollTop: Int) : EditorInbound()
+
     companion object {
         /**
          * Parse a JSON string from [AndroidBridge.onMessage] into an [EditorInbound].
@@ -55,21 +62,24 @@ sealed class EditorInbound {
         fun fromJson(json: String): EditorInbound? = runCatching {
             val obj = JSONObject(json)
             when (obj.getString("type")) {
-                "ready"          -> Ready
-                "contentChanged" -> ContentChanged(
+                "ready"                -> Ready
+                "contentChanged"       -> ContentChanged(
                     path    = obj.getString("path"),
                     content = obj.getString("content"),
                 )
-                "cursorMoved"    -> CursorMoved(
+                "cursorMoved"          -> CursorMoved(
                     line   = obj.getInt("line"),
                     column = obj.getInt("column"),
                 )
-                "fileSaved"      -> FileSaved(path = obj.getString("path"))
-                "textCopied"     -> TextCopied(
+                "fileSaved"            -> FileSaved(path = obj.getString("path"))
+                "textCopied"           -> TextCopied(
                     text  = obj.getString("text"),
                     isCut = obj.optBoolean("isCut", false),
                 )
-                else             -> null
+                "scrollPositionReport" -> ScrollPositionReport(
+                    scrollTop = obj.getInt("scrollTop"),
+                )
+                else                   -> null
             }
         }.getOrNull()
     }
@@ -165,6 +175,20 @@ sealed class EditorOutbound {
     object ShowReplace : EditorOutbound()
 
     /**
+     * Restore the cursor to [line] / [column] in the active model.
+     * Sent after LoadFile to re-establish the saved cursor position.
+     */
+    data class SetCursorPosition(val line: Int, val column: Int) : EditorOutbound()
+
+    /**
+     * Restore the vertical scroll offset to [scrollTop] pixels.
+     * Sent after LoadFile (and after SetCursorPosition) to re-establish the
+     * saved scroll position. Monaco's revealCursor may change the scroll, so
+     * this must be sent last to win.
+     */
+    data class SetScrollPosition(val scrollTop: Int) : EditorOutbound()
+
+    /**
      * F019: Dispose every Monaco model that was created for the previous project.
      * Sent at the start of [openProjectInternal] before tabs are cleared, so stale
      * models from project A cannot leak into project B (would cause wrong content
@@ -210,9 +234,11 @@ sealed class EditorOutbound {
             is ForceLayout     -> put("type", "forceLayout")
             is ExecuteCommand  -> { put("type", "executeCommand"); put("command", msg.command) }
             is InsertText      -> { put("type", "insertText");     put("text", msg.text) }
-            is ShowFind        -> put("type", "showFind")
-            is ShowReplace     -> put("type", "showReplace")
-            is CloseAllModels  -> put("type", "closeAllModels")
+            is ShowFind           -> put("type", "showFind")
+            is ShowReplace        -> put("type", "showReplace")
+            is SetCursorPosition  -> { put("type", "setCursorPosition"); put("line", msg.line); put("column", msg.column) }
+            is SetScrollPosition  -> { put("type", "setScrollPosition"); put("scrollTop", msg.scrollTop) }
+            is CloseAllModels     -> put("type", "closeAllModels")
         }
     }
 

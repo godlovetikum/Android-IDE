@@ -177,6 +177,17 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
+        // Load cursor and scroll positions before tabs open so the positions are
+        // available in IdeUiState when EditorPane's LaunchedEffect fires.
+        val cursorPositions = sessionRepository.getCursorPositionsForProject(projectUri)
+        val scrollPositions = sessionRepository.getScrollPositionsForProject(projectUri)
+        if (cursorPositions.isNotEmpty() || scrollPositions.isNotEmpty()) {
+            _uiState.update { it.copy(
+                tabCursorPositions = cursorPositions,
+                tabScrollPositions = scrollPositions,
+            )}
+        }
+
         // F002: single sequential coroutine prevents race where parallel launches
         // reset openTabs mid-flight (openProjectInternal wipes tabs; parallel
         // openFileInternal calls may have already added tabs before the wipe).
@@ -194,10 +205,12 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
     fun saveSession() {
         val state = _uiState.value
         sessionRepository.save(
-            projectUri   = state.projectRootUri,
-            openTabUris  = state.openTabs.filter { !it.isBlank }.map { it.documentUri },
-            activeTabUri = state.openTabs.firstOrNull { it.isActive && !it.isBlank }?.documentUri,
-            screenName   = state.currentScreen.name,
+            projectUri      = state.projectRootUri,
+            openTabUris     = state.openTabs.filter { !it.isBlank }.map { it.documentUri },
+            activeTabUri    = state.openTabs.firstOrNull { it.isActive && !it.isBlank }?.documentUri,
+            screenName      = state.currentScreen.name,
+            cursorPositions = state.tabCursorPositions,
+            scrollPositions = state.tabScrollPositions,
         )
     }
 
@@ -209,9 +222,11 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
         val state = _uiState.value
         val projectUri = state.projectRootUri ?: return
         sessionRepository.saveTabsForProject(
-            projectUri   = projectUri,
-            openTabUris  = state.openTabs.filter { !it.isBlank }.map { it.documentUri },
-            activeTabUri = state.openTabs.firstOrNull { it.isActive && !it.isBlank }?.documentUri,
+            projectUri      = projectUri,
+            openTabUris     = state.openTabs.filter { !it.isBlank }.map { it.documentUri },
+            activeTabUri    = state.openTabs.firstOrNull { it.isActive && !it.isBlank }?.documentUri,
+            cursorPositions = state.tabCursorPositions,
+            scrollPositions = state.tabScrollPositions,
         )
     }
 
@@ -739,10 +754,17 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
     fun dismissExitConfirmation() = _uiState.update { it.copy(showExitConfirmation = false) }
 
     fun saveAllAndExit(onReady: () -> Unit) {
-        saveAllFiles()
-        _uiState.update { it.copy(showExitConfirmation = false) }
-        crashRecovery.markCleanExit()
-        onReady()
+        viewModelScope.launch {
+            _uiState.value.openTabs.filter { it.isDirty && !it.isBlank }.forEach { tab ->
+                val bytes = pendingContent[tab.id]?.toByteArray(Charsets.UTF_8) ?: return@forEach
+                safRepository.writeFile(tab.documentUri, bytes)
+                pendingContent.remove(tab.id)
+                crashRecovery.clearUnsavedContent(tab.id)
+            }
+            _uiState.update { it.copy(showExitConfirmation = false) }
+            crashRecovery.markCleanExit()
+            onReady()
+        }
     }
 
     // ── Editor bridge ──────────────────────────────────────────────────────
@@ -786,7 +808,17 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
             }
 
             is EditorInbound.CursorMoved -> {
-                _uiState.update { it.copy(cursorLine = message.line, cursorColumn = message.column) }
+                _uiState.update { state ->
+                    val activeUri = state.openTabs.firstOrNull { it.isActive }?.documentUri
+                    val updatedCursors = if (activeUri != null)
+                        state.tabCursorPositions + (activeUri to Pair(message.line, message.column))
+                    else state.tabCursorPositions
+                    state.copy(
+                        cursorLine         = message.line,
+                        cursorColumn       = message.column,
+                        tabCursorPositions = updatedCursors,
+                    )
+                }
             }
 
             is EditorInbound.FileSaved -> saveFile(message.path)
@@ -798,6 +830,16 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
                 val clipboard = getApplication<Application>()
                     .getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                 clipboard.setPrimaryClip(ClipData.newPlainText("code", message.text))
+            }
+
+            is EditorInbound.ScrollPositionReport -> {
+                _uiState.update { state ->
+                    val activeUri = state.openTabs.firstOrNull { it.isActive }?.documentUri
+                    val updatedScrolls = if (activeUri != null)
+                        state.tabScrollPositions + (activeUri to message.scrollTop)
+                    else state.tabScrollPositions
+                    state.copy(tabScrollPositions = updatedScrolls)
+                }
             }
         }
     }
@@ -1153,7 +1195,9 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
             _uiState.value.fileTree  // node is at the project root level
         }
         if (siblings.any { it.documentUri != node.documentUri && it.displayName.equals(newName, ignoreCase = true) }) {
-            _uiState.update { it.copy(statusMessage = "\u201c$newName\u201d already exists") }
+            _uiState.update { state ->
+                state.copy(fileOpDialog = (state.fileOpDialog as? FileOpDialog.Rename)?.copy(errorMessage = "\u201c$newName\u201d already exists"))
+            }
             return
         }
         viewModelScope.launch {
@@ -1220,7 +1264,9 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
         // F007: reject duplicate names pre-flight so the dialog stays open with an error.
         val siblings = _uiState.value.fileTree.findNode(parentNode.documentUri)?.children ?: emptyList()
         if (siblings.any { it.displayName.equals(name, ignoreCase = true) }) {
-            _uiState.update { it.copy(statusMessage = "\u201c$name\u201d already exists in this folder") }
+            _uiState.update { state ->
+                state.copy(fileOpDialog = (state.fileOpDialog as? FileOpDialog.CreateFile)?.copy(errorMessage = "\u201c$name\u201d already exists in this folder"))
+            }
             return
         }
         viewModelScope.launch {
@@ -1261,7 +1307,9 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
         // F007: reject duplicate names pre-flight.
         val siblings = _uiState.value.fileTree.findNode(parentNode.documentUri)?.children ?: emptyList()
         if (siblings.any { it.displayName.equals(name, ignoreCase = true) }) {
-            _uiState.update { it.copy(statusMessage = "\u201c$name\u201d already exists in this folder") }
+            _uiState.update { state ->
+                state.copy(fileOpDialog = (state.fileOpDialog as? FileOpDialog.CreateFolder)?.copy(errorMessage = "\u201c$name\u201d already exists in this folder"))
+            }
             return
         }
         viewModelScope.launch {
@@ -1323,7 +1371,9 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
         val parentSiblings = _uiState.value.fileTree.findNode(parentUri)?.children
             ?: _uiState.value.fileTree
         if (parentSiblings.any { it.displayName.equals(newName, ignoreCase = true) }) {
-            _uiState.update { it.copy(statusMessage = "\u201c$newName\u201d already exists in this folder") }
+            _uiState.update { state ->
+                state.copy(fileOpDialog = (state.fileOpDialog as? FileOpDialog.Duplicate)?.copy(errorMessage = "\u201c$newName\u201d already exists in this folder"))
+            }
             return
         }
         viewModelScope.launch {

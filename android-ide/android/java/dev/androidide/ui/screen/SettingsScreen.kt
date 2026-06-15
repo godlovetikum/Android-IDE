@@ -21,8 +21,11 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.launch
 import dev.androidide.data.model.AppTheme
 import dev.androidide.data.model.EditorSettings
 import dev.androidide.data.model.PreviewLayout
@@ -37,8 +40,21 @@ fun SettingsScreen(
     uiState: IdeUiState,
     ideViewModel: IdeViewModel,
     onNavigationIconClick: (() -> Unit)? = null,
+    scrollToSection: String? = null,
+    onScrollConsumed: () -> Unit = {},
 ) {
-    val colors = LocalIdeColors.current
+    val colors         = LocalIdeColors.current
+    val scrollState    = rememberScrollState()
+    val coroutineScope = rememberCoroutineScope()
+    val sectionOffsets = remember { mutableStateMapOf<String, Int>() }
+
+    LaunchedEffect(scrollToSection) {
+        if (scrollToSection != null) {
+            val offset = sectionOffsets[scrollToSection]
+            if (offset != null) coroutineScope.launch { scrollState.animateScrollTo(offset) }
+            onScrollConsumed()
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -64,14 +80,14 @@ fun SettingsScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .verticalScroll(rememberScrollState())
+                .verticalScroll(scrollState)
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(24.dp),
         ) {
             val s = uiState.editorSettings
 
             // ── App Appearance ─────────────────────────────────────────────
-            SectionHeader("App Theme")
+            SectionHeader("App Theme", modifier = Modifier.onGloballyPositioned { sectionOffsets["App Theme"] = it.positionInParent().y.toInt() })
             Card(colors = CardDefaults.cardColors(containerColor = colors.surface)) {
                 Column(
                     modifier = Modifier.fillMaxWidth().selectableGroup().padding(vertical = 8.dp),
@@ -83,7 +99,7 @@ fun SettingsScreen(
             }
 
             // ── UI Font Scale ───────────────────────────────────────────────
-            SectionHeader("UI Font Size")
+            SectionHeader("UI Font Size", modifier = Modifier.onGloballyPositioned { sectionOffsets["UI Font Size"] = it.positionInParent().y.toInt() })
             Card(colors = CardDefaults.cardColors(containerColor = colors.surface)) {
                 Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -177,7 +193,7 @@ fun SettingsScreen(
             }
 
             // ── Editor ─────────────────────────────────────────────────────
-            SectionHeader("Editor")
+            SectionHeader("Editor", modifier = Modifier.onGloballyPositioned { sectionOffsets["Editor"] = it.positionInParent().y.toInt() })
             Card(colors = CardDefaults.cardColors(containerColor = colors.surface)) {
                 Column(modifier = Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
 
@@ -441,7 +457,7 @@ fun SettingsScreen(
             }
 
             // ── File Tree ──────────────────────────────────────────────────
-            SectionHeader("File Tree")
+            SectionHeader("File Tree", modifier = Modifier.onGloballyPositioned { sectionOffsets["File Tree"] = it.positionInParent().y.toInt() })
             Card(colors = CardDefaults.cardColors(containerColor = colors.surface)) {
                 Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
                     Row(
@@ -462,7 +478,7 @@ fun SettingsScreen(
             }
 
             // ── Project Storage ────────────────────────────────────────────
-            SectionHeader("Project Storage")
+            SectionHeader("Project Storage", modifier = Modifier.onGloballyPositioned { sectionOffsets["Project Storage"] = it.positionInParent().y.toInt() })
             Card(colors = CardDefaults.cardColors(containerColor = colors.surface)) {
                 Column(modifier = Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
@@ -530,7 +546,7 @@ fun SettingsScreen(
             }
 
             // ── Controls ───────────────────────────────────────────────────
-            SectionHeader("Controls")
+            SectionHeader("Controls", modifier = Modifier.onGloballyPositioned { sectionOffsets["Controls"] = it.positionInParent().y.toInt() })
             Card(colors = CardDefaults.cardColors(containerColor = colors.surface)) {
                 Column(
                     modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp, horizontal = 16.dp),
@@ -567,9 +583,9 @@ fun SettingsScreen(
 // ── Private composables ────────────────────────────────────────────────────────
 
 @Composable
-private fun SectionHeader(title: String) {
+private fun SectionHeader(title: String, modifier: Modifier = Modifier) {
     val colors = LocalIdeColors.current
-    Text(text = title, style = MaterialTheme.typography.labelMedium, color = colors.accent)
+    Text(text = title, style = MaterialTheme.typography.labelMedium, color = colors.accent, modifier = modifier)
 }
 
 @Composable

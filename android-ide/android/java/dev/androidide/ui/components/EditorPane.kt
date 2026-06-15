@@ -102,6 +102,8 @@ fun EditorPane(
     showKeyboardToolbar: Boolean = true,
     showSymbolBar: Boolean = true,
     customSymbols: List<String> = EditorSettings.DEFAULT_SYMBOLS,
+    tabCursorPositions: Map<String, Pair<Int, Int>> = emptyMap(),
+    tabScrollPositions: Map<String, Int> = emptyMap(),
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -240,6 +242,16 @@ fun EditorPane(
                     language = activeTab.language,
                 ),
             )
+            // Restore cursor position for this tab (if previously saved).
+            val cursor = tabCursorPositions[activeTab.documentUri]
+            if (cursor != null && (cursor.first > 1 || cursor.second > 1)) {
+                editorBridge.send(editorWebView, EditorOutbound.SetCursorPosition(cursor.first, cursor.second))
+            }
+            // Restore scroll position last — overrides any scroll caused by revealCursor.
+            val scroll = tabScrollPositions[activeTab.documentUri]
+            if (scroll != null && scroll > 0) {
+                editorBridge.send(editorWebView, EditorOutbound.SetScrollPosition(scroll))
+            }
         }
     }
 

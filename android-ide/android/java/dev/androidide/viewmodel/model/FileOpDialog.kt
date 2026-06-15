@@ -6,23 +6,23 @@
 package dev.androidide.viewmodel.model
 
 sealed class FileOpDialog {
-    /** Rename dialog for [node]. */
-    data class Rename(val node: FileNode) : FileOpDialog()
+    /** Rename dialog for [node]. [errorMessage] is shown inline when non-null. */
+    data class Rename(val node: FileNode, val errorMessage: String? = null) : FileOpDialog()
 
     /** Delete confirmation dialog for [node]. */
     data class Delete(val node: FileNode) : FileOpDialog()
 
-    /** "Create file" dialog; the new file will be created inside [parentNode]. */
-    data class CreateFile(val parentNode: FileNode) : FileOpDialog()
+    /** "Create file" dialog; new file will be created inside [parentNode]. [errorMessage] is shown inline when non-null. */
+    data class CreateFile(val parentNode: FileNode, val errorMessage: String? = null) : FileOpDialog()
 
-    /** "Create folder" dialog; the new folder will be created inside [parentNode]. */
-    data class CreateFolder(val parentNode: FileNode) : FileOpDialog()
+    /** "Create folder" dialog; new folder will be created inside [parentNode]. [errorMessage] is shown inline when non-null. */
+    data class CreateFolder(val parentNode: FileNode, val errorMessage: String? = null) : FileOpDialog()
 
     /**
      * Duplicate dialog for [node].
-     * Pre-fills the name field with "Copy of <displayName>".
+     * Pre-fills the name field with "copy_<displayName>". [errorMessage] is shown inline when non-null.
      */
-    data class Duplicate(val node: FileNode) : FileOpDialog()
+    data class Duplicate(val node: FileNode, val errorMessage: String? = null) : FileOpDialog()
 
     /**
      * Confirm-close dialog shown when the user tries to close a tab that has

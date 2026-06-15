@@ -81,6 +81,11 @@ data class IdeUiState(
     val cursorLine: Int = 1,
     val cursorColumn: Int = 1,
 
+    // ── Per-tab cursor and scroll position maps ─────────────────────────────
+    // Keyed by documentUri. Persisted per-project in SessionRepository.
+    val tabCursorPositions: Map<String, Pair<Int, Int>> = emptyMap(),
+    val tabScrollPositions: Map<String, Int>            = emptyMap(),
+
     // ── Status ─────────────────────────────────────────────────────────────
     /** Transient status bar message (e.g. "Saved", "Renamed"). */
     val statusMessage: String = "",

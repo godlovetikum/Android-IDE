@@ -223,6 +223,7 @@ fun FileTreePanel(
                         onExportDirectory        = onExportDirectory,
                         onCopyPath               = onCopyPath,
                         onSelect                 = onToggleNodeSelection,
+                        onShowDuplicateDialog    = onShowDuplicateDialog,
                     )
                 }
             }
@@ -391,6 +392,7 @@ private fun FileTreeRow(
     onExportDirectory: (FileNode) -> Unit,
     onCopyPath: (String) -> Unit,
     onSelect: (String) -> Unit,
+    onShowDuplicateDialog: (FileNode) -> Unit,
 ) {
     val colors   = LocalIdeColors.current
     var menuOpen by remember { mutableStateOf(false) }

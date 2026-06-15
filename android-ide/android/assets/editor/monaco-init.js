@@ -245,6 +245,16 @@ require(['vs/editor/editor.main'], function () {
     });
   });
 
+  // --- Scroll position report (debounced 500 ms) ---
+  var scrollReportTimer = null;
+  var SCROLL_REPORT_DEBOUNCE_MS = 500;
+  editor.onDidScrollChange(function () {
+    clearTimeout(scrollReportTimer);
+    scrollReportTimer = setTimeout(function () {
+      postToNative({ type: 'scrollPositionReport', scrollTop: editor.getScrollTop() });
+    }, SCROLL_REPORT_DEBOUNCE_MS);
+  });
+
   // --- Keyboard shortcut: Ctrl+S / Cmd+S ---
   editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, function () {
     if (!currentPath) return;
@@ -517,6 +527,19 @@ window.androidIDE = {
         if (editor) {
           var replaceAction = editor.getAction('editor.action.startFindReplaceAction');
           if (replaceAction) replaceAction.run();
+        }
+        break;
+
+      case 'setCursorPosition':
+        if (editor && msg.line != null && msg.column != null) {
+          editor.setPosition({ lineNumber: msg.line, column: msg.column });
+          editor.revealPositionInCenter({ lineNumber: msg.line, column: msg.column });
+        }
+        break;
+
+      case 'setScrollPosition':
+        if (editor && msg.scrollTop != null) {
+          editor.setScrollPosition({ scrollTop: msg.scrollTop });
         }
         break;
 
