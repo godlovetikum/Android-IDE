@@ -12,13 +12,13 @@
 //
 // Content storage:
 //   Each unsaved tab's content is stored as a JSON blob in SharedPreferences,
-//   keyed by tab ID. The content is written on every contentChanged event
-//   (Monaco debounces these to 300 ms) and cleared when the tab is saved or
-//   closed normally.
+//   keyed by project identity and tab ID. The content is written on every
+//   contentChanged event and cleared when the tab is saved or closed normally.
 
 package dev.androidide.data
 
 import android.content.Context
+import android.util.Base64
 import dev.androidide.data.model.RecoveryEntry
 import org.json.JSONObject
 
@@ -49,29 +49,34 @@ class CrashRecoveryRepository(context: Context) {
 
     /** Persist the current unsaved content for a tab. */
     fun saveUnsavedContent(
+        projectRootUri: String,
         tabId: String,
         documentUri: String,
         displayName: String,
         content: String,
     ) {
         val json = JSONObject().apply {
+            put("projectRootUri", projectRootUri)
             put("tabId",       tabId)
             put("documentUri", documentUri)
             put("displayName", displayName)
             put("content",     content)
         }.toString()
-        prefs.edit().putString("$UNSAVED_PREFIX$tabId", json).apply()
+        prefs.edit().putString(storageKey(projectRootUri, tabId), json).apply()
     }
 
-    /** Return all persisted unsaved entries. */
-    fun getUnsavedEntries(): List<RecoveryEntry> =
+    /** Return persisted unsaved entries for one project. */
+    fun getUnsavedEntries(projectRootUri: String): List<RecoveryEntry> =
         prefs.all
             .filterKeys { it.startsWith(UNSAVED_PREFIX) }
             .values
             .mapNotNull { value ->
                 runCatching {
                     val obj = JSONObject(value as String)
+                    val storedProjectUri = obj.optString("projectRootUri")
+                    if (storedProjectUri != projectRootUri) return@runCatching null
                     RecoveryEntry(
+                        projectRootUri = storedProjectUri,
                         tabId       = obj.getString("tabId"),
                         documentUri = obj.getString("documentUri"),
                         displayName = obj.getString("displayName"),
@@ -81,8 +86,24 @@ class CrashRecoveryRepository(context: Context) {
             }
 
     /** Remove the unsaved entry for [tabId] (tab saved or closed normally). */
-    fun clearUnsavedContent(tabId: String) =
-        prefs.edit().remove("$UNSAVED_PREFIX$tabId").apply()
+    fun clearUnsavedContent(projectRootUri: String, tabId: String) =
+        prefs.edit().remove(storageKey(projectRootUri, tabId)).apply()
+
+    /** Remove every persisted draft belonging to one project. */
+    fun clearProject(projectRootUri: String) {
+        prefs.edit().apply {
+            prefs.all
+                .filterKeys { it.startsWith(UNSAVED_PREFIX) }
+                .forEach { key ->
+                    val value = prefs.getString(key, null) ?: return@forEach
+                    val storedProject = runCatching {
+                        JSONObject(value).optString("projectRootUri")
+                    }.getOrNull()
+                    if (storedProject == projectRootUri) remove(key)
+                }
+            apply()
+        }
+    }
 
     /** Remove all unsaved entries (after recovery accepted or discarded). */
     fun clearAll() {
@@ -93,4 +114,10 @@ class CrashRecoveryRepository(context: Context) {
             apply()
         }
     }
+
+    private fun storageKey(projectRootUri: String, tabId: String): String =
+        "$UNSAVED_PREFIX${Base64.encodeToString(
+            projectRootUri.toByteArray(Charsets.UTF_8),
+            Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING,
+        )}_$tabId"
 }

@@ -27,6 +27,8 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Code
@@ -88,6 +90,16 @@ fun IdeScreen(
     val isWide        = screenWidthDp >= 600
     val activeTab     = uiState.openTabs.firstOrNull { it.isActive }
     var settingsSectionTarget by remember { mutableStateOf<String?>(null) }
+    // Keep drawer state above the wide/narrow branch so a rotation across the
+    // breakpoint does not recreate it and unexpectedly lose the open drawer.
+    val drawerState = rememberDrawerState(DrawerValue.Closed)
+    val scope       = rememberCoroutineScope()
+    val closeDrawer: () -> Unit = { scope.launch { drawerState.close() } }
+    val toggleDrawer: () -> Unit = {
+        scope.launch {
+            if (drawerState.isClosed) drawerState.open() else drawerState.close()
+        }
+    }
 
     // Back handler: when on EDITOR, confirm exit or go to Projects
     BackHandler(enabled = uiState.currentScreen == AppScreen.EDITOR) {
@@ -196,6 +208,10 @@ fun IdeScreen(
     // ── Sidebar composable (shared between wide/narrow) ────────────────────
     val sidebarContent: @Composable (Modifier, onCloseDrawer: (() -> Unit)?) -> Unit =
         { mod, onCloseDrawer ->
+            fun closeAfter(action: () -> Unit) {
+                onCloseDrawer?.invoke()
+                action()
+            }
             Column(
                 modifier = mod
                     .background(colors.surface)
@@ -203,9 +219,9 @@ fun IdeScreen(
             ) {
                 SidebarNavPanel(
                     currentScreen      = uiState.currentScreen,
-                    onNavigateProjects = { ideViewModel.navigateTo(AppScreen.PROJECTS) },
-                    onNavigateEditor   = { ideViewModel.navigateTo(AppScreen.EDITOR) },
-                    onNavigateSettings = { ideViewModel.navigateTo(AppScreen.SETTINGS) },
+                    onNavigateProjects = { closeAfter { ideViewModel.navigateTo(AppScreen.PROJECTS) } },
+                    onNavigateEditor   = { closeAfter { ideViewModel.navigateTo(AppScreen.EDITOR) } },
+                    onNavigateSettings = { closeAfter { ideViewModel.navigateTo(AppScreen.SETTINGS) } },
                 )
                 HorizontalDivider(thickness = 1.dp, color = colors.separator)
                 // C003: Sidebar content is screen-aware.
@@ -228,24 +244,36 @@ fun IdeScreen(
                                 onRemoveProject    = {
                                     uiState.projectRootUri?.let { ideViewModel.requestRemoveProject(it) }
                                 },
+                                onCloseDrawer      = { onCloseDrawer?.invoke() },
                             )
-                            fileTreePanelContent(Modifier.fillMaxSize(), onCloseDrawer)
+                            fileTreePanelContent(Modifier.weight(1f).fillMaxWidth(), onCloseDrawer)
                         } else {
-                            SidebarNoProjectHint(onOpenProject = onOpenProjectFolder)
+                            SidebarNoProjectHint(
+                                onOpenProject = {
+                                    onCloseDrawer?.invoke()
+                                    onOpenProjectFolder()
+                                },
+                            )
                         }
                     }
                     // F009: sidebar content for Projects and Settings screens.
                     AppScreen.PROJECTS -> {
                         SidebarRecentProjectsList(
                             projects       = uiState.recentProjects,
+                            modifier       = Modifier.weight(1f).fillMaxWidth(),
                             onOpenProject  = { uri ->
-                                ideViewModel.openProject(uri)
-                                onCloseDrawer?.invoke()
+                                closeAfter { ideViewModel.openProject(uri) }
                             },
                         )
                     }
                     AppScreen.SETTINGS -> {
-                        SidebarSettingsShortcuts(onSectionClick = { settingsSectionTarget = it })
+                        SidebarSettingsShortcuts(
+                            modifier = Modifier.weight(1f).fillMaxWidth(),
+                            onSectionClick = {
+                                settingsSectionTarget = it
+                                onCloseDrawer?.invoke()
+                            },
+                        )
                     }
                 }
             }
@@ -281,7 +309,7 @@ fun IdeScreen(
                         EditorContent(
                             uiState      = uiState,
                             ideViewModel = ideViewModel,
-                            modifier     = Modifier.weight(1f).fillMaxWidth().imePadding(),
+                            modifier     = Modifier.weight(1f).fillMaxWidth(),
                         )
                         IdeStatusBar(
                             cursorLine    = uiState.cursorLine,
@@ -323,18 +351,10 @@ fun IdeScreen(
             }
         }
     } else {
-        val drawerState = rememberDrawerState(DrawerValue.Closed)
-        val scope       = rememberCoroutineScope()
-        val closeDrawer: () -> Unit = { scope.launch { drawerState.close() } }
-        val toggleDrawer: () -> Unit = {
-            scope.launch {
-                if (drawerState.isClosed) drawerState.open() else drawerState.close()
-            }
-        }
-
         ModalNavigationDrawer(
             drawerState     = drawerState,
             gesturesEnabled = false,    // prevent swipe conflicts with Monaco horizontal scroll
+            scrimColor      = MaterialTheme.colorScheme.scrim.copy(alpha = 0.32f),
             drawerContent   = {
                 ModalDrawerSheet(
                     modifier             = Modifier.width(280.dp),
@@ -344,21 +364,10 @@ fun IdeScreen(
                 }
             },
         ) {
-            // F011: explicit scrim overlay behind the drawer content area.
-            // gesturesEnabled=false prevents the built-in swipe but some OEM
-            // firmware also disables the built-in scrim tap-to-close; this
-            // explicit overlay is always reliable regardless of firmware.
-            Box(modifier = Modifier.fillMaxSize()) {
-                mainContent(toggleDrawer, Modifier.fillMaxSize())
-                if (drawerState.currentValue == DrawerValue.Open) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.32f))
-                            .clickable { scope.launch { drawerState.close() } },
-                    )
-                }
-            }
+            // The Material scrim is rendered by ModalNavigationDrawer outside
+            // the content slot, so it receives outside taps even above a native
+            // WebView. Drawer swipe gestures remain disabled.
+            mainContent(toggleDrawer, Modifier.fillMaxSize())
         }
     }
 
@@ -374,6 +383,15 @@ fun IdeScreen(
                 ideViewModel.navigateTo(AppScreen.PROJECTS)
             },
             onCancel  = ideViewModel::dismissExitConfirmation,
+        )
+    }
+
+    uiState.projectSwitchRequest?.let { request ->
+        ProjectSwitchConfirmDialog(
+            targetProjectName = request.projectName,
+            onSave          = ideViewModel::saveAndSwitchProject,
+            onDiscard       = ideViewModel::discardAndSwitchProject,
+            onCancel        = ideViewModel::cancelProjectSwitch,
         )
     }
 
@@ -412,12 +430,17 @@ private fun EditorContent(
         }
         EditorPane(
             activeTab               = uiState.openTabs.firstOrNull { it.isActive },
+            activeTabContent       = uiState.openTabs.firstOrNull { it.isActive }?.let { tab ->
+                ideViewModel.editorContentForTab(tab.id, tab.content)
+            },
             isEditorReady           = uiState.isEditorReady,
+            editorBindRevision     = uiState.editorBindRevision,
             isPreviewVisible        = uiState.isPreviewVisible,
             previewHtmlContent      = uiState.previewHtmlContent,
             previewLayout           = s.previewLayout,
             editorCommands          = ideViewModel.editorCommand,
             onEditorReady           = ideViewModel::onEditorReady,
+            onEditorRendererGone   = ideViewModel::onEditorRendererGone,
             onEditorMessage         = ideViewModel::onEditorMessage,
             onInsertText            = { text -> ideViewModel.sendEditorCommand(EditorOutbound.InsertText(text)) },
             onExecuteCommand        = { cmd  -> ideViewModel.sendEditorCommand(EditorOutbound.ExecuteCommand(cmd)) },
@@ -574,11 +597,12 @@ private fun SidebarNoProjectHint(onOpenProject: () -> Unit) {
 private fun SidebarRecentProjectsList(
     projects: List<Project>,
     onOpenProject: (String) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val colors = LocalIdeColors.current
     if (projects.isEmpty()) {
         Column(
-            modifier = Modifier
+            modifier = modifier
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp, vertical = 24.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
@@ -590,14 +614,16 @@ private fun SidebarRecentProjectsList(
             )
         }
     } else {
-        Column(modifier = Modifier.fillMaxWidth()) {
-            Text(
-                text     = "Recent",
-                style    = MaterialTheme.typography.labelSmall,
-                color    = colors.textSecondary,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-            )
-            projects.forEach { project ->
+        LazyColumn(modifier = modifier.fillMaxSize()) {
+            item {
+                Text(
+                    text     = "Recent",
+                    style    = MaterialTheme.typography.labelSmall,
+                    color    = colors.textSecondary,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                )
+            }
+            items(projects) { project ->
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier
@@ -631,7 +657,10 @@ private fun SidebarRecentProjectsList(
 // Displays the available settings sections as a visual index.
 
 @Composable
-private fun SidebarSettingsShortcuts(onSectionClick: (String) -> Unit = {}) {
+private fun SidebarSettingsShortcuts(
+    modifier: Modifier = Modifier,
+    onSectionClick: (String) -> Unit = {},
+) {
     val colors = LocalIdeColors.current
     // Each pair: (sectionKey matching SectionHeader title, sidebar display label).
     val sections = listOf(
@@ -642,14 +671,16 @@ private fun SidebarSettingsShortcuts(onSectionClick: (String) -> Unit = {}) {
         "Project Storage" to "Project Storage",
         "Controls"        to "Keyboard",
     )
-    Column(modifier = Modifier.fillMaxWidth()) {
-        Text(
-            text     = "Sections",
-            style    = MaterialTheme.typography.labelSmall,
-            color    = colors.textSecondary,
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-        )
-        sections.forEach { (sectionKey, label) ->
+    LazyColumn(modifier = modifier.fillMaxSize()) {
+        item {
+            Text(
+                text     = "Sections",
+                style    = MaterialTheme.typography.labelSmall,
+                color    = colors.textSecondary,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            )
+        }
+        items(sections) { (sectionKey, label) ->
             Text(
                 text     = label,
                 style    = MaterialTheme.typography.bodySmall,
@@ -678,6 +709,7 @@ private fun FilesHeader(
     onExportProject: () -> Unit,
     onRenameProject: () -> Unit,
     onRemoveProject: () -> Unit,
+    onCloseDrawer: () -> Unit = {},
 ) {
     val colors   = LocalIdeColors.current
     var menuOpen by remember { mutableStateOf(false) }
@@ -698,7 +730,14 @@ private fun FilesHeader(
         //       requirement on Android (36dp IconButton + 4dp system touch delegation = ~40dp,
         //       approaching the 44dp minimum; 28dp was reliably misfire-prone in practice).
         IconButton(
-            onClick  = if (isSearchVisible) onHideFileSearch else onShowFileSearch,
+            onClick  = {
+                if (isSearchVisible) {
+                    onCloseDrawer()
+                    onHideFileSearch()
+                } else {
+                    onShowFileSearch()
+                }
+            },
             modifier = Modifier.size(36.dp),
         ) {
             Icon(
@@ -708,7 +747,7 @@ private fun FilesHeader(
                 modifier           = Modifier.size(20.dp),
             )
         }
-        IconButton(onClick = onRevealActiveFile, modifier = Modifier.size(36.dp)) {
+        IconButton(onClick = { onCloseDrawer(); onRevealActiveFile() }, modifier = Modifier.size(36.dp)) {
             Icon(
                 imageVector        = Icons.Default.MyLocation,
                 contentDescription = "Reveal active file",
@@ -716,7 +755,7 @@ private fun FilesHeader(
                 modifier           = Modifier.size(20.dp),
             )
         }
-        IconButton(onClick = onNewFile, modifier = Modifier.size(36.dp)) {
+        IconButton(onClick = { onCloseDrawer(); onNewFile() }, modifier = Modifier.size(36.dp)) {
             Icon(
                 imageVector        = Icons.Default.Add,
                 contentDescription = "New file",
@@ -724,7 +763,7 @@ private fun FilesHeader(
                 modifier           = Modifier.size(20.dp),
             )
         }
-        IconButton(onClick = onNewFolder, modifier = Modifier.size(36.dp)) {
+        IconButton(onClick = { onCloseDrawer(); onNewFolder() }, modifier = Modifier.size(36.dp)) {
             Icon(
                 imageVector        = Icons.Default.CreateNewFolder,
                 contentDescription = "New folder",
@@ -744,33 +783,33 @@ private fun FilesHeader(
             DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                 DropdownMenuItem(
                     text    = { Text("New File") },
-                    onClick = { menuOpen = false; onNewFile() },
+                    onClick = { menuOpen = false; onCloseDrawer(); onNewFile() },
                 )
                 DropdownMenuItem(
                     text    = { Text("New Folder") },
-                    onClick = { menuOpen = false; onNewFolder() },
+                    onClick = { menuOpen = false; onCloseDrawer(); onNewFolder() },
                 )
                 DropdownMenuItem(
                     text    = { Text("Import Files") },
-                    onClick = { menuOpen = false; onImportFiles() },
+                    onClick = { menuOpen = false; onCloseDrawer(); onImportFiles() },
                 )
                 HorizontalDivider()
                 DropdownMenuItem(
                     text    = { Text("Refresh") },
-                    onClick = { menuOpen = false; onRefresh() },
+                    onClick = { menuOpen = false; onCloseDrawer(); onRefresh() },
                 )
                 DropdownMenuItem(
                     text    = { Text("Export Project\u2026") },
-                    onClick = { menuOpen = false; onExportProject() },
+                    onClick = { menuOpen = false; onCloseDrawer(); onExportProject() },
                 )
                 HorizontalDivider()
                 DropdownMenuItem(
                     text    = { Text("Rename Project") },
-                    onClick = { menuOpen = false; onRenameProject() },
+                    onClick = { menuOpen = false; onCloseDrawer(); onRenameProject() },
                 )
                 DropdownMenuItem(
                     text    = { Text("Remove from List", color = LocalIdeColors.current.error) },
-                    onClick = { menuOpen = false; onRemoveProject() },
+                    onClick = { menuOpen = false; onCloseDrawer(); onRemoveProject() },
                 )
             }
         }
@@ -1304,6 +1343,34 @@ private fun ExitConfirmDialog(
                     onClick = onDiscard,
                     colors  = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
                 ) { Text("Discard All") }
+                TextButton(onClick = onCancel) { Text("Cancel") }
+            }
+        },
+    )
+}
+
+@Composable
+private fun ProjectSwitchConfirmDialog(
+    targetProjectName: String,
+    onSave: () -> Unit,
+    onDiscard: () -> Unit,
+    onCancel: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onCancel,
+        title   = { Text("Unsaved Changes") },
+        text    = {
+            Text("Save changes before switching to $targetProjectName?")
+        },
+        confirmButton = {
+            TextButton(onClick = onSave) { Text("Save and Switch") }
+        },
+        dismissButton = {
+            Row {
+                TextButton(
+                    onClick = onDiscard,
+                    colors  = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                ) { Text("Discard") }
                 TextButton(onClick = onCancel) { Text("Cancel") }
             }
         },

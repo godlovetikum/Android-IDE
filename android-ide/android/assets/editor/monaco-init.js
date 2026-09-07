@@ -583,14 +583,10 @@ function loadFile(path, content, language) {
   var model       = monaco.editor.getModel(uri);
 
   if (model) {
-    // Update content atomically using executeEdits to preserve undo history
-    // and avoid visual distortion that setValue() can cause on large files.
-    if (model.getValue() !== content) {
-      model.pushEditOperations([], [{
-        range: model.getFullModelRange(),
-        text:  content,
-      }], function () { return null; });
-    }
+    // An existing model is the authoritative in-memory document. Kotlin's
+    // draft event is debounced, so replacing it here with the last disk value
+    // during a rotation/rebind can erase keystrokes that Monaco already owns.
+    // Recovery explicitly sends closeTab first when it must replace a model.
     if (model.getLanguageId() !== language) {
       monaco.editor.setModelLanguage(model, language);
     }

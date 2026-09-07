@@ -120,10 +120,16 @@ data class IdeUiState(
      */
     val confirmRemoveProjectUri: String? = null,
 
+    /** Non-null when switching projects requires a dirty-tab decision. */
+    val projectSwitchRequest: ProjectSwitchRequest? = null,
+
     // ── Crash recovery ──────────────────────────────────────────────────────
     /**
      * Non-empty when the previous session did not exit cleanly and there are
      * persisted unsaved content entries to offer for restoration.
      */
     val recoveryEntries: List<RecoveryEntry> = emptyList(),
+
+    /** Incremented when Monaco must bind the active tab again. */
+    val editorBindRevision: Long = 0L,
 )

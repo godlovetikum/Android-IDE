@@ -7,6 +7,7 @@
 package dev.androidide.data.model
 
 data class RecoveryEntry(
+    val projectRootUri: String,
     val tabId: String,
     val documentUri: String,
     val displayName: String,

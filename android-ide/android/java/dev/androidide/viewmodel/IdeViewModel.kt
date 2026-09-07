@@ -31,6 +31,7 @@ import dev.androidide.viewmodel.model.FileNode
 import dev.androidide.viewmodel.model.FileOpDialog
 import dev.androidide.viewmodel.model.FileSearchResult
 import dev.androidide.viewmodel.model.IdeUiState
+import dev.androidide.viewmodel.model.ProjectSwitchRequest
 import dev.androidide.viewmodel.model.ancestorsOf
 import dev.androidide.viewmodel.model.findNode
 import dev.androidide.viewmodel.model.pathTo
@@ -86,9 +87,11 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
     private val pendingContent = mutableMapOf<String, String>()
 
     init {
+        // Read the previous session marker before marking this process as active.
+        // Otherwise every launch looks like an unclean exit.
+        val previousSessionDirty = crashRecovery.isPreviousSessionDirty()
         crashRecovery.markSessionStart()
-        checkCrashRecovery()
-        restoreSession()
+        restoreSession(previousSessionDirty)
     }
 
     override fun onCleared() {
@@ -118,48 +121,88 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
 
     // ── Crash recovery ──────────────────────────────────────────────────────
 
-    private fun checkCrashRecovery() {
-        if (!crashRecovery.isPreviousSessionDirty()) return
-        val entries = crashRecovery.getUnsavedEntries()
+    private fun checkCrashRecovery(projectRootUri: String, previousSessionDirty: Boolean) {
+        if (!previousSessionDirty) return
+        val entries = crashRecovery.getUnsavedEntries(projectRootUri)
         if (entries.isEmpty()) return
         _uiState.update { it.copy(recoveryEntries = entries) }
     }
 
     fun restoreFromCrash() {
-        val entries = _uiState.value.recoveryEntries
-        _uiState.update { it.copy(recoveryEntries = emptyList()) }
+        val state = _uiState.value
+        val projectRootUri = state.projectRootUri ?: return
+        val entries = state.recoveryEntries.filter { it.projectRootUri == projectRootUri }
+        if (entries.isEmpty()) return
+
+        val restoredTabs = state.openTabs.toMutableList()
         var firstId: String? = null
         entries.forEach { entry ->
-            val tab = EditorTab(
-                id          = entry.tabId,
+            // Replace an already-open Monaco model with the recovered text.
+            // Normal rebinds preserve existing models; recovery is explicit.
+            sendEditorCommand(EditorOutbound.CloseTab(entry.documentUri))
+            val existingIndex = restoredTabs.indexOfFirst { it.documentUri == entry.documentUri }
+            val existing = restoredTabs.getOrNull(existingIndex)
+            val tabId = existing?.id ?: if (
+                restoredTabs.none { it.id == entry.tabId }
+            ) {
+                entry.tabId
+            } else {
+                UUID.randomUUID().toString()
+            }
+            val tab = (existing ?: EditorTab(
+                id          = tabId,
                 documentUri = entry.documentUri,
+                displayName = entry.displayName,
+                language    = languageForExtension(entry.displayName.substringAfterLast('.', "")),
+            )).copy(
                 displayName = entry.displayName,
                 language    = languageForExtension(entry.displayName.substringAfterLast('.', "")),
                 content     = entry.content,
                 isDirty     = true,
+                isTemporary = false,
                 isActive    = false,
             )
+            if (existingIndex >= 0) {
+                restoredTabs[existingIndex] = tab
+            } else {
+                restoredTabs += tab
+            }
             if (firstId == null) firstId = tab.id
             pendingContent[tab.id] = entry.content
-            _uiState.update { state ->
-                state.copy(openTabs = state.openTabs + tab, currentScreen = AppScreen.EDITOR)
+            // Keep the draft alive under the tab ID actually used by this
+            // session, while the old recovery record remains project-scoped.
+            crashRecovery.saveUnsavedContent(
+                projectRootUri = projectRootUri,
+                tabId          = tab.id,
+                documentUri    = tab.documentUri,
+                displayName    = tab.displayName,
+                content        = entry.content,
+            )
+            if (entry.tabId != tab.id) {
+                crashRecovery.clearUnsavedContent(projectRootUri, entry.tabId)
             }
+        }
+        _uiState.update {
+            it.copy(
+                openTabs          = restoredTabs,
+                recoveryEntries   = emptyList(),
+                currentScreen     = AppScreen.EDITOR,
+                editorBindRevision = it.editorBindRevision + 1,
+            )
         }
         firstId?.let { selectTab(it) }
     }
 
     fun dismissCrashRecovery() {
-        crashRecovery.clearAll()
+        _uiState.value.projectRootUri?.let { crashRecovery.clearProject(it) }
         _uiState.update { it.copy(recoveryEntries = emptyList()) }
     }
 
     // ── Session — per-project scoped ────────────────────────────────────────
 
-    private fun restoreSession() {
+    private fun restoreSession(previousSessionDirty: Boolean) {
         val projectUri = sessionRepository.getProjectUri() ?: return
         val screenName = sessionRepository.getScreenName()
-        val tabUris    = sessionRepository.getOpenTabUrisForProject(projectUri)
-        val activeUri  = sessionRepository.getActiveTabUriForProject(projectUri)
 
         val screen = screenName?.let { runCatching { AppScreen.valueOf(it) }.getOrNull() }
         if (screen != null) _uiState.update { it.copy(currentScreen = screen) }
@@ -193,7 +236,7 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
         // openFileInternal calls may have already added tabs before the wipe).
         viewModelScope.launch {
             openProjectInternal(projectUri)
-            tabUris.forEach { uri -> openFileInternal(uri, markActive = uri == activeUri) }
+            checkCrashRecovery(projectUri, previousSessionDirty)
         }
     }
 
@@ -300,8 +343,84 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
     // ── Project management ─────────────────────────────────────────────────
 
     fun openProject(treeUriString: String) {
+        val currentState = _uiState.value
+        if (treeUriString == currentState.projectRootUri) {
+            navigateTo(AppScreen.EDITOR)
+            return
+        }
+        if (currentState.openTabs.any { it.isDirty }) {
+            _uiState.update {
+                it.copy(
+                    projectSwitchRequest = ProjectSwitchRequest(
+                        projectUri  = treeUriString,
+                        projectName = extractProjectName(treeUriString),
+                    ),
+                )
+            }
+            return
+        }
+        switchProjectNow(treeUriString)
+    }
+
+    fun cancelProjectSwitch() {
+        _uiState.update { it.copy(projectSwitchRequest = null) }
+    }
+
+    fun discardAndSwitchProject() {
+        val target = _uiState.value.projectSwitchRequest ?: return
+        val currentProject = _uiState.value.projectRootUri
+        if (currentProject != null) {
+            crashRecovery.clearProject(currentProject)
+        }
+        _uiState.value.openTabs.forEach { pendingContent.remove(it.id) }
+        switchProjectNow(target.projectUri)
+    }
+
+    fun saveAndSwitchProject() {
+        val target = _uiState.value.projectSwitchRequest ?: return
+        viewModelScope.launch {
+            if (!saveDirtyTabsForProject()) return@launch
+            switchProjectNow(target.projectUri)
+        }
+    }
+
+    private fun switchProjectNow(treeUriString: String) {
         saveCurrentProjectSession()
+        _uiState.update { it.copy(projectSwitchRequest = null) }
         viewModelScope.launch { openProjectInternal(treeUriString) }
+    }
+
+    private suspend fun saveDirtyTabsForProject(): Boolean {
+        val state = _uiState.value
+        val projectRootUri = state.projectRootUri
+        for (tab in state.openTabs.filter { it.isDirty && !it.isBlank }) {
+            val content = pendingContent[tab.id] ?: run {
+                _uiState.update {
+                    it.copy(statusMessage = "Save failed — draft content was not available")
+                }
+                return false
+            }
+            val ok = safRepository.writeFile(
+                tab.documentUri,
+                content.toByteArray(Charsets.UTF_8),
+            )
+            if (!ok) {
+                _uiState.update { it.copy(statusMessage = "Save failed — project was not switched") }
+                return false
+            }
+            pendingContent.remove(tab.id)
+            if (projectRootUri != null) {
+                crashRecovery.clearUnsavedContent(projectRootUri, tab.id)
+            }
+        }
+        _uiState.update { current ->
+            current.copy(
+                openTabs = current.openTabs.map {
+                    if (it.isDirty && !it.isBlank) it.copy(isDirty = false, isSaving = false) else it
+                },
+            )
+        }
+        return true
     }
 
     private suspend fun openProjectInternal(treeUriString: String) {
@@ -318,7 +437,7 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
             currentScreen  = AppScreen.EDITOR,
             openTabs       = emptyList(),
             activeTabId    = null,
-            isEditorReady  = false,
+            recoveryEntries = emptyList(),
         ) }
         projectRepository.upsert(Project(name = name, uri = treeUriString))
         _uiState.update { it.copy(recentProjects = projectRepository.getAll()) }
@@ -330,6 +449,9 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
         val activeUri = sessionRepository.getActiveTabUriForProject(treeUriString)
         tabUris.forEach { uri ->
             openFileInternal(uri, markActive = uri == activeUri)
+        }
+        if (_uiState.value.activeTabId == null) {
+            _uiState.value.openTabs.firstOrNull()?.id?.let(::selectTab)
         }
     }
 
@@ -379,9 +501,8 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
             )
         }
 
-        saveCurrentProjectSession()
         val newDirUri = Uri.fromFile(newDir).toString()
-        viewModelScope.launch { openProjectInternal(newDirUri) }
+        openProject(newDirUri)
     }
 
     /**
@@ -684,7 +805,9 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
     fun closeTab(tabId: String) {
         val tab = _uiState.value.openTabs.find { it.id == tabId }
         pendingContent.remove(tabId)
-        crashRecovery.clearUnsavedContent(tabId)
+        _uiState.value.projectRootUri?.let { projectRootUri ->
+            crashRecovery.clearUnsavedContent(projectRootUri, tabId)
+        }
         _uiState.update { state ->
             val remaining   = state.openTabs.filter { it.id != tabId }
             val newActiveId = if (state.activeTabId == tabId) remaining.lastOrNull()?.id else state.activeTabId
@@ -717,7 +840,9 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
             val ok = safRepository.writeFile(tab.documentUri, content.toByteArray(Charsets.UTF_8))
             if (ok) {
                 pendingContent.remove(tabId)
-                crashRecovery.clearUnsavedContent(tabId)
+                _uiState.value.projectRootUri?.let { projectRootUri ->
+                    crashRecovery.clearUnsavedContent(projectRootUri, tabId)
+                }
             }
             closeTab(tabId)
         }
@@ -755,12 +880,7 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
 
     fun saveAllAndExit(onReady: () -> Unit) {
         viewModelScope.launch {
-            _uiState.value.openTabs.filter { it.isDirty && !it.isBlank }.forEach { tab ->
-                val bytes = pendingContent[tab.id]?.toByteArray(Charsets.UTF_8) ?: return@forEach
-                safRepository.writeFile(tab.documentUri, bytes)
-                pendingContent.remove(tab.id)
-                crashRecovery.clearUnsavedContent(tab.id)
-            }
+            if (!saveDirtyTabsForProject()) return@launch
             _uiState.update { it.copy(showExitConfirmation = false) }
             crashRecovery.markCleanExit()
             onReady()
@@ -770,7 +890,12 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
     // ── Editor bridge ──────────────────────────────────────────────────────
 
     fun onEditorReady() {
-        _uiState.update { it.copy(isEditorReady = true) }
+        _uiState.update {
+            it.copy(
+                isEditorReady    = true,
+                editorBindRevision = it.editorBindRevision + 1,
+            )
+        }
         val settings = _uiState.value.editorSettings
         sendEditorCommand(EditorOutbound.SetEditorOptions(
             tabSize                = settings.tabSize,
@@ -788,6 +913,20 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
         sendEditorCommand(EditorOutbound.ForceLayout)
     }
 
+    /** Marks the native editor as unavailable until the WebView sends Ready again. */
+    fun onEditorRendererGone() {
+        _uiState.update {
+            it.copy(
+                isEditorReady    = false,
+                editorBindRevision = it.editorBindRevision + 1,
+            )
+        }
+    }
+
+    /** Returns the latest draft when Monaco needs to be rebound after a layout change. */
+    fun editorContentForTab(tabId: String, fallback: String?): String =
+        pendingContent[tabId] ?: fallback.orEmpty()
+
     fun onEditorMessage(message: EditorInbound) {
         when (message) {
             is EditorInbound.Ready -> onEditorReady()
@@ -801,7 +940,14 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
                         if (it.id == tab.id) it.copy(isDirty = true, isTemporary = false) else it
                     })
                 }
-                crashRecovery.saveUnsavedContent(tab.id, tab.documentUri, tab.displayName, message.content)
+                val projectRootUri = _uiState.value.projectRootUri ?: return
+                crashRecovery.saveUnsavedContent(
+                    projectRootUri = projectRootUri,
+                    tabId          = tab.id,
+                    documentUri    = tab.documentUri,
+                    displayName    = tab.displayName,
+                    content        = message.content,
+                )
                 if (_uiState.value.editorSettings.autoSave) {
                     saveFile(message.path)
                 }
@@ -872,7 +1018,9 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
             val ok = safRepository.writeFile(documentUri, content.toByteArray(Charsets.UTF_8))
             if (ok) {
                 pendingContent.remove(tab.id)
-                crashRecovery.clearUnsavedContent(tab.id)
+                _uiState.value.projectRootUri?.let { projectRootUri ->
+                    crashRecovery.clearUnsavedContent(projectRootUri, tab.id)
+                }
                 _uiState.update { state ->
                     state.copy(
                         openTabs      = state.openTabs.map {
@@ -903,7 +1051,9 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
             val newName = safRepository.getDisplayName(newUri) ?: displayNameFromUri(newUri)
             val newLang = languageForExtension(newName.substringAfterLast('.', ""))
             pendingContent.remove(active.id)
-            crashRecovery.clearUnsavedContent(active.id)
+            _uiState.value.projectRootUri?.let { projectRootUri ->
+                crashRecovery.clearUnsavedContent(projectRootUri, active.id)
+            }
             _uiState.update { state ->
                 state.copy(
                     openTabs      = state.openTabs.map {
@@ -1441,7 +1591,7 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
             if (!ok) { _uiState.update { it.copy(fileOpDialog = null, statusMessage = "Save As: write failed") }; return@launch }
             val newLang = languageForExtension(leafName.substringAfterLast('.', ""))
             pendingContent.remove(active.id)
-            crashRecovery.clearUnsavedContent(active.id)
+            crashRecovery.clearUnsavedContent(rootUri, active.id)
             refreshDirectory(targetParentUri)
             _uiState.update { state ->
                 state.copy(

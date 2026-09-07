@@ -70,7 +70,9 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.viewinterop.AndroidView
 import dev.androidide.data.model.EditorSettings
 import dev.androidide.data.model.PreviewLayout
@@ -89,12 +91,15 @@ import kotlinx.coroutines.flow.SharedFlow
 @Composable
 fun EditorPane(
     activeTab: EditorTab?,
+    activeTabContent: String? = null,
     isEditorReady: Boolean,
+    editorBindRevision: Long = 0L,
     isPreviewVisible: Boolean,
     previewHtmlContent: String,
     previewLayout: PreviewLayout,
     editorCommands: SharedFlow<EditorOutbound>,
     onEditorReady: () -> Unit,
+    onEditorRendererGone: () -> Unit = {},
     onEditorMessage: (EditorInbound) -> Unit,
     onInsertText: (String) -> Unit,
     onExecuteCommand: (String) -> Unit,
@@ -108,6 +113,7 @@ fun EditorPane(
 ) {
     val context = LocalContext.current
     val colors  = LocalIdeColors.current
+    val rendererGone by rememberUpdatedState(onEditorRendererGone)
 
     // ── EditorBridge — survives recompositions ─────────────────────────────
     val editorBridge: EditorBridge = remember { EditorBridge() }
@@ -156,6 +162,7 @@ fun EditorPane(
                     detail: android.webkit.RenderProcessGoneDetail,
                 ): Boolean {
                     editorCrashed = true
+                    rendererGone()
                     return true
                 }
             }
@@ -209,9 +216,14 @@ fun EditorPane(
     // remains alive (onRenderProcessGone returned true), and the WebView object
     // is still valid. Tapping Reload calls loadUrl() to start a fresh renderer.
     val editorView: @Composable (Modifier) -> Unit = { mod ->
+        val layoutAwareModifier = mod.onSizeChanged { size: IntSize ->
+            if (isEditorReady && size.width > 0 && size.height > 0) {
+                editorBridge.send(editorWebView, EditorOutbound.ForceLayout)
+            }
+        }
         if (editorCrashed) {
             EditorCrashedBox(
-                modifier = mod,
+                modifier = layoutAwareModifier,
                 onReload = {
                     editorCrashed = false
                     editorWebView.post {
@@ -220,7 +232,7 @@ fun EditorPane(
                 },
             )
         } else {
-            AndroidView(factory = { editorWebView }, update = {}, modifier = mod)
+            AndroidView(factory = { editorWebView }, update = {}, modifier = layoutAwareModifier)
         }
     }
 
@@ -232,13 +244,17 @@ fun EditorPane(
     }
 
     // ── Load active file into Monaco when tab or readiness changes ──────────
-    LaunchedEffect(activeTab?.id, activeTab?.content, isEditorReady) {
-        if (isEditorReady && activeTab != null && activeTab.content != null) {
+    val configuration = LocalConfiguration.current
+    val layoutKey = "${configuration.screenWidthDp}x${configuration.screenHeightDp}"
+
+    LaunchedEffect(activeTab?.id, isEditorReady, editorBindRevision, layoutKey) {
+        val content = activeTabContent ?: activeTab?.content
+        if (isEditorReady && activeTab != null && content != null) {
             editorBridge.send(
                 editorWebView,
                 EditorOutbound.LoadFile(
                     path     = activeTab.documentUri,
-                    content  = activeTab.content,
+                    content  = content,
                     language = activeTab.language,
                 ),
             )
@@ -291,11 +307,12 @@ fun EditorPane(
         }
     }
 
-    val configuration = LocalConfiguration.current
     val isLandscape   = configuration.screenWidthDp > configuration.screenHeightDp
 
     // ── Layout ──────────────────────────────────────────────────────────────
-    Column(modifier = modifier.background(colors.background)) {
+    // The activity uses adjustNothing so the drawer keeps its full height.
+    // Apply IME insets only to the editor surface and its toolbars.
+    Column(modifier = modifier.background(colors.background).imePadding()) {
 
         when {
             !isPreviewVisible -> {
