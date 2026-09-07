@@ -24,6 +24,7 @@ import dev.androidide.data.model.Project
 import dev.androidide.data.model.VolumeKeyMode
 import dev.androidide.editor.EditorInbound
 import dev.androidide.editor.EditorOutbound
+import dev.androidide.saf.ChildrenInspectionResult
 import dev.androidide.saf.ExactCreateResult
 import dev.androidide.saf.PathResolutionResult
 import dev.androidide.saf.SafeMutationResult
@@ -547,10 +548,16 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun refreshProject() {
+        viewModelScope.launch { refreshProjectNow() }
+    }
+
+    private suspend fun refreshProjectNow() {
         val rootUri = _uiState.value.projectRootUri ?: return
-        viewModelScope.launch {
-            val nodes = safRepository.listChildren(rootUri)
-            _uiState.update { it.copy(fileTree = nodes.sortedForTree()) }
+        when (val inspection = safRepository.inspectChildren(rootUri)) {
+            is ChildrenInspectionResult.Success ->
+                _uiState.update { it.copy(fileTree = inspection.children.sortedForTree()) }
+            is ChildrenInspectionResult.Failed ->
+                _uiState.update { it.copy(statusMessage = "Could not refresh the project tree") }
         }
     }
 
@@ -576,12 +583,7 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
      * Exits multi-select mode immediately so the user can navigate to a destination.
      */
     fun copyFileNode(node: FileNode) {
-        val state = _uiState.value
-        val items = if (state.isMultiSelectMode && state.selectedUris.isNotEmpty()) {
-            state.selectedUris.mapNotNull { state.fileTree.findNode(it) }
-        } else {
-            listOf(node)
-        }
+        val items = selectedNodesForOperation(node)
         _uiState.update { it.copy(
             clipboardItems  = items,
             clipboardIsCut  = false,
@@ -595,12 +597,7 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
      * Exits multi-select mode immediately so the user can navigate to a destination.
      */
     fun cutFileNode(node: FileNode) {
-        val state = _uiState.value
-        val items = if (state.isMultiSelectMode && state.selectedUris.isNotEmpty()) {
-            state.selectedUris.mapNotNull { state.fileTree.findNode(it) }
-        } else {
-            listOf(node)
-        }
+        val items = selectedNodesForOperation(node)
         _uiState.update { it.copy(
             clipboardItems  = items,
             clipboardIsCut  = true,
@@ -633,12 +630,7 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
                         _uiState.update { it.copy(statusMessage = "Move failed: ${source.displayName}") }
                         return@forEach
                     }
-                    _uiState.update { state ->
-                        state.copy(openTabs = state.openTabs.map { tab ->
-                            if (tab.documentUri == source.documentUri) tab.copy(documentUri = newUri) else tab
-                        })
-                    }
-                    refreshDirectory(sourceParent)
+                    reconcileOpenTabReference(source.documentUri, newUri)
                     successCount++
                 } else {
                     val copied = safRepository.copyDocumentWithExactName(source.documentUri, targetDir.documentUri)
@@ -649,7 +641,7 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
                     successCount++
                 }
             }
-            refreshDirectory(targetDir.documentUri)
+            refreshProjectNow()
             val verb = if (isCut) "Moved" else "Copied"
             _uiState.update { it.copy(
                 clipboardItems = emptyList(),
@@ -672,7 +664,7 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
                     else -> Unit
                 }
             }
-            refreshDirectory(targetDirUri)
+            refreshProjectNow()
             _uiState.update { it.copy(statusMessage = "Imported $count file(s)") }
         }
     }
@@ -1224,34 +1216,77 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
             _uiState.update { it.copy(statusMessage = "No active file") }
             return
         }
-        val path = findPathToNode(_uiState.value.fileTree, activeUri)
-        if (path == null) {
-            _uiState.update { it.copy(statusMessage = "File not found in tree — try expanding folders first") }
+        val rootUri = _uiState.value.projectRootUri ?: run {
+            _uiState.update { it.copy(statusMessage = "No project is open") }
             return
         }
-        for (dirUri in path) {
-            val node = _uiState.value.fileTree.findNode(dirUri)
-            if (node != null && node.isDirectory && !node.isExpanded) {
-                _uiState.update { state ->
-                    state.copy(fileTree = state.fileTree.toggleExpanded(dirUri))
+        viewModelScope.launch {
+            _uiState.update { it.copy(statusMessage = "Locating active file…") }
+            when (val result = discoverPathFromRoot(rootUri, activeUri)) {
+                is LocateResult.Found -> {
+                    var tree = _uiState.value.fileTree
+                    result.discoveredChildren[rootUri]?.let { tree = it.sortedForTree() }
+                    result.discoveredChildren
+                        .filterKeys { it != rootUri }
+                        .forEach { (parentUri, children) ->
+                            tree = tree.setChildren(parentUri, children.sortedForTree())
+                        }
+                    _uiState.update { state ->
+                        state.copy(
+                            fileTree = tree,
+                            locateTargetUri = activeUri,
+                            locateRequestToken = state.locateRequestToken + 1,
+                            statusMessage = "Located ${result.displayName}",
+                        )
+                    }
                 }
+                LocateResult.NotFound ->
+                    _uiState.update { it.copy(statusMessage = "Active file was not found in the project") }
+                is LocateResult.Failed ->
+                    _uiState.update { it.copy(statusMessage = "Could not inspect the project while locating the file") }
             }
         }
     }
 
-    private fun findPathToNode(
-        nodes: List<FileNode>,
-        targetUri: String,
-        path: List<String> = emptyList(),
-    ): List<String>? {
-        for (node in nodes) {
-            if (node.documentUri == targetUri) return path
-            if (node.isDirectory && node.children.isNotEmpty()) {
-                val found = findPathToNode(node.children, targetUri, path + node.documentUri)
-                if (found != null) return found
+    private sealed class LocateResult {
+        data class Found(
+            val displayName: String,
+            val discoveredChildren: LinkedHashMap<String, List<FileNode>>,
+        ) : LocateResult()
+        data object NotFound : LocateResult()
+        data object Failed : LocateResult()
+    }
+
+    private suspend fun discoverPathFromRoot(rootUri: String, targetUri: String): LocateResult {
+        val discovered = linkedMapOf<String, List<FileNode>>()
+        val visited = mutableSetOf<String>()
+        var inspectionFailed = false
+
+        suspend fun visit(directoryUri: String): LocateResult {
+            if (!visited.add(directoryUri)) return LocateResult.NotFound
+            val children = when (val inspection = safRepository.inspectChildren(directoryUri)) {
+                is ChildrenInspectionResult.Success -> inspection.children
+                is ChildrenInspectionResult.Failed -> {
+                    inspectionFailed = true
+                    return LocateResult.NotFound
+                }
             }
+            discovered[directoryUri] = children
+            children.firstOrNull { it.documentUri == targetUri }?.let { target ->
+                return LocateResult.Found(target.displayName, discovered)
+            }
+            for (child in children) {
+                if (!child.isDirectory) continue
+                when (val nested = visit(child.documentUri)) {
+                    is LocateResult.Found -> return nested
+                    is LocateResult.Failed -> Unit
+                    LocateResult.NotFound -> Unit
+                }
+            }
+            return if (inspectionFailed) LocateResult.Failed else LocateResult.NotFound
         }
-        return null
+
+        return visit(rootUri)
     }
 
     // ── Multi-selection ────────────────────────────────────────────────────
@@ -1269,6 +1304,63 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
             val updated = if (uri in state.selectedUris) state.selectedUris - uri else state.selectedUris + uri
             // Enter selection mode automatically on first selection; exit when all deselected.
             state.copy(isMultiSelectMode = updated.isNotEmpty(), selectedUris = updated)
+        }
+    }
+
+    /**
+     * Resolve the current multi-selection for a destructive or clipboard operation.
+     * If a selected folder contains another selected node, only the folder is kept;
+     * this prevents duplicate copy/cut/delete requests for the same subtree.
+     */
+    private fun selectedNodesForOperation(fallback: FileNode): List<FileNode> {
+        val state = _uiState.value
+        val candidates = if (state.isMultiSelectMode && state.selectedUris.isNotEmpty()) {
+            state.selectedUris.mapNotNull { state.fileTree.findNode(it) }
+        } else {
+            listOf(fallback)
+        }
+        val selectedUris = candidates.map { it.documentUri }.toSet()
+        return candidates.filter { node ->
+            var parentUri = node.parentDocumentUri
+            var hasSelectedAncestor = false
+            while (parentUri != null) {
+                if (parentUri in selectedUris) {
+                    hasSelectedAncestor = true
+                    break
+                }
+                parentUri = state.fileTree.findNode(parentUri)?.parentDocumentUri
+            }
+            !hasSelectedAncestor
+        }
+    }
+
+    private fun affectedUris(node: FileNode): Set<String> = buildSet {
+        add(node.documentUri)
+        node.children.forEach { addAll(affectedUris(it)) }
+    }
+
+    private fun reconcileOpenTabReference(oldUri: String, newUri: String, newName: String? = null) {
+        val rootUri = _uiState.value.projectRootUri
+        val tabs = _uiState.value.openTabs.filter { it.documentUri == oldUri }
+        _uiState.update { state ->
+            state.copy(openTabs = state.openTabs.map { tab ->
+                if (tab.documentUri == oldUri) {
+                    tab.copy(documentUri = newUri, displayName = newName ?: tab.displayName)
+                } else tab
+            })
+        }
+        if (rootUri != null) {
+            tabs.forEach { tab ->
+                pendingContent[tab.id]?.let { content ->
+                    crashRecovery.saveUnsavedContent(
+                        rootUri,
+                        tab.id,
+                        newUri,
+                        newName ?: tab.displayName,
+                        content,
+                    )
+                }
+            }
         }
     }
 
@@ -1333,7 +1425,9 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
     // ── File operations ────────────────────────────────────────────────────
 
     fun showRenameDialog(node: FileNode)         = _uiState.update { it.copy(fileOpDialog = FileOpDialog.Rename(node)) }
-    fun showDeleteDialog(node: FileNode)         = _uiState.update { it.copy(fileOpDialog = FileOpDialog.Delete(node)) }
+    fun showDeleteDialog(node: FileNode)         = _uiState.update {
+        it.copy(fileOpDialog = FileOpDialog.Delete(node, selectedNodesForOperation(node)))
+    }
     fun showCreateFileDialog(parent: FileNode)   = _uiState.update { it.copy(fileOpDialog = FileOpDialog.CreateFile(parent)) }
     fun showCreateFolderDialog(parent: FileNode) = _uiState.update { it.copy(fileOpDialog = FileOpDialog.CreateFolder(parent)) }
     fun showDuplicateDialog(node: FileNode)      = _uiState.update { it.copy(fileOpDialog = FileOpDialog.Duplicate(node)) }
@@ -1371,15 +1465,10 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
                         )
                         when (result) {
                             is SafeMutationResult.Created -> {
-                                refreshProject()
+                                refreshProjectNow()
+                                reconcileOpenTabReference(node.documentUri, result.documentUri, resolved.leafName)
                                 _uiState.update { state ->
-                                    state.copy(
-                                        openTabs = state.openTabs.map {
-                                            if (it.documentUri == node.documentUri) it.copy(documentUri = result.documentUri, displayName = resolved.leafName) else it
-                                        },
-                                        fileOpDialog = null,
-                                        statusMessage = "Renamed to ${resolved.leafName}",
-                                    )
+                                    state.copy(fileOpDialog = null, statusMessage = "Renamed to ${resolved.leafName}")
                                 }
                             }
                             SafeMutationResult.Duplicate -> {
@@ -1416,21 +1505,32 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun deleteNode(node: FileNode) {
+    fun deleteNode(node: FileNode, selectedNodes: List<FileNode> = emptyList()) {
+        val nodes = if (selectedNodes.isEmpty()) listOf(node) else selectedNodes
+        val allAffectedUris = nodes.flatMap { affectedUris(it) }.toSet()
         viewModelScope.launch {
-            if (safRepository.deleteDocument(node.documentUri)) {
-                val tab = _uiState.value.openTabs.find { it.documentUri == node.documentUri }
-                if (tab != null) closeTab(tab.id)
-                _uiState.update { state ->
-                    state.copy(
-                        fileTree      = state.fileTree.removeNode(node.documentUri),
-                        fileOpDialog  = null,
-                        statusMessage = "Deleted ${node.displayName}",
-                    )
+            var deletedCount = 0
+            val deletedUris = mutableSetOf<String>()
+            nodes.forEach { selectedNode ->
+                if (safRepository.deleteDocument(selectedNode.documentUri)) {
+                    deletedCount++
+                    deletedUris += allAffectedUris.intersect(affectedUris(selectedNode))
                 }
-            } else {
-                _uiState.update { it.copy(fileOpDialog = null, statusMessage = "Delete failed") }
             }
+            _uiState.value.openTabs
+                .filter { it.documentUri in deletedUris }
+                .forEach { closeTab(it.id) }
+            refreshProjectNow()
+            _uiState.update { it.copy(
+                fileOpDialog = null,
+                isMultiSelectMode = false,
+                selectedUris = emptySet(),
+                statusMessage = if (deletedCount == nodes.size) {
+                    "Deleted $deletedCount item(s)"
+                } else {
+                    "Deleted $deletedCount of ${nodes.size} item(s)"
+                },
+            ) }
         }
     }
 
@@ -1581,14 +1681,9 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
                             return@launch
                         }
                     }
-                    val children = safRepository.listChildren(parentUri).sortedForTree()
+                    refreshProjectNow()
                     _uiState.update { state ->
-                        val updatedTree = if (parentUri == state.projectRootUri) {
-                            children
-                        } else {
-                            state.fileTree.setChildren(parentUri, children)
-                        }
-                        state.copy(fileTree = updatedTree, fileOpDialog = null, statusMessage = "Created $normalizedName")
+                        state.copy(fileOpDialog = null, statusMessage = "Created $normalizedName")
                     }
                     if (openFileAfterCreate) openFile(result.documentUri)
                 }
@@ -1637,7 +1732,8 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
                 _uiState.update { it.copy(fileOpDialog = null, statusMessage = "Duplicate: create error") }
                 return@launch
             }
-            refreshDirectory(parentUri)
+            refreshProjectNow()
+            openFilePermanent(newUri)
             _uiState.update { it.copy(fileOpDialog = null, statusMessage = "Duplicated as $newName") }
         }
     }
@@ -1720,7 +1816,7 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
             val newLang = languageForExtension(leafName.substringAfterLast('.', ""))
             pendingContent.remove(active.id)
             crashRecovery.clearUnsavedContent(rootUri, active.id)
-            refreshDirectory(targetParentUri)
+            refreshProjectNow()
             _uiState.update { state ->
                 state.copy(
                     openTabs     = state.openTabs.map {
@@ -1732,19 +1828,6 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
                     fileOpDialog  = null,
                     statusMessage = "Saved as $leafName",
                 )
-            }
-        }
-    }
-
-    private fun refreshDirectory(directoryUri: String) {
-        viewModelScope.launch {
-            val children = safRepository.listChildren(directoryUri)
-            _uiState.update { state ->
-                if (directoryUri == state.projectRootUri) {
-                    state.copy(fileTree = children.sortedForTree())
-                } else {
-                    state.copy(fileTree = state.fileTree.setChildren(directoryUri, children.sortedForTree()))
-                }
             }
         }
     }

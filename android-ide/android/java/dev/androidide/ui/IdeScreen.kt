@@ -5,7 +5,7 @@
 //
 // Layout modes:
 //   Wide (≥ 600dp) — permanent 240dp sidebar column + content area
-//   Narrow (< 600dp) — ModalNavigationDrawer (gesturesEnabled = false) + content area
+//   Narrow (< 600dp) — ModalNavigationDrawer with close-only gestures + content area
 //
 // The sidebar contains:
 //   1. Compact nav icon row (48dp tall) — Projects, Editor, Git, Terminal, Settings
@@ -15,8 +15,8 @@
 // Sidebar auto-close: when a file is opened on a narrow screen the drawer closes
 // automatically, the editor receives focus, and the keyboard can appear.
 //
-// gesturesEnabled=false: prevents horizontal swipe in the Monaco editor from
-// accidentally opening the drawer.
+// The narrow drawer only enables horizontal gestures while already open, so
+// Monaco cannot accidentally open it while still allowing swipe-to-close.
 //
 // imePadding() is applied to the editor content area so it shrinks when the
 // soft keyboard appears.
@@ -32,6 +32,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.FindInPage
 import androidx.compose.material.icons.filled.Folder
@@ -100,6 +101,17 @@ fun IdeScreen(
             if (drawerState.isClosed) drawerState.open() else drawerState.close()
         }
     }
+    val openDrawerIfClosed: () -> Unit = {
+        if (!isWide) {
+            scope.launch {
+                if (drawerState.isClosed) drawerState.open()
+            }
+        }
+    }
+
+    BackHandler(enabled = !isWide && drawerState.isOpen) {
+        closeDrawer()
+    }
 
     // Back handler: when on EDITOR, confirm exit or go to Projects
     BackHandler(enabled = uiState.currentScreen == AppScreen.EDITOR) {
@@ -131,6 +143,8 @@ fun IdeScreen(
                 clipboardIsCut           = uiState.clipboardIsCut,
                 projectName              = uiState.projectName,
                 activeTabDocumentUri     = activeTab?.documentUri,
+                locateTargetUri          = uiState.locateTargetUri,
+                locateRequestToken       = uiState.locateRequestToken,
                 hideGitFolder            = uiState.editorSettings.hideGitFolder,
                 isMultiSelectMode        = uiState.isMultiSelectMode,
                 selectedUris             = uiState.selectedUris,
@@ -244,7 +258,6 @@ fun IdeScreen(
                                 onRemoveProject    = {
                                     uiState.projectRootUri?.let { ideViewModel.requestRemoveProject(it) }
                                 },
-                                onCloseDrawer      = { onCloseDrawer?.invoke() },
                             )
                             fileTreePanelContent(Modifier.weight(1f).fillMaxWidth(), onCloseDrawer)
                         } else {
@@ -300,7 +313,7 @@ fun IdeScreen(
                             onOpenFile       = { uri -> ideViewModel.openFile(uri) },
                             onRevealInTree   = { uri ->
                                 ideViewModel.revealActiveFile()
-                                onToggleSidebar?.invoke()
+                                openDrawerIfClosed()
                             },
                             onMenuClick      = onToggleSidebar,
                             // F003: SAF-backed navigator bypasses in-memory expand state.
@@ -353,20 +366,24 @@ fun IdeScreen(
     } else {
         ModalNavigationDrawer(
             drawerState     = drawerState,
-            gesturesEnabled = false,    // prevent swipe conflicts with Monaco horizontal scroll
             scrimColor      = MaterialTheme.colorScheme.scrim.copy(alpha = 0.32f),
             drawerContent   = {
                 ModalDrawerSheet(
                     modifier             = Modifier.width(280.dp),
                     drawerContainerColor = colors.surface,
                 ) {
+                    DrawerCloseHeader(onClose = closeDrawer)
                     sidebarContent(Modifier.fillMaxSize(), closeDrawer)
                 }
             },
+            // Never allow a closed drawer to be opened by horizontal gestures;
+            // when open, the same gesture may close it without competing with
+            // Monaco's horizontal editor scrolling.
+            gesturesEnabled = drawerState.isOpen,
         ) {
-            // The Material scrim is rendered by ModalNavigationDrawer outside
-            // the content slot, so it receives outside taps even above a native
-            // WebView. Drawer swipe gestures remain disabled.
+            // The Material scrim remains the host-level outside-tap backdrop;
+            // the explicit close header and BackHandler provide deterministic
+            // dismissal when a WebView consumes ordinary content gestures.
             mainContent(toggleDrawer, Modifier.fillMaxSize())
         }
     }
@@ -401,6 +418,29 @@ fun IdeScreen(
             onRestore = ideViewModel::restoreFromCrash,
             onDismiss = ideViewModel::dismissCrashRecovery,
         )
+    }
+}
+
+@Composable
+private fun DrawerCloseHeader(onClose: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(44.dp)
+            .padding(horizontal = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = "Sidebar",
+            style = MaterialTheme.typography.titleMedium,
+            modifier = Modifier.weight(1f),
+        )
+        IconButton(onClick = onClose, modifier = Modifier.size(36.dp)) {
+            Icon(
+                imageVector = Icons.Default.Close,
+                contentDescription = "Close sidebar",
+            )
+        }
     }
 }
 
@@ -709,7 +749,6 @@ private fun FilesHeader(
     onExportProject: () -> Unit,
     onRenameProject: () -> Unit,
     onRemoveProject: () -> Unit,
-    onCloseDrawer: () -> Unit = {},
 ) {
     val colors   = LocalIdeColors.current
     var menuOpen by remember { mutableStateOf(false) }
@@ -732,7 +771,6 @@ private fun FilesHeader(
         IconButton(
             onClick  = {
                 if (isSearchVisible) {
-                    onCloseDrawer()
                     onHideFileSearch()
                 } else {
                     onShowFileSearch()
@@ -747,7 +785,7 @@ private fun FilesHeader(
                 modifier           = Modifier.size(20.dp),
             )
         }
-        IconButton(onClick = { onCloseDrawer(); onRevealActiveFile() }, modifier = Modifier.size(36.dp)) {
+        IconButton(onClick = onRevealActiveFile, modifier = Modifier.size(36.dp)) {
             Icon(
                 imageVector        = Icons.Default.MyLocation,
                 contentDescription = "Reveal active file",
@@ -755,7 +793,7 @@ private fun FilesHeader(
                 modifier           = Modifier.size(20.dp),
             )
         }
-        IconButton(onClick = { onCloseDrawer(); onNewFile() }, modifier = Modifier.size(36.dp)) {
+        IconButton(onClick = onNewFile, modifier = Modifier.size(36.dp)) {
             Icon(
                 imageVector        = Icons.Default.Add,
                 contentDescription = "New file",
@@ -763,7 +801,7 @@ private fun FilesHeader(
                 modifier           = Modifier.size(20.dp),
             )
         }
-        IconButton(onClick = { onCloseDrawer(); onNewFolder() }, modifier = Modifier.size(36.dp)) {
+        IconButton(onClick = onNewFolder, modifier = Modifier.size(36.dp)) {
             Icon(
                 imageVector        = Icons.Default.CreateNewFolder,
                 contentDescription = "New folder",
@@ -783,33 +821,33 @@ private fun FilesHeader(
             DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                 DropdownMenuItem(
                     text    = { Text("New File") },
-                    onClick = { menuOpen = false; onCloseDrawer(); onNewFile() },
+                    onClick = { menuOpen = false; onNewFile() },
                 )
                 DropdownMenuItem(
                     text    = { Text("New Folder") },
-                    onClick = { menuOpen = false; onCloseDrawer(); onNewFolder() },
+                    onClick = { menuOpen = false; onNewFolder() },
                 )
                 DropdownMenuItem(
                     text    = { Text("Import Files") },
-                    onClick = { menuOpen = false; onCloseDrawer(); onImportFiles() },
+                    onClick = { menuOpen = false; onImportFiles() },
                 )
                 HorizontalDivider()
                 DropdownMenuItem(
                     text    = { Text("Refresh") },
-                    onClick = { menuOpen = false; onCloseDrawer(); onRefresh() },
+                    onClick = { menuOpen = false; onRefresh() },
                 )
                 DropdownMenuItem(
                     text    = { Text("Export Project\u2026") },
-                    onClick = { menuOpen = false; onCloseDrawer(); onExportProject() },
+                    onClick = { menuOpen = false; onExportProject() },
                 )
                 HorizontalDivider()
                 DropdownMenuItem(
                     text    = { Text("Rename Project") },
-                    onClick = { menuOpen = false; onCloseDrawer(); onRenameProject() },
+                    onClick = { menuOpen = false; onRenameProject() },
                 )
                 DropdownMenuItem(
                     text    = { Text("Remove from List", color = LocalIdeColors.current.error) },
-                    onClick = { menuOpen = false; onCloseDrawer(); onRemoveProject() },
+                    onClick = { menuOpen = false; onRemoveProject() },
                 )
             }
         }
@@ -1076,7 +1114,7 @@ private fun FileOpDialogHost(
         )
         is FileOpDialog.Delete -> DeleteDialog(
             node      = dialog.node,
-            onConfirm = { ideViewModel.deleteNode(dialog.node) },
+            onConfirm = { ideViewModel.deleteNode(dialog.node, dialog.selectedNodes) },
             onDismiss = ideViewModel::dismissFileOpDialog,
         )
         is FileOpDialog.CreateFile -> CreateFileDialog(
@@ -1224,9 +1262,10 @@ private fun CreateFileDialog(
                     label         = { Text("File name") },
                     singleLine    = true,
                     placeholder   = { Text("main.kt") },
+                    textStyle     = MaterialTheme.typography.bodyMedium,
                 )
                 if (errorMessage != null) {
-                    Text(text = errorMessage, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                    Text(text = errorMessage, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
                 }
             }
         },
@@ -1258,9 +1297,10 @@ private fun CreateFolderDialog(
                     onValueChange = { name = it },
                     label         = { Text("Folder name") },
                     singleLine    = true,
+                    textStyle     = MaterialTheme.typography.bodyMedium,
                 )
                 if (errorMessage != null) {
-                    Text(text = errorMessage, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                    Text(text = errorMessage, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
                 }
             }
         },
@@ -1291,9 +1331,10 @@ private fun DuplicateDialog(
                     onValueChange = { name = it },
                     label         = { Text("New name") },
                     singleLine    = true,
+                    textStyle     = MaterialTheme.typography.bodyMedium,
                 )
                 if (errorMessage != null) {
-                    Text(text = errorMessage, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                    Text(text = errorMessage, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
                 }
             }
         },

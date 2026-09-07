@@ -23,6 +23,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Article
@@ -60,6 +61,8 @@ fun FileTreePanel(
     clipboardIsCut: Boolean,
     projectName: String,
     activeTabDocumentUri: String?,
+    locateTargetUri: String?,
+    locateRequestToken: Long,
     hideGitFolder: Boolean,
     isMultiSelectMode: Boolean,
     selectedUris: Set<String>,
@@ -100,6 +103,7 @@ fun FileTreePanel(
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalIdeColors.current
+    val treeListState = remember { LazyListState() }
 
     when {
         // ── File-name search results panel ─────────────────────────────────
@@ -109,16 +113,16 @@ fun FileTreePanel(
                     value         = fileSearchQuery,
                     onValueChange = onSearchQueryChange,
                     modifier      = Modifier.fillMaxWidth().padding(8.dp),
-                    placeholder   = { Text("Search files…", style = MaterialTheme.typography.bodySmall) },
+                    placeholder   = { Text("Search files…", style = MaterialTheme.typography.bodyMedium) },
                     singleLine    = true,
                     leadingIcon   = { Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(18.dp)) },
-                    textStyle     = MaterialTheme.typography.bodySmall,
+                    textStyle     = MaterialTheme.typography.bodyMedium,
                 )
                 if (fileSearchResults.isEmpty() && fileSearchQuery.isNotEmpty()) {
                     Box(modifier = Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.TopCenter) {
                         Text(
                             text  = "No files matching \u201c$fileSearchQuery\u201d",
-                            style = MaterialTheme.typography.bodySmall,
+                            style = MaterialTheme.typography.bodyMedium,
                             color = colors.textDisabled,
                         )
                     }
@@ -149,7 +153,16 @@ fun FileTreePanel(
         // ── File tree ──────────────────────────────────────────────────────
         else -> {
             val filteredNodes = if (hideGitFolder) nodes.filterNot { it.displayName == ".git" } else nodes
-            LazyColumn(modifier = modifier) {
+            val flatNodes = flattenTree(filteredNodes)
+            LaunchedEffect(locateRequestToken, locateTargetUri, flatNodes) {
+                val targetIndex = locateTargetUri?.let { uri ->
+                    flatNodes.indexOfFirst { it.first.documentUri == uri }
+                } ?: -1
+                val headerItems = (if (isMultiSelectMode) 1 else 0) +
+                    (if (projectName.isNotEmpty()) 1 else 0)
+                if (targetIndex >= 0) treeListState.animateScrollToItem(targetIndex + headerItems)
+            }
+            LazyColumn(state = treeListState, modifier = modifier) {
                 // Exit selection mode banner
                 if (isMultiSelectMode) {
                     item {
@@ -197,8 +210,8 @@ fun FileTreePanel(
                 }
 
                 // File tree items
-                items(
-                    items = flattenTree(filteredNodes),
+                    items(
+                    items = flatNodes,
                     key   = { (node, _) -> node.documentUri },
                 ) { (node, depth) ->
                     FileTreeRow(
@@ -257,7 +270,7 @@ private fun SearchResultRow(
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text     = result.displayName,
-                style    = MaterialTheme.typography.bodySmall,
+                style    = MaterialTheme.typography.bodyMedium,
                 color    = colors.textPrimary,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -423,8 +436,10 @@ private fun FileTreeRow(
                 },
                 onLongClick = { menuOpen = true },
             )
+            // Files and folders at the same depth share one identical base
+            // indentation; their icon slots must not imply a false hierarchy.
             .padding(
-                start  = (8 + depth * 14).dp,
+                start  = (8 + depth * 16).dp,
                 end    = 0.dp,
                 top    = 3.dp,
                 bottom = 3.dp,

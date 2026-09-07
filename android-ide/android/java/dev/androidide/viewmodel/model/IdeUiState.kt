@@ -29,6 +29,12 @@ data class IdeUiState(
     /** Root nodes of the file tree sidebar. */
     val fileTree: List<FileNode> = emptyList(),
 
+    /** URI requested by the sidebar locate action. */
+    val locateTargetUri: String? = null,
+
+    /** Incremented for each locate request, including repeated requests for one file. */
+    val locateRequestToken: Long = 0L,
+
     // ── File search ────────────────────────────────────────────────────────
     /** Whether the file-name search panel is visible in the sidebar. */
     val isSearchVisible: Boolean = false,

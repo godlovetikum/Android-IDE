@@ -9,8 +9,11 @@ sealed class FileOpDialog {
     /** Rename dialog for [node]. [errorMessage] is shown inline when non-null. */
     data class Rename(val node: FileNode, val errorMessage: String? = null) : FileOpDialog()
 
-    /** Delete confirmation dialog for [node]. */
-    data class Delete(val node: FileNode) : FileOpDialog()
+    /** Delete confirmation dialog for [node] or the snapshotted [selectedNodes]. */
+    data class Delete(
+        val node: FileNode,
+        val selectedNodes: List<FileNode> = emptyList(),
+    ) : FileOpDialog()
 
     /** "Create file" dialog; new file will be created inside [parentNode]. [errorMessage] is shown inline when non-null. */
     data class CreateFile(
