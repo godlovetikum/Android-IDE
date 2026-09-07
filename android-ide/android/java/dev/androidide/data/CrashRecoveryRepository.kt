@@ -94,8 +94,8 @@ class CrashRecoveryRepository(context: Context) {
         prefs.edit().apply {
             prefs.all
                 .filterKeys { it.startsWith(UNSAVED_PREFIX) }
-                .forEach { key ->
-                    val value = prefs.getString(key, null) ?: return@forEach
+                .forEach { (key, rawValue) ->
+                    val value = rawValue as? String ?: return@forEach
                     val storedProject = runCatching {
                         JSONObject(value).optString("projectRootUri")
                     }.getOrNull()
