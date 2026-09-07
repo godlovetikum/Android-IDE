@@ -24,6 +24,9 @@ import dev.androidide.data.model.Project
 import dev.androidide.data.model.VolumeKeyMode
 import dev.androidide.editor.EditorInbound
 import dev.androidide.editor.EditorOutbound
+import dev.androidide.saf.ExactCreateResult
+import dev.androidide.saf.PathResolutionResult
+import dev.androidide.saf.SafeMutationResult
 import dev.androidide.saf.SafRepository
 import dev.androidide.viewmodel.model.AppScreen
 import dev.androidide.viewmodel.model.EditorTab
@@ -32,8 +35,10 @@ import dev.androidide.viewmodel.model.FileOpDialog
 import dev.androidide.viewmodel.model.FileSearchResult
 import dev.androidide.viewmodel.model.IdeUiState
 import dev.androidide.viewmodel.model.ProjectSwitchRequest
+import dev.androidide.viewmodel.model.NormalizedPathResult
 import dev.androidide.viewmodel.model.ancestorsOf
 import dev.androidide.viewmodel.model.findNode
+import dev.androidide.viewmodel.model.normalizeProjectPath
 import dev.androidide.viewmodel.model.pathTo
 import dev.androidide.viewmodel.model.removeNode
 import dev.androidide.viewmodel.model.replaceNode
@@ -623,7 +628,8 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
                         _uiState.update { it.copy(statusMessage = "Move failed: unknown parent for ${source.displayName}") }
                         return@forEach
                     }
-                    val newUri = safRepository.moveDocument(source.documentUri, sourceParent, targetDir.documentUri) ?: run {
+                    val moved = safRepository.moveDocumentWithExactName(source.documentUri, sourceParent, targetDir.documentUri)
+                    val newUri = (moved as? SafeMutationResult.Created)?.documentUri ?: run {
                         _uiState.update { it.copy(statusMessage = "Move failed: ${source.displayName}") }
                         return@forEach
                     }
@@ -635,7 +641,8 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
                     refreshDirectory(sourceParent)
                     successCount++
                 } else {
-                    safRepository.copyDocument(source.documentUri, targetDir.documentUri) ?: run {
+                    val copied = safRepository.copyDocumentWithExactName(source.documentUri, targetDir.documentUri)
+                    if (copied !is SafeMutationResult.Created) {
                         _uiState.update { it.copy(statusMessage = "Copy failed: ${source.displayName}") }
                         return@forEach
                     }
@@ -658,11 +665,12 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             var count = 0
             sourceUris.forEach { uri ->
-                val bytes = safRepository.readFile(uri) ?: return@forEach
                 val name  = safRepository.getDisplayName(uri)
                     ?: uri.substringAfterLast('/', "imported_file")
-                val created = safRepository.createFile(targetDirUri, name, mimeTypeForName(name))
-                if (created != null && safRepository.writeFile(created, bytes)) count++
+                when (safRepository.copyDocumentWithExactName(uri, targetDirUri, name)) {
+                    is SafeMutationResult.Created -> count++
+                    else -> Unit
+                }
             }
             refreshDirectory(targetDirUri)
             _uiState.update { it.copy(statusMessage = "Imported $count file(s)") }
@@ -1332,38 +1340,78 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
     fun dismissFileOpDialog()                    = _uiState.update { it.copy(fileOpDialog = null) }
 
     fun renameNode(node: FileNode, newName: String) {
-        // F025: leading "/" on a rename means "move to absolute path" — Phase 2.
-        if (newName.startsWith("/")) {
-            _uiState.update { it.copy(statusMessage = "Move-by-path is available in Phase 2") }
+        val rootUri = _uiState.value.projectRootUri ?: run {
+            _uiState.update { it.copy(statusMessage = "No project open") }
             return
         }
-        // F007: pre-flight duplicate check among siblings.
-        val parentUri = node.parentDocumentUri
-        val siblings = if (parentUri != null) {
-            _uiState.value.fileTree.findNode(parentUri)?.children ?: emptyList()
+        val sourceParentUri = node.parentDocumentUri ?: rootUri
+        val input = newName.trim()
+        val baseSegments = if (input.startsWith('/') || input.startsWith('\\')) {
+            emptyList()
         } else {
-            _uiState.value.fileTree  // node is at the project root level
-        }
-        if (siblings.any { it.documentUri != node.documentUri && it.displayName.equals(newName, ignoreCase = true) }) {
-            _uiState.update { state ->
-                state.copy(fileOpDialog = (state.fileOpDialog as? FileOpDialog.Rename)?.copy(errorMessage = "\u201c$newName\u201d already exists"))
+            projectRelativeSegments(sourceParentUri, rootUri) ?: run {
+                _uiState.update { it.copy(statusMessage = "Could not determine the current folder") }
+                return
             }
-            return
         }
-        viewModelScope.launch {
-            val newUri = safRepository.renameDocument(node.documentUri, newName) ?: run {
-                _uiState.update { it.copy(fileOpDialog = null, statusMessage = "Rename failed") }
-                return@launch
-            }
-            _uiState.update { state ->
-                state.copy(
-                    openTabs      = state.openTabs.map {
-                        if (it.documentUri == node.documentUri) it.copy(documentUri = newUri, displayName = newName) else it
-                    },
-                    fileTree      = state.fileTree.replaceNode(node.documentUri, node.copy(documentUri = newUri, displayName = newName)),
-                    fileOpDialog  = null,
-                    statusMessage = "Renamed to $newName",
-                )
+        when (val normalized = normalizeProjectPath(input, baseSegments)) {
+            NormalizedPathResult.AboveProjectRoot ->
+                _uiState.update { it.copy(statusMessage = "The path cannot go above the project root") }
+            NormalizedPathResult.MissingFinalName,
+            NormalizedPathResult.InvalidComponent ->
+                _uiState.update { it.copy(statusMessage = "Enter a valid rename path") }
+            is NormalizedPathResult.Success -> viewModelScope.launch {
+                when (val resolved = safRepository.resolveOrCreatePathSafely(rootUri, normalized.segments)) {
+                    is PathResolutionResult.Resolved -> {
+                        val result = safRepository.moveAndRenameDocumentWithExactName(
+                            sourceUriString = node.documentUri,
+                            sourceParentUriString = sourceParentUri,
+                            targetParentUriString = resolved.parentUri,
+                            newName = resolved.leafName,
+                        )
+                        when (result) {
+                            is SafeMutationResult.Created -> {
+                                refreshProject()
+                                _uiState.update { state ->
+                                    state.copy(
+                                        openTabs = state.openTabs.map {
+                                            if (it.documentUri == node.documentUri) it.copy(documentUri = result.documentUri, displayName = resolved.leafName) else it
+                                        },
+                                        fileOpDialog = null,
+                                        statusMessage = "Renamed to ${resolved.leafName}",
+                                    )
+                                }
+                            }
+                            SafeMutationResult.Duplicate -> {
+                                safRepository.rollbackCreatedDirectories(resolved.createdIntermediateUris)
+                                _uiState.update { state ->
+                                    state.copy(fileOpDialog = (state.fileOpDialog as? FileOpDialog.Rename)?.copy(errorMessage = "\u201c${resolved.leafName}\u201d already exists"))
+                                }
+                            }
+                            SafeMutationResult.InspectionFailed -> {
+                                safRepository.rollbackCreatedDirectories(resolved.createdIntermediateUris)
+                                _uiState.update { it.copy(statusMessage = "Could not inspect the rename destination") }
+                            }
+                            SafeMutationResult.Failed -> {
+                                safRepository.rollbackCreatedDirectories(resolved.createdIntermediateUris)
+                                _uiState.update { it.copy(statusMessage = "Rename failed") }
+                            }
+                        }
+                    }
+                    is PathResolutionResult.BlockedByFile -> {
+                        safRepository.rollbackCreatedDirectories(resolved.createdIntermediateUris)
+                        _uiState.update { it.copy(statusMessage = "A file blocks part of the rename path") }
+                    }
+                    is PathResolutionResult.IntermediateCreationFailed -> {
+                        safRepository.rollbackCreatedDirectories(resolved.createdIntermediateUris)
+                        _uiState.update { it.copy(statusMessage = "Could not create the rename path") }
+                    }
+                    is PathResolutionResult.IntermediateNameMismatch -> {
+                        safRepository.rollbackCreatedDirectories(resolved.createdIntermediateUris)
+                        _uiState.update { it.copy(statusMessage = "A rename folder could not be created exactly") }
+                    }
+                    PathResolutionResult.EmptyPath -> _uiState.update { it.copy(statusMessage = "Could not resolve the rename path") }
+                }
             }
         }
     }
@@ -1387,89 +1435,11 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun createFileInDirectory(parentNode: FileNode, name: String) {
-        // F025: leading "/" means absolute path from the project root.
-        val rootUri = _uiState.value.projectRootUri
-        if (name.startsWith("/") && rootUri != null) {
-            val segments = name.removePrefix("/").split("/").filter { it.isNotBlank() }
-            if (segments.isEmpty()) { _uiState.update { it.copy(statusMessage = "Invalid path") }; return }
-            viewModelScope.launch {
-                val (targetParentUri, leafName) = safRepository.resolveOrCreatePath(rootUri, segments) ?: run {
-                    _uiState.update { it.copy(fileOpDialog = null, statusMessage = "Could not resolve path") }
-                    return@launch
-                }
-                val existing = safRepository.listChildren(targetParentUri)
-                if (existing.any { it.displayName.equals(leafName, ignoreCase = true) }) {
-                    _uiState.update { it.copy(statusMessage = "\u201c$leafName\u201d already exists") }
-                    return@launch
-                }
-                safRepository.createFile(targetParentUri, leafName, mimeTypeForName(leafName)) ?: run {
-                    _uiState.update { it.copy(fileOpDialog = null, statusMessage = "Create failed") }
-                    return@launch
-                }
-                refreshDirectory(targetParentUri)
-                _uiState.update { it.copy(fileOpDialog = null, statusMessage = "Created $leafName") }
-            }
-            return
-        }
-        // F007: reject duplicate names pre-flight so the dialog stays open with an error.
-        val siblings = _uiState.value.fileTree.findNode(parentNode.documentUri)?.children ?: emptyList()
-        if (siblings.any { it.displayName.equals(name, ignoreCase = true) }) {
-            _uiState.update { state ->
-                state.copy(fileOpDialog = (state.fileOpDialog as? FileOpDialog.CreateFile)?.copy(errorMessage = "\u201c$name\u201d already exists in this folder"))
-            }
-            return
-        }
-        viewModelScope.launch {
-            safRepository.createFile(parentNode.documentUri, name, mimeTypeForName(name)) ?: run {
-                _uiState.update { it.copy(fileOpDialog = null, statusMessage = "Create failed") }
-                return@launch
-            }
-            refreshDirectory(parentNode.documentUri)
-            _uiState.update { it.copy(fileOpDialog = null, statusMessage = "Created $name") }
-        }
+        createEntryFromInput(parentNode, name, isDirectory = false)
     }
 
     fun createFolderInDirectory(parentNode: FileNode, name: String) {
-        // F025: leading "/" means absolute path from the project root.
-        val rootUri = _uiState.value.projectRootUri
-        if (name.startsWith("/") && rootUri != null) {
-            val segments = name.removePrefix("/").split("/").filter { it.isNotBlank() }
-            if (segments.isEmpty()) { _uiState.update { it.copy(statusMessage = "Invalid path") }; return }
-            viewModelScope.launch {
-                val (targetParentUri, leafName) = safRepository.resolveOrCreatePath(rootUri, segments) ?: run {
-                    _uiState.update { it.copy(fileOpDialog = null, statusMessage = "Could not resolve path") }
-                    return@launch
-                }
-                val existing = safRepository.listChildren(targetParentUri)
-                if (existing.any { it.displayName.equals(leafName, ignoreCase = true) }) {
-                    _uiState.update { it.copy(statusMessage = "\u201c$leafName\u201d already exists") }
-                    return@launch
-                }
-                safRepository.createFile(targetParentUri, leafName, "vnd.android.document/directory") ?: run {
-                    _uiState.update { it.copy(fileOpDialog = null, statusMessage = "Create failed") }
-                    return@launch
-                }
-                refreshDirectory(targetParentUri)
-                _uiState.update { it.copy(fileOpDialog = null, statusMessage = "Created folder $leafName") }
-            }
-            return
-        }
-        // F007: reject duplicate names pre-flight.
-        val siblings = _uiState.value.fileTree.findNode(parentNode.documentUri)?.children ?: emptyList()
-        if (siblings.any { it.displayName.equals(name, ignoreCase = true) }) {
-            _uiState.update { state ->
-                state.copy(fileOpDialog = (state.fileOpDialog as? FileOpDialog.CreateFolder)?.copy(errorMessage = "\u201c$name\u201d already exists in this folder"))
-            }
-            return
-        }
-        viewModelScope.launch {
-            safRepository.createFile(parentNode.documentUri, name, "vnd.android.document/directory") ?: run {
-                _uiState.update { it.copy(fileOpDialog = null, statusMessage = "Create failed") }
-                return@launch
-            }
-            refreshDirectory(parentNode.documentUri)
-            _uiState.update { it.copy(fileOpDialog = null, statusMessage = "Created folder $name") }
-        }
+        createEntryFromInput(parentNode, name, isDirectory = true)
     }
 
     fun createFileAtRoot(name: String) {
@@ -1477,19 +1447,11 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
             _uiState.update { it.copy(statusMessage = "No project open") }
             return
         }
-        // F007: reject duplicate name at project root.
-        if (_uiState.value.fileTree.any { it.displayName.equals(name, ignoreCase = true) }) {
-            _uiState.update { it.copy(statusMessage = "\u201c$name\u201d already exists in the project root") }
-            return
-        }
-        viewModelScope.launch {
-            safRepository.createFile(rootUri, name, mimeTypeForName(name)) ?: run {
-                _uiState.update { it.copy(statusMessage = "Create failed") }
-                return@launch
-            }
-            refreshProject()
-            _uiState.update { it.copy(statusMessage = "Created $name") }
-        }
+        createEntryFromInput(
+            FileNode(rootUri, "", "vnd.android.document/directory"),
+            name,
+            isDirectory = false,
+        )
     }
 
     fun createFolderAtRoot(name: String) {
@@ -1497,18 +1459,162 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
             _uiState.update { it.copy(statusMessage = "No project open") }
             return
         }
-        // F007: reject duplicate name at project root.
-        if (_uiState.value.fileTree.any { it.displayName.equals(name, ignoreCase = true) }) {
-            _uiState.update { it.copy(statusMessage = "\u201c$name\u201d already exists in the project root") }
+        createEntryFromInput(
+            FileNode(rootUri, "", "vnd.android.document/directory"),
+            name,
+            isDirectory = true,
+        )
+    }
+
+    private fun createEntryFromInput(parentNode: FileNode, rawName: String, isDirectory: Boolean) {
+        val rootUri = _uiState.value.projectRootUri
+        if (rootUri == null) {
+            setCreateError(isDirectory, "No project is open")
             return
         }
-        viewModelScope.launch {
-            safRepository.createFile(rootUri, name, "vnd.android.document/directory") ?: run {
-                _uiState.update { it.copy(statusMessage = "Create failed") }
-                return@launch
+        val baseSegments = if (rawName.trim().startsWith('/') || rawName.trim().startsWith('\\')) {
+            emptyList()
+        } else {
+            projectRelativeSegments(parentNode.documentUri, rootUri)
+                ?: run {
+                    setCreateError(isDirectory, "Could not determine the selected folder")
+                    return
+                }
+        }
+        when (val normalized = normalizeProjectPath(rawName, baseSegments)) {
+            is NormalizedPathResult.Success -> {
+                markCreateSubmitting(isDirectory)
+                viewModelScope.launch {
+                    when (val resolved = safRepository.resolveOrCreatePathSafely(rootUri, normalized.segments)) {
+                        is PathResolutionResult.Resolved -> createEntry(
+                            parentUri = resolved.parentUri,
+                            name = resolved.leafName,
+                            isDirectory = isDirectory,
+                            openFileAfterCreate = !isDirectory,
+                            createdIntermediateUris = resolved.createdIntermediateUris,
+                            submittingAlreadyMarked = true,
+                        )
+                        PathResolutionResult.EmptyPath -> setCreateError(isDirectory, "Enter a file or folder name")
+                        is PathResolutionResult.BlockedByFile -> {
+                            safRepository.rollbackCreatedDirectories(resolved.createdIntermediateUris)
+                            setCreateError(isDirectory, "A file blocks part of this path")
+                        }
+                        is PathResolutionResult.IntermediateCreationFailed -> {
+                            safRepository.rollbackCreatedDirectories(resolved.createdIntermediateUris)
+                            setCreateError(isDirectory, "Could not create the required folders")
+                        }
+                        is PathResolutionResult.IntermediateNameMismatch -> {
+                            safRepository.rollbackCreatedDirectories(resolved.createdIntermediateUris)
+                            setCreateError(isDirectory, "A required folder could not be created with its exact name")
+                        }
+                    }
+                }
             }
-            refreshProject()
-            _uiState.update { it.copy(statusMessage = "Created folder $name") }
+            NormalizedPathResult.AboveProjectRoot ->
+                setCreateError(isDirectory, "The path cannot go above the project root")
+            NormalizedPathResult.MissingFinalName ->
+                setCreateError(isDirectory, "Enter a file or folder name")
+            NormalizedPathResult.InvalidComponent ->
+                setCreateError(isDirectory, "Enter a valid file or folder path")
+        }
+    }
+
+    private fun projectRelativeSegments(documentUri: String, rootUri: String): List<String>? {
+        if (documentUri == rootUri) return emptyList()
+        fun find(nodes: List<FileNode>, prefix: List<String>): List<String>? {
+            for (node in nodes) {
+                val next = prefix + node.displayName
+                if (node.documentUri == documentUri) return next
+                if (node.isDirectory) {
+                    val found = find(node.children, next)
+                    if (found != null) return found
+                }
+            }
+            return null
+        }
+        return find(_uiState.value.fileTree, emptyList())
+    }
+
+    private fun createEntry(
+        parentUri: String,
+        name: String,
+        isDirectory: Boolean,
+        openFileAfterCreate: Boolean,
+        createdIntermediateUris: List<String> = emptyList(),
+        submittingAlreadyMarked: Boolean = false,
+    ) {
+        val normalizedName = name.trim()
+        if (normalizedName.isBlank() || normalizedName.contains('/') || normalizedName.contains('\\')) {
+            setCreateError(isDirectory, "Enter a valid name without path separators")
+            return
+        }
+        if (!submittingAlreadyMarked) markCreateSubmitting(isDirectory)
+        viewModelScope.launch {
+            val result = safRepository.createFileWithExactName(
+                parentUriString = parentUri,
+                displayName = normalizedName,
+                mimeType = if (isDirectory) "vnd.android.document/directory" else mimeTypeForName(normalizedName),
+            )
+            when (result) {
+                ExactCreateResult.Duplicate -> {
+                    safRepository.rollbackCreatedDirectories(createdIntermediateUris)
+                    setCreateError(
+                        isDirectory,
+                        "A ${if (isDirectory) "folder" else "file"} already exist with this name. Use a different name",
+                    )
+                }
+                ExactCreateResult.InspectionFailed -> {
+                    safRepository.rollbackCreatedDirectories(createdIntermediateUris)
+                    setCreateError(isDirectory, "Could not inspect the target folder")
+                }
+                ExactCreateResult.Failed -> {
+                    safRepository.rollbackCreatedDirectories(createdIntermediateUris)
+                    setCreateError(isDirectory, "Could not create ${if (isDirectory) "folder" else "file"}")
+                }
+                is ExactCreateResult.Created -> {
+                    if (!isDirectory && normalizedName.substringAfterLast('.', "").lowercase() in setOf("html", "htm")) {
+                        val template = htmlTemplate()
+                        if (!safRepository.writeFile(result.documentUri, template.toByteArray(Charsets.UTF_8))) {
+                            safRepository.deleteDocument(result.documentUri)
+                            safRepository.rollbackCreatedDirectories(createdIntermediateUris)
+                            setCreateError(isDirectory, "Could not initialize the HTML file")
+                            return@launch
+                        }
+                    }
+                    val children = safRepository.listChildren(parentUri).sortedForTree()
+                    _uiState.update { state ->
+                        val updatedTree = if (parentUri == state.projectRootUri) {
+                            children
+                        } else {
+                            state.fileTree.setChildren(parentUri, children)
+                        }
+                        state.copy(fileTree = updatedTree, fileOpDialog = null, statusMessage = "Created $normalizedName")
+                    }
+                    if (openFileAfterCreate) openFile(result.documentUri)
+                }
+            }
+        }
+    }
+
+    private fun markCreateSubmitting(isDirectory: Boolean) {
+        _uiState.update { state ->
+            val dialog = if (isDirectory) {
+                (state.fileOpDialog as? FileOpDialog.CreateFolder)?.copy(errorMessage = null, isSubmitting = true)
+            } else {
+                (state.fileOpDialog as? FileOpDialog.CreateFile)?.copy(errorMessage = null, isSubmitting = true)
+            }
+            state.copy(fileOpDialog = dialog ?: state.fileOpDialog)
+        }
+    }
+
+    private fun setCreateError(isDirectory: Boolean, message: String) {
+        _uiState.update { state ->
+            val dialog = if (isDirectory) {
+                (state.fileOpDialog as? FileOpDialog.CreateFolder)?.copy(errorMessage = message, isSubmitting = false)
+            } else {
+                (state.fileOpDialog as? FileOpDialog.CreateFile)?.copy(errorMessage = message, isSubmitting = false)
+            }
+            state.copy(fileOpDialog = dialog ?: state.fileOpDialog, statusMessage = message)
         }
     }
 
@@ -1527,15 +1633,10 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         viewModelScope.launch {
-            val bytes  = safRepository.readFile(node.documentUri) ?: run {
-                _uiState.update { it.copy(fileOpDialog = null, statusMessage = "Duplicate: read error") }
-                return@launch
-            }
-            val newUri = safRepository.createFile(parentUri, newName, mimeTypeForName(newName)) ?: run {
+            val newUri = (safRepository.copyDocumentWithExactName(node.documentUri, parentUri, newName) as? SafeMutationResult.Created)?.documentUri ?: run {
                 _uiState.update { it.copy(fileOpDialog = null, statusMessage = "Duplicate: create error") }
                 return@launch
             }
-            safRepository.writeFile(newUri, bytes)
             refreshDirectory(parentUri)
             _uiState.update { it.copy(fileOpDialog = null, statusMessage = "Duplicated as $newName") }
         }
@@ -1571,24 +1672,51 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
         }
         val active  = _uiState.value.openTabs.firstOrNull { it.isActive } ?: return
         val content = pendingContent[active.id] ?: active.content ?: return
-        val segments = relativePath.trimStart('/').split("/").filter { it.isNotBlank() }
-        if (segments.isEmpty()) { _uiState.update { it.copy(statusMessage = "Invalid path") }; return }
+        val normalized = normalizeProjectPath(relativePath, emptyList())
+        val segments = when (normalized) {
+            is NormalizedPathResult.Success -> normalized.segments
+            NormalizedPathResult.AboveProjectRoot -> {
+                _uiState.update { it.copy(statusMessage = "The path cannot go above the project root") }
+                return
+            }
+            NormalizedPathResult.MissingFinalName,
+            NormalizedPathResult.InvalidComponent -> {
+                _uiState.update { it.copy(statusMessage = "Invalid path") }
+                return
+            }
+        }
         viewModelScope.launch {
-            val (targetParentUri, leafName) = safRepository.resolveOrCreatePath(rootUri, segments) ?: run {
-                _uiState.update { it.copy(fileOpDialog = null, statusMessage = "Could not resolve path") }
+            val resolved = safRepository.resolveOrCreatePathSafely(rootUri, segments)
+            val path = resolved as? PathResolutionResult.Resolved ?: run {
+                val created = when (resolved) {
+                    is PathResolutionResult.BlockedByFile -> resolved.createdIntermediateUris
+                    is PathResolutionResult.IntermediateCreationFailed -> resolved.createdIntermediateUris
+                    is PathResolutionResult.IntermediateNameMismatch -> resolved.createdIntermediateUris
+                    else -> emptyList()
+                }
+                safRepository.rollbackCreatedDirectories(created)
+                _uiState.update { it.copy(fileOpDialog = null, statusMessage = "Save As: could not resolve path") }
                 return@launch
             }
-            val existing = safRepository.listChildren(targetParentUri)
-            if (existing.any { it.displayName.equals(leafName, ignoreCase = true) }) {
-                _uiState.update { it.copy(statusMessage = "\u201c$leafName\u201d already exists — choose a different name") }
-                return@launch
-            }
-            val newUri = safRepository.createFile(targetParentUri, leafName, mimeTypeForName(leafName)) ?: run {
-                _uiState.update { it.copy(fileOpDialog = null, statusMessage = "Save As: could not create file") }
+            val (targetParentUri, leafName) = path.parentUri to path.leafName
+            val created = safRepository.createFileWithExactName(targetParentUri, leafName, mimeTypeForName(leafName))
+            val newUri = (created as? ExactCreateResult.Created)?.documentUri ?: run {
+                safRepository.rollbackCreatedDirectories(path.createdIntermediateUris)
+                val message = if (created is ExactCreateResult.Duplicate) {
+                    "\u201c$leafName\u201d already exists — choose a different name"
+                } else {
+                    "Save As: could not inspect or create the target"
+                }
+                _uiState.update { it.copy(fileOpDialog = null, statusMessage = message) }
                 return@launch
             }
             val ok = safRepository.writeFile(newUri, content.toByteArray(Charsets.UTF_8))
-            if (!ok) { _uiState.update { it.copy(fileOpDialog = null, statusMessage = "Save As: write failed") }; return@launch }
+            if (!ok) {
+                safRepository.deleteDocument(newUri)
+                safRepository.rollbackCreatedDirectories(path.createdIntermediateUris)
+                _uiState.update { it.copy(fileOpDialog = null, statusMessage = "Save As: write failed") }
+                return@launch
+            }
             val newLang = languageForExtension(leafName.substringAfterLast('.', ""))
             pendingContent.remove(active.id)
             crashRecovery.clearUnsavedContent(rootUri, active.id)
@@ -1698,6 +1826,18 @@ ul,ol{padding-left:2em}
     private fun displayNameFromUri(documentUri: String): String = try {
         Uri.decode(documentUri).substringAfterLast('/').ifEmpty { "file" }
     } catch (_: Exception) { "file" }
+
+    private fun htmlTemplate(): String = """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>New Page</title>
+</head>
+<body>
+</body>
+</html>
+"""
 
     private fun mimeTypeForName(name: String): String = when (name.substringAfterLast('.', "").lowercase()) {
         "kt", "kts"         -> "text/x-kotlin"

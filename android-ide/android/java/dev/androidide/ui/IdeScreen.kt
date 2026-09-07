@@ -1084,12 +1084,14 @@ private fun FileOpDialogHost(
             onConfirm    = { ideViewModel.createFileInDirectory(dialog.parentNode, it) },
             onDismiss    = ideViewModel::dismissFileOpDialog,
             errorMessage = dialog.errorMessage,
+            isSubmitting  = dialog.isSubmitting,
         )
         is FileOpDialog.CreateFolder -> CreateFolderDialog(
             parent       = dialog.parentNode,
             onConfirm    = { ideViewModel.createFolderInDirectory(dialog.parentNode, it) },
             onDismiss    = ideViewModel::dismissFileOpDialog,
             errorMessage = dialog.errorMessage,
+            isSubmitting  = dialog.isSubmitting,
         )
         is FileOpDialog.Duplicate -> DuplicateDialog(
             node         = dialog.node,
@@ -1208,6 +1210,7 @@ private fun CreateFileDialog(
     onConfirm: (String) -> Unit,
     onDismiss: () -> Unit,
     errorMessage: String? = null,
+    isSubmitting: Boolean = false,
 ) {
     var name by remember { mutableStateOf("") }
     AlertDialog(
@@ -1228,11 +1231,11 @@ private fun CreateFileDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = { if (name.isNotBlank()) onConfirm(name.trim()) }, enabled = name.isNotBlank()) {
-                Text("Create")
+            TextButton(onClick = { if (name.isNotBlank()) onConfirm(name.trim()) }, enabled = name.isNotBlank() && !isSubmitting) {
+                Text(if (isSubmitting) "Creating…" else "Create")
             }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        dismissButton = { TextButton(onClick = onDismiss, enabled = !isSubmitting) { Text("Cancel") } },
     )
 }
 
@@ -1242,6 +1245,7 @@ private fun CreateFolderDialog(
     onConfirm: (String) -> Unit,
     onDismiss: () -> Unit,
     errorMessage: String? = null,
+    isSubmitting: Boolean = false,
 ) {
     var name by remember { mutableStateOf("") }
     AlertDialog(
@@ -1261,11 +1265,11 @@ private fun CreateFolderDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = { if (name.isNotBlank()) onConfirm(name.trim()) }, enabled = name.isNotBlank()) {
-                Text("Create")
+            TextButton(onClick = { if (name.isNotBlank()) onConfirm(name.trim()) }, enabled = name.isNotBlank() && !isSubmitting) {
+                Text(if (isSubmitting) "Creating…" else "Create")
             }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        dismissButton = { TextButton(onClick = onDismiss, enabled = !isSubmitting) { Text("Cancel") } },
     )
 }
 

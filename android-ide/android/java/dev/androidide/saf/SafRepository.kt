@@ -29,6 +29,13 @@ import java.io.File
 import java.io.IOException
 import java.io.InputStream
 
+sealed class ExactCreateResult {
+    data class Created(val documentUri: String) : ExactCreateResult()
+    data object Duplicate : ExactCreateResult()
+    data object InspectionFailed : ExactCreateResult()
+    data object Failed : ExactCreateResult()
+}
+
 class SafRepository(private val context: Context) {
 
     companion object {
@@ -47,15 +54,9 @@ class SafRepository(private val context: Context) {
 
     // ── Directory listing ──────────────────────────────────────────────────
 
-    /**
-     * List the immediate children of a tree/document URI or a file:// directory URI.
-     *
-     * @param parentUriString  SAF tree/document URI or file:// URI string
-     * @return                 List of [FileNode], sorted: directories first.
-     *                         Empty on failure.
-     */
-    suspend fun listChildren(parentUriString: String): List<FileNode> = withContext(Dispatchers.IO) {
-        if (isFileUri(parentUriString)) return@withContext listChildrenFile(parentUriString)
+    /** Read children for mutation paths; failures are never represented as an empty directory. */
+    suspend fun inspectChildren(parentUriString: String): ChildrenInspectionResult = withContext(Dispatchers.IO) {
+        if (isFileUri(parentUriString)) return@withContext listChildrenFileResult(parentUriString)
         try {
             val parentUri = Uri.parse(parentUriString)
 
@@ -84,7 +85,9 @@ class SafRepository(private val context: Context) {
 
             val nodes = mutableListOf<FileNode>()
 
-            resolver.query(childrenUri, projection, null, null, null)?.use { cursor ->
+            val cursor = resolver.query(childrenUri, projection, null, null, null)
+                ?: return@withContext ChildrenInspectionResult.Failed("SAF returned no directory listing")
+            cursor.use { cursor ->
                 val idIdx   = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
                 val nameIdx = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
                 val mimeIdx = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_MIME_TYPE)
@@ -106,16 +109,20 @@ class SafRepository(private val context: Context) {
                         parentDocumentUri = parentUriString,
                     )
                 }
-            } ?: Log.e(TAG, "listChildren: null cursor for $parentUriString")
+            }
 
-            nodes.sortedWith(
+            ChildrenInspectionResult.Success(nodes.sortedWith(
                 compareByDescending<FileNode> { it.isDirectory }.thenBy { it.displayName.lowercase() }
-            )
+            ))
         } catch (e: Exception) {
             Log.e(TAG, "listChildren failed for $parentUriString: ${e.message}", e)
-            emptyList()
+            ChildrenInspectionResult.Failed(e.message)
         }
     }
+
+    /** List children for UI/read-only callers; mutation paths must use inspectChildren. */
+    suspend fun listChildren(parentUriString: String): List<FileNode> =
+        (inspectChildren(parentUriString) as? ChildrenInspectionResult.Success)?.children ?: emptyList()
 
     private fun listChildrenFile(parentUriString: String): List<FileNode> {
         return try {
@@ -135,6 +142,27 @@ class SafRepository(private val context: Context) {
         } catch (e: Exception) {
             Log.e(TAG, "listChildrenFile failed for $parentUriString: ${e.message}", e)
             emptyList()
+        }
+    }
+
+    private fun listChildrenFileResult(parentUriString: String): ChildrenInspectionResult {
+        return try {
+            val dir = fileFromUri(parentUriString)
+                ?: return ChildrenInspectionResult.Failed("Invalid file URI")
+            if (!dir.isDirectory) return ChildrenInspectionResult.Failed("Parent is not a directory")
+            val files = dir.listFiles() ?: return ChildrenInspectionResult.Failed("Directory listing failed")
+            ChildrenInspectionResult.Success(files.map { file ->
+                FileNode(
+                    documentUri = Uri.fromFile(file).toString(),
+                    displayName = file.name,
+                    mimeType = if (file.isDirectory) MIME_DIR else "application/octet-stream",
+                    size = if (file.isFile) file.length() else 0L,
+                    parentDocumentUri = parentUriString,
+                )
+            }.sortedWith(compareByDescending<FileNode> { it.isDirectory }.thenBy { it.displayName.lowercase() }))
+        } catch (e: Exception) {
+            Log.e(TAG, "listChildrenFile failed for $parentUriString: ${e.message}", e)
+            ChildrenInspectionResult.Failed(e.message)
         }
     }
 
@@ -240,6 +268,43 @@ class SafRepository(private val context: Context) {
         }
     }
 
+    /**
+     * Create a child only when [displayName] is still available in the live
+     * parent directory. Some SAF providers silently rename collisions, so the
+     * created display name is verified and an unexpected entry is removed.
+     */
+    suspend fun createFileWithExactName(
+        parentUriString: String,
+        displayName: String,
+        mimeType: String,
+    ): ExactCreateResult = withContext(Dispatchers.IO) {
+        val existing = (inspectChildren(parentUriString) as? ChildrenInspectionResult.Success)?.children
+            ?: return@withContext ExactCreateResult.InspectionFailed
+        if (existing.any { it.displayName.equals(displayName, ignoreCase = true) }) {
+            return@withContext ExactCreateResult.Duplicate
+        }
+
+        val createdUri = createFile(parentUriString, displayName, mimeType)
+            ?: return@withContext ExactCreateResult.Failed
+        val createdName = getDisplayName(createdUri)
+        val siblingsAfterCreate = (inspectChildren(parentUriString) as? ChildrenInspectionResult.Success)?.children
+            ?: run {
+                return@withContext ExactCreateResult.InspectionFailed
+            }
+        val siblingConflict = siblingsAfterCreate.any {
+            it.documentUri != createdUri &&
+                it.displayName.equals(displayName, ignoreCase = true)
+        }
+        if (createdName == null) {
+            return@withContext ExactCreateResult.InspectionFailed
+        }
+        if (createdName != displayName || siblingConflict) {
+            deleteDocument(createdUri)
+            return@withContext ExactCreateResult.Duplicate
+        }
+        ExactCreateResult.Created(createdUri)
+    }
+
     // ── Copy ───────────────────────────────────────────────────────────────
 
     /**
@@ -270,6 +335,114 @@ class SafRepository(private val context: Context) {
         } catch (e: Exception) {
             Log.e(TAG, "copyDocument failed: $sourceUriString → $targetParentUriString", e)
             null
+        }
+    }
+
+    suspend fun copyDocumentWithExactName(
+        sourceUriString: String,
+        targetParentUriString: String,
+        newName: String? = null,
+    ): SafeMutationResult = withContext(Dispatchers.IO) {
+        val bytes = readFile(sourceUriString) ?: return@withContext SafeMutationResult.Failed
+        val displayName = newName ?: getDisplayName(sourceUriString)
+            ?: return@withContext SafeMutationResult.Failed
+        when (val created = createFileWithExactName(
+            targetParentUriString,
+            displayName,
+            if (isFileUri(sourceUriString)) "application/octet-stream"
+            else queryStringColumn(sourceUriString, DocumentsContract.Document.COLUMN_MIME_TYPE) ?: "text/plain",
+        )) {
+            is ExactCreateResult.Created -> {
+                if (writeFile(created.documentUri, bytes)) SafeMutationResult.Created(created.documentUri)
+                else {
+                    deleteDocument(created.documentUri)
+                    SafeMutationResult.Failed
+                }
+            }
+            ExactCreateResult.Duplicate -> SafeMutationResult.Duplicate
+            ExactCreateResult.InspectionFailed -> SafeMutationResult.InspectionFailed
+            ExactCreateResult.Failed -> SafeMutationResult.Failed
+        }
+    }
+
+    suspend fun moveDocumentWithExactName(
+        sourceUriString: String,
+        sourceParentUriString: String,
+        targetParentUriString: String,
+    ): SafeMutationResult = withContext(Dispatchers.IO) {
+        val name = getDisplayName(sourceUriString) ?: return@withContext SafeMutationResult.Failed
+        val targetChildren = when (val inspection = inspectChildren(targetParentUriString)) {
+            is ChildrenInspectionResult.Success -> inspection.children
+            is ChildrenInspectionResult.Failed -> return@withContext SafeMutationResult.InspectionFailed
+        }
+        if (targetChildren.any {
+                it.documentUri != sourceUriString && it.displayName.equals(name, ignoreCase = true)
+            }) {
+            return@withContext SafeMutationResult.Duplicate
+        }
+        val sourceMime = if (isFileUri(sourceUriString)) {
+            "application/octet-stream"
+        } else {
+            queryStringColumn(sourceUriString, DocumentsContract.Document.COLUMN_MIME_TYPE)
+        }
+        if (sourceMime != MIME_DIR) {
+            return@withContext when (val copied = copyDocumentWithExactName(
+                sourceUriString,
+                targetParentUriString,
+                name,
+            )) {
+                is SafeMutationResult.Created -> {
+                    if (deleteDocument(sourceUriString)) copied else SafeMutationResult.Failed
+                }
+                else -> copied
+            }
+        }
+        val moved = moveDocument(sourceUriString, sourceParentUriString, targetParentUriString)
+            ?: return@withContext SafeMutationResult.Failed
+        val movedName = getDisplayName(moved)
+        if (movedName != name) return@withContext SafeMutationResult.Failed
+        SafeMutationResult.Created(moved)
+    }
+
+    suspend fun moveAndRenameDocumentWithExactName(
+        sourceUriString: String,
+        sourceParentUriString: String,
+        targetParentUriString: String,
+        newName: String,
+    ): SafeMutationResult = withContext(Dispatchers.IO) {
+        val originalName = getDisplayName(sourceUriString)
+            ?: return@withContext SafeMutationResult.Failed
+        val targetChildren = when (val inspection = inspectChildren(targetParentUriString)) {
+            is ChildrenInspectionResult.Success -> inspection.children
+            is ChildrenInspectionResult.Failed -> return@withContext SafeMutationResult.InspectionFailed
+        }
+        if (targetChildren.any {
+                it.documentUri != sourceUriString && it.displayName.equals(newName, ignoreCase = true)
+            }) return@withContext SafeMutationResult.Duplicate
+
+        if (sourceParentUriString == targetParentUriString) {
+            val renamed = renameDocument(sourceUriString, newName)
+                ?: return@withContext SafeMutationResult.Failed
+            return@withContext if (getDisplayName(renamed) == newName) {
+                SafeMutationResult.Created(renamed)
+            } else {
+                SafeMutationResult.Failed
+            }
+        }
+
+        val moved = moveDocument(sourceUriString, sourceParentUriString, targetParentUriString)
+            ?: return@withContext SafeMutationResult.Failed
+        val renamed = renameDocument(moved, newName)
+            ?: run {
+                moveDocument(moved, targetParentUriString, sourceParentUriString)
+                return@withContext SafeMutationResult.Failed
+            }
+        if (getDisplayName(renamed) == newName) {
+            SafeMutationResult.Created(renamed)
+        } else {
+            val restored = renameDocument(renamed, originalName)
+            if (restored != null) moveDocument(restored, targetParentUriString, sourceParentUriString)
+            SafeMutationResult.Failed
         }
     }
 
@@ -409,7 +582,7 @@ class SafRepository(private val context: Context) {
             }
         }
 
-    // ── F025: Absolute-path resolution ────────────────────────────────────────
+    // ── Project-path resolution ───────────────────────────────────────────────
 
     /**
      * Walk [segments] from [treeUriString], creating intermediate directories as
@@ -424,20 +597,88 @@ class SafRepository(private val context: Context) {
         treeUriString: String,
         segments: List<String>,
     ): Pair<String, String>? = withContext(Dispatchers.IO) {
-        if (segments.isEmpty()) return@withContext null
-        if (segments.size == 1) return@withContext Pair(treeUriString, segments[0])
+        when (val result = resolveOrCreatePathSafely(treeUriString, segments)) {
+            is PathResolutionResult.Resolved -> Pair(result.parentUri, result.leafName)
+            else -> null
+        }
+    }
+
+    /**
+     * Resolve all intermediate components before the final item is created.
+     * Existing directories are reused case-insensitively; an existing file
+     * blocks the path. Missing directories use the exact-name creation path so
+     * SAF providers cannot silently create renamed siblings.
+     */
+    suspend fun resolveOrCreatePathSafely(
+        treeUriString: String,
+        segments: List<String>,
+    ): PathResolutionResult = withContext(Dispatchers.IO) {
+        if (segments.isEmpty()) return@withContext PathResolutionResult.EmptyPath
+
         var currentUri = treeUriString
+        val created = mutableListOf<String>()
         for (segment in segments.dropLast(1)) {
-            val children = listChildren(currentUri)
-            val existing = children.firstOrNull { it.isDirectory && it.displayName == segment }
-            currentUri = if (existing != null) {
-                existing.documentUri
-            } else {
-                // Create missing intermediate directory.
-                createFile(currentUri, segment, MIME_DIR) ?: return@withContext null
+            val children = when (val inspection = inspectChildren(currentUri)) {
+                is ChildrenInspectionResult.Success -> inspection.children
+                is ChildrenInspectionResult.Failed ->
+                    return@withContext PathResolutionResult.IntermediateCreationFailed(created.toList())
+            }
+            val matching = children.firstOrNull { it.displayName.equals(segment, ignoreCase = true) }
+            if (matching != null) {
+                if (!matching.isDirectory) {
+                    return@withContext PathResolutionResult.BlockedByFile(created.toList())
+                }
+                currentUri = matching.documentUri
+                continue
+            }
+
+            when (val result = createFileWithExactName(currentUri, segment, MIME_DIR)) {
+                is ExactCreateResult.Created -> {
+                    val createdNode = when (val inspection = inspectChildren(currentUri)) {
+                        is ChildrenInspectionResult.Success -> inspection.children.firstOrNull {
+                            it.documentUri == result.documentUri
+                        }
+                        is ChildrenInspectionResult.Failed -> {
+                            return@withContext PathResolutionResult.IntermediateNameMismatch(created.toList())
+                        }
+                    }
+                    if (createdNode == null || !createdNode.isDirectory ||
+                        !createdNode.displayName.equals(segment, ignoreCase = false)
+                    ) {
+                        deleteDocument(result.documentUri)
+                        return@withContext PathResolutionResult.IntermediateNameMismatch(created.toList())
+                    }
+                    created += result.documentUri
+                    currentUri = result.documentUri
+                }
+                ExactCreateResult.Duplicate -> {
+                    return@withContext PathResolutionResult.IntermediateCreationFailed(created.toList())
+                }
+                ExactCreateResult.InspectionFailed -> {
+                    return@withContext PathResolutionResult.IntermediateCreationFailed(created.toList())
+                }
+                ExactCreateResult.Failed -> {
+                    return@withContext PathResolutionResult.IntermediateCreationFailed(created.toList())
+                }
             }
         }
-        Pair(currentUri, segments.last())
+        PathResolutionResult.Resolved(currentUri, segments.last(), created.toList())
+    }
+
+    /** Delete only directories created by the current path-resolution attempt. */
+    suspend fun rollbackCreatedDirectories(documentUris: List<String>): Boolean {
+        var allDeleted = true
+        for (uri in documentUris.asReversed()) {
+            val children = when (val inspection = inspectChildren(uri)) {
+                is ChildrenInspectionResult.Success -> inspection.children
+                is ChildrenInspectionResult.Failed -> {
+                    allDeleted = false
+                    continue
+                }
+            }
+            if (children.isNotEmpty() || !deleteDocument(uri)) allDeleted = false
+        }
+        return allDeleted
     }
 }
 

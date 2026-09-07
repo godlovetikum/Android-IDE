@@ -13,10 +13,18 @@ sealed class FileOpDialog {
     data class Delete(val node: FileNode) : FileOpDialog()
 
     /** "Create file" dialog; new file will be created inside [parentNode]. [errorMessage] is shown inline when non-null. */
-    data class CreateFile(val parentNode: FileNode, val errorMessage: String? = null) : FileOpDialog()
+    data class CreateFile(
+        val parentNode: FileNode,
+        val errorMessage: String? = null,
+        val isSubmitting: Boolean = false,
+    ) : FileOpDialog()
 
     /** "Create folder" dialog; new folder will be created inside [parentNode]. [errorMessage] is shown inline when non-null. */
-    data class CreateFolder(val parentNode: FileNode, val errorMessage: String? = null) : FileOpDialog()
+    data class CreateFolder(
+        val parentNode: FileNode,
+        val errorMessage: String? = null,
+        val isSubmitting: Boolean = false,
+    ) : FileOpDialog()
 
     /**
      * Duplicate dialog for [node].
