@@ -6,6 +6,9 @@
 package dev.androidide.viewmodel.model
 
 sealed class FileOpDialog {
+    /** Shown when a binary document is selected for opening in the text editor. */
+    data class BinaryOpenError(val fileName: String) : FileOpDialog()
+
     /** Rename dialog for [node]. [errorMessage] is shown inline when non-null. */
     data class Rename(val node: FileNode, val errorMessage: String? = null) : FileOpDialog()
 

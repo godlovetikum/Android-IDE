@@ -145,6 +145,7 @@ fun IdeScreen(
                 activeTabDocumentUri     = activeTab?.documentUri,
                 locateTargetUri          = uiState.locateTargetUri,
                 locateRequestToken       = uiState.locateRequestToken,
+                onLocateConsumed         = ideViewModel::clearLocateRequest,
                 hideGitFolder            = uiState.editorSettings.hideGitFolder,
                 isMultiSelectMode        = uiState.isMultiSelectMode,
                 selectedUris             = uiState.selectedUris,
@@ -372,7 +373,6 @@ fun IdeScreen(
                     modifier             = Modifier.width(280.dp),
                     drawerContainerColor = colors.surface,
                 ) {
-                    DrawerCloseHeader(onClose = closeDrawer)
                     sidebarContent(Modifier.fillMaxSize(), closeDrawer)
                 }
             },
@@ -382,8 +382,7 @@ fun IdeScreen(
             gesturesEnabled = drawerState.isOpen,
         ) {
             // The Material scrim remains the host-level outside-tap backdrop;
-            // the explicit close header and BackHandler provide deterministic
-            // dismissal when a WebView consumes ordinary content gestures.
+            // BackHandler provides deterministic dismissal when needed.
             mainContent(toggleDrawer, Modifier.fillMaxSize())
         }
     }
@@ -418,29 +417,6 @@ fun IdeScreen(
             onRestore = ideViewModel::restoreFromCrash,
             onDismiss = ideViewModel::dismissCrashRecovery,
         )
-    }
-}
-
-@Composable
-private fun DrawerCloseHeader(onClose: () -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(44.dp)
-            .padding(horizontal = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(
-            text = "Sidebar",
-            style = MaterialTheme.typography.titleMedium,
-            modifier = Modifier.weight(1f),
-        )
-        IconButton(onClick = onClose, modifier = Modifier.size(36.dp)) {
-            Icon(
-                imageVector = Icons.Default.Close,
-                contentDescription = "Close sidebar",
-            )
-        }
     }
 }
 
@@ -1106,6 +1082,10 @@ private fun FileOpDialogHost(
     ideViewModel: IdeViewModel,
 ) {
     when (dialog) {
+        is FileOpDialog.BinaryOpenError -> BinaryOpenErrorDialog(
+            fileName  = dialog.fileName,
+            onDismiss = ideViewModel::dismissFileOpDialog,
+        )
         is FileOpDialog.Rename -> RenameDialog(
             node         = dialog.node,
             onConfirm    = { ideViewModel.renameNode(dialog.node, it) },
@@ -1151,6 +1131,21 @@ private fun FileOpDialogHost(
         )
         null -> {}
     }
+}
+
+@Composable
+private fun BinaryOpenErrorDialog(fileName: String, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Binary file") },
+        text = {
+            Text(
+                "\"$fileName\" cannot be opened in the text editor. " +
+                    "Opening binary files is not supported yet and is planned for a later phase."
+            )
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("OK") } },
+    )
 }
 
 // ── Dialog composables ─────────────────────────────────────────────────────────

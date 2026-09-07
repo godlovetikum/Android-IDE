@@ -554,12 +554,38 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
     private suspend fun refreshProjectNow() {
         val rootUri = _uiState.value.projectRootUri ?: return
         when (val inspection = safRepository.inspectChildren(rootUri)) {
-            is ChildrenInspectionResult.Success ->
-                _uiState.update { it.copy(fileTree = inspection.children.sortedForTree()) }
+            is ChildrenInspectionResult.Success -> {
+                val refreshed = inspection.children.sortedForTree()
+                val merged = mergeRefreshedTree(_uiState.value.fileTree, refreshed)
+                _uiState.update { it.copy(fileTree = merged) }
+            }
             is ChildrenInspectionResult.Failed ->
                 _uiState.update { it.copy(statusMessage = "Could not refresh the project tree") }
         }
     }
+
+    /** Replace inspected metadata while retaining expansion and already-loaded children. */
+    private suspend fun mergeRefreshedTree(
+        previous: List<FileNode>,
+        refreshed: List<FileNode>,
+    ): List<FileNode> = refreshed.map { current ->
+            val old = previous.firstOrNull { it.documentUri == current.documentUri }
+            if (old != null && current.isDirectory) {
+                val children = if (old.isExpanded) {
+                    when (val inspection = safRepository.inspectChildren(current.documentUri)) {
+                        is ChildrenInspectionResult.Success ->
+                            mergeRefreshedTree(old.children, inspection.children.sortedForTree())
+                        is ChildrenInspectionResult.Failed -> old.children
+                    }
+                } else {
+                    old.children
+                }
+                current.copy(
+                    children = children,
+                    isExpanded = old.isExpanded,
+                )
+            } else current
+        }
 
     // ── File tree ──────────────────────────────────────────────────────────
 
@@ -608,6 +634,10 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
 
     fun clearClipboard() = _uiState.update { it.copy(clipboardItems = emptyList(), clipboardIsCut = false) }
 
+    fun clearLocateRequest() {
+        _uiState.update { it.copy(locateTargetUri = null) }
+    }
+
     /**
      * Paste all items in [clipboardItems] into [targetDir].
      * Supports cut (move) and copy. Works within a project, across projects,
@@ -620,6 +650,10 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             var successCount = 0
             items.forEach { source ->
+                if (source.isDirectory && (source.documentUri == targetDir.documentUri || containsDocumentUri(source, targetDir.documentUri))) {
+                    _uiState.update { it.copy(statusMessage = "Cannot paste a folder into itself or one of its subfolders") }
+                    return@forEach
+                }
                 if (isCut) {
                     val sourceParent = source.parentDocumentUri ?: run {
                         _uiState.update { it.copy(statusMessage = "Move failed: unknown parent for ${source.displayName}") }
@@ -627,7 +661,12 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
                     }
                     val moved = safRepository.moveDocumentWithExactName(source.documentUri, sourceParent, targetDir.documentUri)
                     val newUri = (moved as? SafeMutationResult.Created)?.documentUri ?: run {
-                        _uiState.update { it.copy(statusMessage = "Move failed: ${source.displayName}") }
+                        val reason = when (moved) {
+                            SafeMutationResult.Duplicate -> "already exists in the destination"
+                            SafeMutationResult.InspectionFailed -> "destination could not be inspected"
+                            else -> "provider rejected the operation"
+                        }
+                        _uiState.update { it.copy(statusMessage = "Move failed for ${source.displayName}: $reason") }
                         return@forEach
                     }
                     reconcileOpenTabReference(source.documentUri, newUri)
@@ -635,7 +674,12 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
                 } else {
                     val copied = safRepository.copyDocumentWithExactName(source.documentUri, targetDir.documentUri)
                     if (copied !is SafeMutationResult.Created) {
-                        _uiState.update { it.copy(statusMessage = "Copy failed: ${source.displayName}") }
+                        val reason = when (copied) {
+                            SafeMutationResult.Duplicate -> "already exists in the destination"
+                            SafeMutationResult.InspectionFailed -> "destination could not be inspected"
+                            else -> "provider rejected the operation"
+                        }
+                        _uiState.update { it.copy(statusMessage = "Copy failed for ${source.displayName}: $reason") }
                         return@forEach
                     }
                     successCount++
@@ -650,6 +694,9 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
             ) }
         }
     }
+
+    private fun containsDocumentUri(node: FileNode, documentUri: String): Boolean =
+        node.children.any { it.documentUri == documentUri || containsDocumentUri(it, documentUri) }
 
     // ── Import / Export ────────────────────────────────────────────────────
 
@@ -748,17 +795,17 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
             _uiState.update { it.copy(statusMessage = "Cannot open: file is ${bytes.size / 1_048_576} MB (5 MB limit)") }
             return
         }
+        val displayName = _uiState.value.fileTree.findNode(documentUri)?.displayName
+            ?: safRepository.getDisplayName(documentUri)
+            ?: displayNameFromUri(documentUri)
         // F005-B: binary detection — scan the first 8 KB for null bytes.
         // Binary content (.apk, .class, compiled assets) corrupts Monaco's text model.
         if (bytes.take(8192).any { it == 0.toByte() }) {
-            _uiState.update { it.copy(statusMessage = "Cannot open binary file in text editor") }
+            _uiState.update { it.copy(fileOpDialog = FileOpDialog.BinaryOpenError(displayName)) }
             return
         }
 
         val content = String(bytes, Charsets.UTF_8)
-        val displayName = _uiState.value.fileTree.findNode(documentUri)?.displayName
-            ?: safRepository.getDisplayName(documentUri)
-            ?: displayNameFromUri(documentUri)
         val language = languageForExtension(displayName.substringAfterLast('.', ""))
 
         val newTab = EditorTab(

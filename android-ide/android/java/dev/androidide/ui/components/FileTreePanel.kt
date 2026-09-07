@@ -34,7 +34,6 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.ExpandMore
-import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.InsertDriveFile
@@ -63,6 +62,7 @@ fun FileTreePanel(
     activeTabDocumentUri: String?,
     locateTargetUri: String?,
     locateRequestToken: Long,
+    onLocateConsumed: () -> Unit,
     hideGitFolder: Boolean,
     isMultiSelectMode: Boolean,
     selectedUris: Set<String>,
@@ -160,7 +160,10 @@ fun FileTreePanel(
                 } ?: -1
                 val headerItems = (if (isMultiSelectMode) 1 else 0) +
                     (if (projectName.isNotEmpty()) 1 else 0)
-                if (targetIndex >= 0) treeListState.animateScrollToItem(targetIndex + headerItems)
+                if (targetIndex >= 0) {
+                    treeListState.animateScrollToItem(targetIndex + headerItems)
+                    onLocateConsumed()
+                }
             }
             LazyColumn(state = treeListState, modifier = modifier) {
                 // Exit selection mode banner
@@ -469,22 +472,21 @@ private fun FileTreeRow(
             }
         }
 
-        Icon(
-            imageVector = when {
-                node.isDirectory && node.isExpanded -> Icons.Default.FolderOpen
-                node.isDirectory                    -> Icons.Default.Folder
-                else                                -> fileIconFor(node.displayName)
-            },
-            contentDescription = null,
-            // Dim clipboard items to signal they are pending cut/copy.
-            tint = when {
-                isInClipboard && clipboardIsCut -> colors.textDisabled
-                isInClipboard                   -> colors.accent.copy(alpha = 0.5f)
-                node.isDirectory                -> colors.accentLight
-                else                            -> colors.textSecondary
-            },
-            modifier = Modifier.size(14.dp),
-        )
+        if (node.isDirectory) {
+            Spacer(Modifier.size(14.dp))
+        } else {
+            Icon(
+                imageVector = fileIconFor(node.displayName),
+                contentDescription = null,
+                // Dim clipboard items to signal they are pending cut/copy.
+                tint = when {
+                    isInClipboard && clipboardIsCut -> colors.textDisabled
+                    isInClipboard                   -> colors.accent.copy(alpha = 0.5f)
+                    else                            -> colors.textSecondary
+                },
+                modifier = Modifier.size(14.dp),
+            )
+        }
 
         Spacer(Modifier.width(4.dp))
 

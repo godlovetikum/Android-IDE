@@ -280,7 +280,10 @@ class SafRepository(private val context: Context) {
     ): ExactCreateResult = withContext(Dispatchers.IO) {
         val existing = (inspectChildren(parentUriString) as? ChildrenInspectionResult.Success)?.children
             ?: return@withContext ExactCreateResult.InspectionFailed
-        if (existing.any { it.displayName.equals(displayName, ignoreCase = true) }) {
+        if (existing.any { existingNode ->
+                namesMatchExactly(existingNode.displayName, displayName) &&
+                    conflictsWithRequestedEntry(existingNode, mimeType)
+            }) {
             return@withContext ExactCreateResult.Duplicate
         }
 
@@ -293,7 +296,8 @@ class SafRepository(private val context: Context) {
             }
         val siblingConflict = siblingsAfterCreate.any {
             it.documentUri != createdUri &&
-                it.displayName.equals(displayName, ignoreCase = true)
+                namesMatchExactly(it.displayName, displayName) &&
+                conflictsWithRequestedEntry(it, mimeType)
         }
         if (createdName == null) {
             return@withContext ExactCreateResult.InspectionFailed
@@ -303,6 +307,26 @@ class SafRepository(private val context: Context) {
             return@withContext ExactCreateResult.Duplicate
         }
         ExactCreateResult.Created(createdUri)
+    }
+
+    /** File names are compared as complete names; prefixes such as `.env` and `.env.example` never match. */
+    private fun namesMatchExactly(existingName: String, requestedName: String): Boolean =
+        existingName.equals(requestedName, ignoreCase = true)
+
+    /**
+     * Files and folders share the same provider namespace, but folder creation
+     * deliberately permits a same-named file when that file has a real extension.
+     * A no-extension file such as `.env` remains a blocking entry.
+     */
+    private fun conflictsWithRequestedEntry(existing: FileNode, requestedMimeType: String): Boolean {
+        if (requestedMimeType != MIME_DIR) return true
+        if (existing.isDirectory) return true
+        return !hasFileExtension(existing.displayName)
+    }
+
+    private fun hasFileExtension(displayName: String): Boolean {
+        val dot = displayName.lastIndexOf('.')
+        return dot > 0 && dot < displayName.lastIndex
     }
 
     // ── Copy ───────────────────────────────────────────────────────────────
@@ -343,9 +367,17 @@ class SafRepository(private val context: Context) {
         targetParentUriString: String,
         newName: String? = null,
     ): SafeMutationResult = withContext(Dispatchers.IO) {
-        val bytes = readFile(sourceUriString) ?: return@withContext SafeMutationResult.Failed
         val displayName = newName ?: getDisplayName(sourceUriString)
             ?: return@withContext SafeMutationResult.Failed
+        val sourceIsDirectory = if (isFileUri(sourceUriString)) {
+            fileFromUri(sourceUriString)?.isDirectory == true
+        } else {
+            queryStringColumn(sourceUriString, DocumentsContract.Document.COLUMN_MIME_TYPE) == MIME_DIR
+        }
+        if (sourceIsDirectory) {
+            return@withContext copyDirectoryWithExactName(sourceUriString, targetParentUriString, displayName)
+        }
+        val bytes = readFile(sourceUriString) ?: return@withContext SafeMutationResult.Failed
         when (val created = createFileWithExactName(
             targetParentUriString,
             displayName,
@@ -365,25 +397,61 @@ class SafRepository(private val context: Context) {
         }
     }
 
+    private suspend fun copyDirectoryWithExactName(
+        sourceUriString: String,
+        targetParentUriString: String,
+        displayName: String,
+    ): SafeMutationResult {
+        val createdRoot = when (val created = createFileWithExactName(
+            targetParentUriString,
+            displayName,
+            MIME_DIR,
+        )) {
+            is ExactCreateResult.Created -> created.documentUri
+            ExactCreateResult.Duplicate -> return SafeMutationResult.Duplicate
+            ExactCreateResult.InspectionFailed -> return SafeMutationResult.InspectionFailed
+            ExactCreateResult.Failed -> return SafeMutationResult.Failed
+        }
+        val children = when (val inspection = inspectChildren(sourceUriString)) {
+            is ChildrenInspectionResult.Success -> inspection.children
+            is ChildrenInspectionResult.Failed -> {
+                deleteDocument(createdRoot)
+                return SafeMutationResult.InspectionFailed
+            }
+        }
+        for (child in children) {
+            when (copyDocumentWithExactName(child.documentUri, createdRoot)) {
+                is SafeMutationResult.Created -> Unit
+                else -> {
+                    deleteDocument(createdRoot)
+                    return SafeMutationResult.Failed
+                }
+            }
+        }
+        return SafeMutationResult.Created(createdRoot)
+    }
+
     suspend fun moveDocumentWithExactName(
         sourceUriString: String,
         sourceParentUriString: String,
         targetParentUriString: String,
     ): SafeMutationResult = withContext(Dispatchers.IO) {
         val name = getDisplayName(sourceUriString) ?: return@withContext SafeMutationResult.Failed
+        val sourceMime = if (isFileUri(sourceUriString)) {
+            if (fileFromUri(sourceUriString)?.isDirectory == true) MIME_DIR else "application/octet-stream"
+        } else {
+            queryStringColumn(sourceUriString, DocumentsContract.Document.COLUMN_MIME_TYPE)
+        }
         val targetChildren = when (val inspection = inspectChildren(targetParentUriString)) {
             is ChildrenInspectionResult.Success -> inspection.children
             is ChildrenInspectionResult.Failed -> return@withContext SafeMutationResult.InspectionFailed
         }
         if (targetChildren.any {
-                it.documentUri != sourceUriString && it.displayName.equals(name, ignoreCase = true)
+                it.documentUri != sourceUriString &&
+                    namesMatchExactly(it.displayName, name) &&
+                    conflictsWithRequestedEntry(it, sourceMime ?: "application/octet-stream")
             }) {
             return@withContext SafeMutationResult.Duplicate
-        }
-        val sourceMime = if (isFileUri(sourceUriString)) {
-            "application/octet-stream"
-        } else {
-            queryStringColumn(sourceUriString, DocumentsContract.Document.COLUMN_MIME_TYPE)
         }
         if (sourceMime != MIME_DIR) {
             return@withContext when (val copied = copyDocumentWithExactName(
@@ -398,7 +466,16 @@ class SafRepository(private val context: Context) {
             }
         }
         val moved = moveDocument(sourceUriString, sourceParentUriString, targetParentUriString)
-            ?: return@withContext SafeMutationResult.Failed
+            ?: return@withContext when (val copied = copyDocumentWithExactName(
+                sourceUriString,
+                targetParentUriString,
+                name,
+            )) {
+                is SafeMutationResult.Created -> {
+                    if (deleteDocument(sourceUriString)) copied else SafeMutationResult.Failed
+                }
+                else -> copied
+            }
         val movedName = getDisplayName(moved)
         if (movedName != name) return@withContext SafeMutationResult.Failed
         SafeMutationResult.Created(moved)
