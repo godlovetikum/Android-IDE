@@ -33,6 +33,7 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewConfiguration
 import android.view.inputmethod.InputMethodManager
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
@@ -104,6 +105,7 @@ fun EditorPane(
     onInsertText: (String) -> Unit,
     onExecuteCommand: (String) -> Unit,
     onPasteFromClipboard: () -> Unit,
+    hasEditorSelection: Boolean = false,
     showKeyboardToolbar: Boolean = true,
     showSymbolBar: Boolean = true,
     customSymbols: List<String> = EditorSettings.DEFAULT_SYMBOLS,
@@ -166,15 +168,42 @@ fun EditorPane(
                     return true
                 }
             }
+            val touchSlop = ViewConfiguration.get(context).scaledTouchSlop
+            val longPressTimeout = ViewConfiguration.getLongPressTimeout().toLong()
+            var touchDownTime = 0L
+            var touchDownX = 0f
+            var touchDownY = 0f
+            var touchMoved = false
             setOnTouchListener { v, event ->
-                // C008: On finger-lift, request native focus AND explicitly show the IME.
-                // requestFocus() alone is insufficient inside a Compose layout — the IME
-                // window is not always raised until showSoftInput is called directly.
-                if (event.actionMasked == MotionEvent.ACTION_UP) {
-                    v.requestFocus()
-                    val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE)
-                            as InputMethodManager
-                    imm.showSoftInput(v, InputMethodManager.SHOW_IMPLICIT)
+                when (event.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        touchDownTime = event.eventTime
+                        touchDownX = event.x
+                        touchDownY = event.y
+                        touchMoved = false
+                    }
+                    MotionEvent.ACTION_MOVE -> {
+                        val dx = event.x - touchDownX
+                        val dy = event.y - touchDownY
+                        if ((dx * dx) + (dy * dy) > touchSlop * touchSlop) {
+                            touchMoved = true
+                        }
+                    }
+                    MotionEvent.ACTION_UP -> {
+                        // Only a short, stationary tap should request focus and
+                        // open the IME. Long-press and drag gestures belong to
+                        // Android/WebView text selection and must not be
+                        // interrupted by a second focus request.
+                        val isTap = !touchMoved &&
+                            event.eventTime - touchDownTime < longPressTimeout
+                        if (isTap) {
+                            v.requestFocus()
+                            val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE)
+                                    as InputMethodManager
+                            imm.showSoftInput(v, InputMethodManager.SHOW_IMPLICIT)
+                        }
+                    }
+                    MotionEvent.ACTION_CANCEL -> touchMoved = false
                 }
                 false   // do not consume the event — let WebView handle it
             }
@@ -379,6 +408,7 @@ fun EditorPane(
                 onInsertText         = onInsertText,
                 onExecuteCommand     = onExecuteCommand,
                 onPasteFromClipboard = onPasteFromClipboard,
+                hasEditorSelection   = hasEditorSelection,
             )
         }
     }
@@ -474,6 +504,7 @@ private data class KeyboardAction(
     val label: String,
     val commandId: String?,            // null for special Kotlin-side actions
     val isPaste: Boolean = false,      // triggers onPasteFromClipboard instead of executeCommand
+    val requiresSelection: Boolean = false,
     /** C017: replaced "Show Keyboard"+"Hide Keyboard" with a single stateful toggle. */
     val isKeyboardToggle: Boolean = false,
 )
@@ -497,15 +528,26 @@ private val TOOLBAR_PAGE_1 = listOf(
 // The old editor.action.clipboardCutAction / clipboardCopyAction use the browser
 // Clipboard API which is gated behind a user-permission prompt and fails silently.
 private val TOOLBAR_PAGE_2 = listOf(
-    KeyboardAction(Icons.Default.ContentCut,    "Cut",              "requestCut"),
-    KeyboardAction(Icons.Default.ContentCopy,   "Copy",             "requestCopy"),
+    KeyboardAction(Icons.Default.ContentCut,    "Cut",              "requestCut", requiresSelection = true),
+    KeyboardAction(Icons.Default.ContentCopy,   "Copy",             "requestCopy", requiresSelection = true),
     KeyboardAction(Icons.Default.ContentPaste,  "Paste",            null, isPaste = true),
     KeyboardAction(Icons.Default.SelectAll,     "Select All",       "editor.action.selectAll"),
     // C017: single toggle replaces the former "Show Keyboard" + "Hide Keyboard" pair.
     KeyboardAction(Icons.Default.Keyboard,      "Toggle Keyboard",  null, isKeyboardToggle = true),
 )
 
-private val TOOLBAR_PAGES = listOf(TOOLBAR_PAGE_1, TOOLBAR_PAGE_2)
+private val TOOLBAR_PAGE_3 = listOf(
+    KeyboardAction(Icons.Default.KeyboardArrowLeft,  "Select Left",       "cursorLeftSelect"),
+    KeyboardAction(Icons.Default.KeyboardArrowRight, "Select Right",      "cursorRightSelect"),
+    KeyboardAction(Icons.Default.KeyboardArrowUp,    "Select Up",         "cursorUpSelect"),
+    KeyboardAction(Icons.Default.KeyboardArrowDown,  "Select Down",       "cursorDownSelect"),
+    KeyboardAction(Icons.Default.KeyboardArrowLeft,  "Select Word Left",  "cursorWordLeftSelect"),
+    KeyboardAction(Icons.Default.KeyboardArrowRight, "Select Word Right", "cursorWordRightSelect"),
+    KeyboardAction(Icons.Default.KeyboardArrowLeft,  "Select to Start",   "cursorHomeSelect"),
+    KeyboardAction(Icons.Default.KeyboardArrowRight, "Select to End",     "cursorEndSelect"),
+)
+
+private val TOOLBAR_PAGES = listOf(TOOLBAR_PAGE_1, TOOLBAR_PAGE_2, TOOLBAR_PAGE_3)
 
 @OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
@@ -513,6 +555,7 @@ private fun KeyboardToolbar(
     onInsertText: (String) -> Unit,
     onExecuteCommand: (String) -> Unit,
     onPasteFromClipboard: () -> Unit,
+    hasEditorSelection: Boolean,
 ) {
     val colors     = LocalIdeColors.current
     val pagerState = rememberPagerState(pageCount = { TOOLBAR_PAGES.size })
@@ -547,6 +590,7 @@ private fun KeyboardToolbar(
                         label            = action.label,
                         isPaste          = action.isPaste,
                         commandId        = action.commandId,
+                        enabled          = !action.requiresSelection || hasEditorSelection,
                         onExecuteCommand = onExecuteCommand,
                         onPaste          = onPasteFromClipboard,
                         onCustomClick    = if (action.isKeyboardToggle) {
@@ -593,6 +637,7 @@ private fun ToolbarIconButton(
     label: String,
     commandId: String?,
     isPaste: Boolean,
+    enabled: Boolean = true,
     onExecuteCommand: (String) -> Unit,
     onPaste: () -> Unit,
     /** C017: optional override used by the keyboard-toggle button. */
@@ -617,12 +662,13 @@ private fun ToolbarIconButton(
                     commandId != null     -> onExecuteCommand(commandId)
                 }
             },
+            enabled  = enabled,
             modifier = Modifier.size(44.dp),
         ) {
             Icon(
                 imageVector        = icon,
                 contentDescription = label,
-                tint               = colors.textSecondary,
+                tint               = if (enabled) colors.textSecondary else colors.textDisabled,
                 modifier           = Modifier.size(24.dp),
             )
         }

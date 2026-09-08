@@ -70,6 +70,9 @@ data class IdeUiState(
     /** ID of the currently active tab. */
     val activeTabId: String? = null,
 
+    /** Whether Monaco currently has a non-empty text selection. */
+    val hasEditorSelection: Boolean = false,
+
     /** True once Monaco sends the "ready" message. */
     val isEditorReady: Boolean = false,
 

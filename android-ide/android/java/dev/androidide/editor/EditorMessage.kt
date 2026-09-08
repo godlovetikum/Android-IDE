@@ -7,6 +7,7 @@
 //   { type: "contentChanged", path, content }
 //   { type: "cursorMoved",    line, column }
 //   { type: "fileSaved",      path }
+//   { type: "selectionChanged", hasSelection }
 //
 // Outbound (Kotlin → Monaco, via window.androidIDE.receiveMessage):
 //   { type: "loadFile",         path, content, language }
@@ -36,6 +37,9 @@ sealed class EditorInbound {
 
     /** Cursor moved; emitted on every cursor position change. */
     data class CursorMoved(val line: Int, val column: Int) : EditorInbound()
+
+    /** Monaco selection changed; used to enable or disable clipboard actions. */
+    data class SelectionChanged(val hasSelection: Boolean) : EditorInbound()
 
     /** User pressed Ctrl+S / Cmd+S in Monaco. */
     data class FileSaved(val path: String) : EditorInbound()
@@ -70,6 +74,9 @@ sealed class EditorInbound {
                 "cursorMoved"          -> CursorMoved(
                     line   = obj.getInt("line"),
                     column = obj.getInt("column"),
+                )
+                "selectionChanged"    -> SelectionChanged(
+                    hasSelection = obj.optBoolean("hasSelection", false),
                 )
                 "fileSaved"            -> FileSaved(path = obj.getString("path"))
                 "textCopied"           -> TextCopied(
@@ -155,6 +162,8 @@ sealed class EditorOutbound {
      * Monaco keyboard handler IDs (use editor.trigger('keyboard', id, null)):
      *   cursorLeft, cursorRight, cursorUp, cursorDown,
      *   cursorHome, cursorEnd, cursorPageUp, cursorPageDown,
+     *   cursorLeftSelect, cursorRightSelect, cursorUpSelect, cursorDownSelect,
+     *   cursorWordLeftSelect, cursorWordRightSelect, cursorHomeSelect, cursorEndSelect,
      *   undo, redo, deleteLeft, deleteRight,
      *   editor.action.clipboardCutAction, editor.action.clipboardCopyAction
      *

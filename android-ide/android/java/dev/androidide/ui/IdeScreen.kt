@@ -461,6 +461,7 @@ private fun EditorContent(
             onInsertText            = { text -> ideViewModel.sendEditorCommand(EditorOutbound.InsertText(text)) },
             onExecuteCommand        = { cmd  -> ideViewModel.sendEditorCommand(EditorOutbound.ExecuteCommand(cmd)) },
             onPasteFromClipboard    = ideViewModel::pasteFromKotlinClipboard,
+            hasEditorSelection      = uiState.hasEditorSelection,
             showKeyboardToolbar     = s.showKeyboardToolbar,
             showSymbolBar           = s.showSymbolBar,
             customSymbols           = s.customSymbols,

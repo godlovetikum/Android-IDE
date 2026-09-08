@@ -826,6 +826,7 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
                 openTabs      = tabs,
                 activeTabId   = if (markActive) newTab.id else state.activeTabId,
                 currentScreen = AppScreen.EDITOR,
+                hasEditorSelection = false,
             )
         }
     }
@@ -835,6 +836,7 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
             state.copy(
                 openTabs    = state.openTabs.map { it.copy(isActive = it.id == tabId) },
                 activeTabId = tabId,
+                hasEditorSelection = false,
             )
         }
     }
@@ -1013,6 +1015,9 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
                     )
                 }
             }
+
+            is EditorInbound.SelectionChanged ->
+                _uiState.update { it.copy(hasEditorSelection = message.hasSelection) }
 
             is EditorInbound.FileSaved -> saveFile(message.path)
 

@@ -245,6 +245,14 @@ require(['vs/editor/editor.main'], function () {
     });
   });
 
+  // Keep the native toolbar in sync with Monaco's current range selection.
+  editor.onDidChangeCursorSelection(function (e) {
+    postToNative({
+      type: 'selectionChanged',
+      hasSelection: !e.selection.isEmpty(),
+    });
+  });
+
   // --- Scroll position report (debounced 500 ms) ---
   var scrollReportTimer = null;
   var SCROLL_REPORT_DEBOUNCE_MS = 500;
@@ -261,56 +269,9 @@ require(['vs/editor/editor.main'], function () {
     postToNative({ type: 'fileSaved', path: currentPath });
   });
 
-  // --- Tap-to-focus: clicking anywhere in the editor focuses the Monaco
-  //     textarea so the soft keyboard appears immediately on Android. ---
-  //
-  // F024: Three guards protect Android text selection handles:
-  //   1. isSelectingText — set via 'selectionchange' as soon as a DOM selection
-  //      appears (this fires before 'click' and before the setTimeout below).
-  //   2. editor.getSelection() — Monaco's internal selection model.
-  //   3. document.getSelection() — the browser/Android DOM selection, which
-  //      reflects handle drags before Monaco's model has processed them.
-  // All three must be empty before we call editor.focus(), which repositions
-  // Monaco's cursor and would dismiss any visible selection handles.
-  var isSelectingText = false;
-  document.addEventListener('selectionchange', function () {
-    var domSel = window.getSelection ? window.getSelection() : null;
-    isSelectingText = !!(domSel && domSel.toString().length > 0);
-  });
-
-  // Clear the flag when Monaco itself collapses its selection (e.g. cursor tap).
-  editor.onDidChangeCursorSelection(function (e) {
-    if (e.selection.isEmpty()) {
-      isSelectingText = false;
-    }
-  });
-
-  var editorDom = editor.getDomNode();
-  if (editorDom) {
-    editorDom.addEventListener('click', function () {
-      // F024: click fires AFTER Android selection handles appear (long-press
-      // sequence: touchstart → touchend → [handles] → click). Without this
-      // guard, editor.focus() collapses the selection on every long-press.
-      var monacoSel = editor.getSelection();
-      var domSel    = window.getSelection ? window.getSelection() : null;
-      if (!isSelectingText && (!monacoSel || monacoSel.isEmpty()) && !(domSel && domSel.toString().length > 0)) {
-        editor.focus();
-      }
-    }, { passive: true });
-
-    editorDom.addEventListener('touchend', function () {
-      // C016 + F024: delay allows Android to settle the selection state before
-      // we inspect it. 150 ms (up from 50 ms) gives slow devices enough time
-      // for Monaco's model to reflect DOM selectionchange events.
-      setTimeout(function () {
-        var monacoSel = editor.getSelection();
-        var domSel    = window.getSelection ? window.getSelection() : null;
-        if (!isSelectingText && (!monacoSel || monacoSel.isEmpty()) && !(domSel && domSel.toString().length > 0)) {
-          editor.focus();
-        }
-      }, 150);
-    }, { passive: true });
-  }
+  // Focus is intentionally controlled by the native WebView touch listener.
+  // JavaScript click/touchend focus calls used to run after Android long-press
+  // selection handles appeared and collapse the selection.
 
   // Hide loading indicator and signal readiness to Kotlin
   document.getElementById('loading').classList.add('hidden');
