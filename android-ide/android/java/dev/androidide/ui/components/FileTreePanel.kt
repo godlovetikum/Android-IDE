@@ -45,6 +45,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.androidide.ui.theme.LocalIdeColors
@@ -104,6 +105,9 @@ fun FileTreePanel(
 ) {
     val colors = LocalIdeColors.current
     val treeListState = remember { LazyListState() }
+    val density = LocalDensity.current
+    val imeBottomPx = WindowInsets.ime.getBottom(density)
+    val imeTrailingPadding = with(density) { (imeBottomPx * 1.2f).toDp() }
 
     when {
         // ── File-name search results panel ─────────────────────────────────
@@ -127,7 +131,10 @@ fun FileTreePanel(
                         )
                     }
                 } else {
-                    LazyColumn(modifier = Modifier.fillMaxSize()) {
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(bottom = imeTrailingPadding),
+                    ) {
                         items(fileSearchResults, key = { it.documentUri }) { result ->
                             SearchResultRow(result = result, onSelect = onSearchFileSelect)
                         }
@@ -165,7 +172,11 @@ fun FileTreePanel(
                     onLocateConsumed()
                 }
             }
-            LazyColumn(state = treeListState, modifier = modifier) {
+            LazyColumn(
+                state = treeListState,
+                modifier = modifier,
+                contentPadding = PaddingValues(bottom = imeTrailingPadding),
+            ) {
                 // Exit selection mode banner
                 if (isMultiSelectMode) {
                     item {
@@ -458,35 +469,29 @@ private fun FileTreeRow(
             )
             Spacer(Modifier.width(4.dp))
         } else {
-            // Expand/collapse chevron or spacer
-            if (node.isDirectory) {
-                Icon(
-                    imageVector        = if (node.isExpanded) Icons.Default.ExpandMore else Icons.Default.ChevronRight,
-                    contentDescription = if (node.isExpanded) "Collapse" else "Expand",
-                    tint               = colors.textSecondary,
-                    modifier           = Modifier.size(14.dp),
-                )
-                Spacer(Modifier.width(2.dp))
-            } else {
-                Spacer(Modifier.width(16.dp))
-            }
+            Spacer(Modifier.width(4.dp))
         }
 
-        if (node.isDirectory) {
-            Spacer(Modifier.size(14.dp))
-        } else {
-            Icon(
-                imageVector = fileIconFor(node.displayName),
-                contentDescription = null,
-                // Dim clipboard items to signal they are pending cut/copy.
-                tint = when {
-                    isInClipboard && clipboardIsCut -> colors.textDisabled
-                    isInClipboard                   -> colors.accent.copy(alpha = 0.5f)
-                    else                            -> colors.textSecondary
-                },
-                modifier = Modifier.size(14.dp),
-            )
-        }
+        // Use one leading slot for both the folder chevron and file icon.
+        // This keeps filenames aligned at the same depth without reserving
+        // an additional, invisible folder-icon slot.
+        Icon(
+            imageVector = when {
+                node.isDirectory -> if (node.isExpanded) Icons.Default.ExpandMore else Icons.Default.ChevronRight
+                else             -> fileIconFor(node.displayName)
+            },
+            contentDescription = if (node.isDirectory) {
+                if (node.isExpanded) "Collapse" else "Expand"
+            } else {
+                null
+            },
+            tint = when {
+                isInClipboard && clipboardIsCut -> colors.textDisabled
+                isInClipboard                   -> colors.accent.copy(alpha = 0.5f)
+                else                            -> colors.textSecondary
+            },
+            modifier = Modifier.size(14.dp),
+        )
 
         Spacer(Modifier.width(4.dp))
 
