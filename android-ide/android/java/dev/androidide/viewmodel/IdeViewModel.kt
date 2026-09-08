@@ -1259,20 +1259,43 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
     // ── Reveal active file ─────────────────────────────────────────────────
 
     fun revealActiveFile() {
-        val activeUri = _uiState.value.openTabs.firstOrNull { it.isActive }?.documentUri ?: run {
+        val activeTab = _uiState.value.openTabs.firstOrNull { it.isActive } ?: run {
             _uiState.update { it.copy(statusMessage = "No active file") }
             return
         }
+        val activeUri = activeTab.documentUri
+        val activeDisplayName = activeTab.displayName
         val rootUri = _uiState.value.projectRootUri ?: run {
             _uiState.update { it.copy(statusMessage = "No project is open") }
             return
         }
         viewModelScope.launch {
             _uiState.update { it.copy(statusMessage = "Locating active file…") }
+            val cachedPath = findCachedAncestorPath(_uiState.value.fileTree, activeUri)
+            if (cachedPath != null) {
+                _uiState.update { state ->
+                    var tree = state.fileTree
+                    cachedPath.forEach { directoryUri ->
+                        val node = tree.findNode(directoryUri)
+                        if (node != null && node.isDirectory && !node.isExpanded) {
+                            tree = tree.toggleExpanded(directoryUri)
+                        }
+                    }
+                    state.copy(
+                        fileTree = tree,
+                        locateTargetUri = activeUri,
+                        locateRequestToken = state.locateRequestToken + 1,
+                        statusMessage = "Located $activeDisplayName",
+                    )
+                }
+                return@launch
+            }
             when (val result = discoverPathFromRoot(rootUri, activeUri)) {
                 is LocateResult.Found -> {
                     var tree = _uiState.value.fileTree
-                    result.discoveredChildren[rootUri]?.let { tree = it.sortedForTree() }
+                    result.discoveredChildren[rootUri]?.let {
+                        tree = mergeTreeChildren(tree, it.sortedForTree())
+                    }
                     result.discoveredChildren
                         .filterKeys { it != rootUri }
                         .forEach { (parentUri, children) ->
@@ -1295,6 +1318,40 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private fun findCachedAncestorPath(
+        nodes: List<FileNode>,
+        targetUri: String,
+        ancestors: List<String> = emptyList(),
+    ): List<String>? {
+        for (node in nodes) {
+            if (node.documentUri == targetUri) return ancestors
+            if (node.isDirectory && node.children.isNotEmpty()) {
+                val found = findCachedAncestorPath(
+                    nodes = node.children,
+                    targetUri = targetUri,
+                    ancestors = ancestors + node.documentUri,
+                )
+                if (found != null) return found
+            }
+        }
+        return null
+    }
+
+    private fun mergeTreeChildren(
+        previous: List<FileNode>,
+        refreshed: List<FileNode>,
+    ): List<FileNode> = refreshed.map { current ->
+        val old = previous.firstOrNull { it.documentUri == current.documentUri }
+        if (old != null && current.isDirectory) {
+            current.copy(
+                children = old.children,
+                isExpanded = old.isExpanded,
+            )
+        } else {
+            current
+        }
+    }.sortedForTree()
+
     private sealed class LocateResult {
         data class Found(
             val displayName: String,
@@ -1305,7 +1362,6 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private suspend fun discoverPathFromRoot(rootUri: String, targetUri: String): LocateResult {
-        val discovered = linkedMapOf<String, List<FileNode>>()
         val visited = mutableSetOf<String>()
         var inspectionFailed = false
 
@@ -1318,14 +1374,21 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
                     return LocateResult.NotFound
                 }
             }
-            discovered[directoryUri] = children
             children.firstOrNull { it.documentUri == targetUri }?.let { target ->
-                return LocateResult.Found(target.displayName, discovered)
+                return LocateResult.Found(
+                    displayName = target.displayName,
+                    discoveredChildren = linkedMapOf(directoryUri to children),
+                )
             }
             for (child in children) {
                 if (!child.isDirectory) continue
                 when (val nested = visit(child.documentUri)) {
-                    is LocateResult.Found -> return nested
+                    is LocateResult.Found -> {
+                        val pathChildren = linkedMapOf<String, List<FileNode>>()
+                        pathChildren[directoryUri] = children
+                        pathChildren.putAll(nested.discoveredChildren)
+                        return LocateResult.Found(nested.displayName, pathChildren)
+                    }
                     is LocateResult.Failed -> Unit
                     LocateResult.NotFound -> Unit
                 }
