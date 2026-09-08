@@ -48,6 +48,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import dev.androidide.editor.EditorLanguageRegistry
+import dev.androidide.editor.FileIconKind
 import dev.androidide.ui.theme.LocalIdeColors
 import dev.androidide.viewmodel.model.FileNode
 import dev.androidide.viewmodel.model.FileSearchResult
@@ -638,25 +640,11 @@ private fun FileTreeRow(
  * Uses only icons confirmed present in material-icons-extended.
  */
 private fun fileIconFor(displayName: String): ImageVector {
-    val ext = displayName.substringAfterLast('.', "").lowercase()
-    return when (ext) {
-        // Image files
-        "png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "ico", "tiff", "tif" ->
-            Icons.Default.Image
-        // Prose / text
-        "md", "mdx", "txt", "rst", "adoc" ->
-            Icons.Default.Article
-        // Source code and data (includes HTML/CSS/JS/TS, Kotlin, Java, XML, JSON, …)
-        "kt", "kts", "java",
-        "js", "cjs", "mjs", "ts", "tsx", "jsx",
-        "html", "htm", "css", "scss", "less", "sass",
-        "json", "jsonc", "yaml", "yml", "toml",
-        "xml", "gradle", "plist", "properties",
-        "py", "rb", "go", "rs", "c", "cpp", "cc", "h", "hpp",
-        "sh", "bash", "zsh", "fish", "bat", "ps1" ->
-            Icons.Default.Code
-        // Default: generic document icon
-        else -> Icons.Default.InsertDriveFile
+    return when (EditorLanguageRegistry.iconKindForFileName(displayName)) {
+        FileIconKind.IMAGE   -> Icons.Default.Image
+        FileIconKind.TEXT    -> Icons.Default.Article
+        FileIconKind.CODE    -> Icons.Default.Code
+        FileIconKind.GENERIC -> Icons.Default.InsertDriveFile
     }
 }
 

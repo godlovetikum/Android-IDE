@@ -23,6 +23,7 @@ import dev.androidide.data.model.EditorSettings
 import dev.androidide.data.model.Project
 import dev.androidide.data.model.VolumeKeyMode
 import dev.androidide.editor.EditorInbound
+import dev.androidide.editor.EditorLanguageRegistry
 import dev.androidide.editor.EditorOutbound
 import dev.androidide.saf.ChildrenInspectionResult
 import dev.androidide.saf.ExactCreateResult
@@ -159,10 +160,10 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
                 id          = tabId,
                 documentUri = entry.documentUri,
                 displayName = entry.displayName,
-                language    = languageForExtension(entry.displayName.substringAfterLast('.', "")),
+                language    = EditorLanguageRegistry.languageForFileName(entry.displayName),
             )).copy(
                 displayName = entry.displayName,
-                language    = languageForExtension(entry.displayName.substringAfterLast('.', "")),
+                language    = EditorLanguageRegistry.languageForFileName(entry.displayName),
                 content     = entry.content,
                 isDirty     = true,
                 isTemporary = false,
@@ -806,7 +807,7 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         val content = String(bytes, Charsets.UTF_8)
-        val language = languageForExtension(displayName.substringAfterLast('.', ""))
+        val language = EditorLanguageRegistry.languageForFileName(displayName)
 
         val newTab = EditorTab(
             documentUri = documentUri,
@@ -1101,7 +1102,7 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
             val ok = safRepository.writeFile(newUri, content.toByteArray(Charsets.UTF_8))
             if (!ok) { _uiState.update { it.copy(statusMessage = "Save As failed") }; return@launch }
             val newName = safRepository.getDisplayName(newUri) ?: displayNameFromUri(newUri)
-            val newLang = languageForExtension(newName.substringAfterLast('.', ""))
+            val newLang = EditorLanguageRegistry.languageForFileName(newName)
             pendingContent.remove(active.id)
             _uiState.value.projectRootUri?.let { projectRootUri ->
                 crashRecovery.clearUnsavedContent(projectRootUri, active.id)
@@ -1768,7 +1769,11 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
             val result = safRepository.createFileWithExactName(
                 parentUriString = parentUri,
                 displayName = normalizedName,
-                mimeType = if (isDirectory) "vnd.android.document/directory" else mimeTypeForName(normalizedName),
+                mimeType = if (isDirectory) {
+                    "vnd.android.document/directory"
+                } else {
+                    EditorLanguageRegistry.mimeTypeForFileName(normalizedName)
+                },
             )
             when (result) {
                 ExactCreateResult.Duplicate -> {
@@ -1787,8 +1792,7 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
                     setCreateError(isDirectory, "Could not create ${if (isDirectory) "folder" else "file"}")
                 }
                 is ExactCreateResult.Created -> {
-                    if (!isDirectory && normalizedName.substringAfterLast('.', "").lowercase() in setOf("html", "htm")) {
-                        val template = htmlTemplate()
+                    EditorLanguageRegistry.templateForFileName(normalizedName)?.let { template ->
                         if (!safRepository.writeFile(result.documentUri, template.toByteArray(Charsets.UTF_8))) {
                             safRepository.deleteDocument(result.documentUri)
                             safRepository.rollbackCreatedDirectories(createdIntermediateUris)
@@ -1910,7 +1914,11 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
                 return@launch
             }
             val (targetParentUri, leafName) = path.parentUri to path.leafName
-            val created = safRepository.createFileWithExactName(targetParentUri, leafName, mimeTypeForName(leafName))
+            val created = safRepository.createFileWithExactName(
+                targetParentUri,
+                leafName,
+                EditorLanguageRegistry.mimeTypeForFileName(leafName),
+            )
             val newUri = (created as? ExactCreateResult.Created)?.documentUri ?: run {
                 safRepository.rollbackCreatedDirectories(path.createdIntermediateUris)
                 val message = if (created is ExactCreateResult.Duplicate) {
@@ -1928,7 +1936,7 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
                 _uiState.update { it.copy(fileOpDialog = null, statusMessage = "Save As: write failed") }
                 return@launch
             }
-            val newLang = languageForExtension(leafName.substringAfterLast('.', ""))
+            val newLang = EditorLanguageRegistry.languageForFileName(leafName)
             pendingContent.remove(active.id)
             crashRecovery.clearUnsavedContent(rootUri, active.id)
             refreshProjectNow()
@@ -2025,64 +2033,4 @@ ul,ol{padding-left:2em}
         Uri.decode(documentUri).substringAfterLast('/').ifEmpty { "file" }
     } catch (_: Exception) { "file" }
 
-    private fun htmlTemplate(): String = """<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>New Page</title>
-</head>
-<body>
-</body>
-</html>
-"""
-
-    private fun mimeTypeForName(name: String): String = when (name.substringAfterLast('.', "").lowercase()) {
-        "kt", "kts"         -> "text/x-kotlin"
-        "java"              -> "text/x-java"
-        "xml"               -> "text/xml"
-        "json"              -> "application/json"
-        "md"                -> "text/markdown"
-        "html", "htm"       -> "text/html"
-        "css"               -> "text/css"
-        "js", "mjs"         -> "text/javascript"
-        "ts"                -> "text/typescript"
-        "py"                -> "text/x-python"
-        "sh", "bash"        -> "text/x-sh"
-        "c", "h"            -> "text/x-csrc"
-        "cpp", "cc", "hpp"  -> "text/x-c++src"
-        "rs"                -> "text/x-rust"
-        "go"                -> "text/x-go"
-        "yaml", "yml"       -> "text/x-yaml"
-        "toml"              -> "text/x-toml"
-        "sql"               -> "text/x-sql"
-        "gradle"            -> "text/x-groovy"
-        else                -> "text/plain"
-    }
-
-    private fun languageForExtension(ext: String): String = when (ext.lowercase()) {
-        "kt", "kts"               -> "kotlin"
-        "java"                    -> "java"
-        "xml"                     -> "xml"
-        "json"                    -> "json"
-        "md"                      -> "markdown"
-        "gradle"                  -> "groovy"
-        "py"                      -> "python"
-        "js", "mjs", "cjs"        -> "javascript"
-        "ts", "mts", "cts"        -> "typescript"
-        "html", "htm"             -> "html"
-        "css"                     -> "css"
-        "sh", "bash"              -> "shell"
-        "c", "h"                  -> "c"
-        "cpp", "cc", "cxx", "hpp" -> "cpp"
-        "rs"                      -> "rust"
-        "go"                      -> "go"
-        "rb"                      -> "ruby"
-        "swift"                   -> "swift"
-        "toml"                    -> "toml"
-        "yaml", "yml"             -> "yaml"
-        "sql"                     -> "sql"
-        "proto"                   -> "proto"
-        else                      -> "plaintext"
-    }
 }
