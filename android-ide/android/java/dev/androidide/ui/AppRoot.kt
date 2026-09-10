@@ -31,6 +31,11 @@ import dev.androidide.ui.theme.AndroidIDETheme
 import dev.androidide.viewmodel.IdeViewModel
 import dev.androidide.viewmodel.model.FileNode
 
+private enum class ProjectDestinationAction {
+    DUPLICATE,
+    MOVE,
+}
+
 @Composable
 fun AppRoot(ideViewModel: IdeViewModel = viewModel()) {
     val uiState by ideViewModel.uiState.collectAsState()
@@ -40,6 +45,10 @@ fun AppRoot(ideViewModel: IdeViewModel = viewModel()) {
     var importTargetDirUri      by remember { mutableStateOf("") }
     var showCreateProjectDialog by remember { mutableStateOf(false) }
     var createProjectName       by remember { mutableStateOf("") }
+    var pendingExportSourceUri  by remember { mutableStateOf<String?>(null) }
+    var pendingDestinationUri   by remember { mutableStateOf<String?>(null) }
+    var pendingDestinationAction by remember { mutableStateOf<ProjectDestinationAction?>(null) }
+    var pendingMoveConfirmation by remember { mutableStateOf<Pair<String, String>?>(null) }
 
     // ── Open existing project folder ────────────────────────────────────────
     val openProjectLauncher = rememberLauncherForActivityResult(
@@ -52,6 +61,48 @@ fun AppRoot(ideViewModel: IdeViewModel = viewModel()) {
             )
             ideViewModel.openProject(uri.toString())
         }
+    }
+
+    val exportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/zip")
+    ) { uri ->
+        val sourceUri = pendingExportSourceUri
+        pendingExportSourceUri = null
+        if (uri != null && sourceUri != null) {
+            ideViewModel.exportProject(sourceUri, uri.toString())
+        }
+    }
+
+    val projectDestinationLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocumentTree()
+    ) { uri ->
+        val sourceUri = pendingDestinationUri
+        val action = pendingDestinationAction
+        pendingDestinationUri = null
+        pendingDestinationAction = null
+        if (uri != null && sourceUri != null && action != null) {
+            context.contentResolver.takePersistableUriPermission(
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+            )
+            when (action) {
+                ProjectDestinationAction.DUPLICATE ->
+                    ideViewModel.duplicateProject(sourceUri, uri.toString())
+                ProjectDestinationAction.MOVE ->
+                    pendingMoveConfirmation = sourceUri to uri.toString()
+            }
+        }
+    }
+
+    fun launchExport(sourceUri: String, name: String) {
+        pendingExportSourceUri = sourceUri
+        exportLauncher.launch("$name.zip")
+    }
+
+    fun launchProjectDestination(sourceUri: String, action: ProjectDestinationAction) {
+        pendingDestinationUri = sourceUri
+        pendingDestinationAction = action
+        projectDestinationLauncher.launch(null)
     }
 
     // ── F004: Save As — now handled by the inline project-relative dialog ─────
@@ -97,6 +148,16 @@ fun AppRoot(ideViewModel: IdeViewModel = viewModel()) {
                     onCreateBlankProject = {
                         createProjectName       = "MyProject"
                         showCreateProjectDialog = true
+                    },
+                    onExportProject      = { uri -> launchExport(uri, "project") },
+                    onDuplicateProject   = { uri ->
+                        launchProjectDestination(uri, ProjectDestinationAction.DUPLICATE)
+                    },
+                    onMoveProject        = { uri ->
+                        launchProjectDestination(uri, ProjectDestinationAction.MOVE)
+                    },
+                    onExportDirectory    = { node ->
+                        launchExport(node.documentUri, node.displayName)
                     },
                     onSaveAs            = { ideViewModel.showSaveAsDialog() },
                     onImportFilesAt     = { node ->
@@ -150,6 +211,33 @@ fun AppRoot(ideViewModel: IdeViewModel = viewModel()) {
             },
             dismissButton = {
                 TextButton(onClick = { showCreateProjectDialog = false }) { Text("Cancel") }
+            },
+        )
+    }
+
+    pendingMoveConfirmation?.let { (sourceUri, destinationUri) ->
+        AlertDialog(
+            onDismissRequest = { pendingMoveConfirmation = null },
+            title = { Text("Move project storage?") },
+            text = {
+                Text(
+                    "The project will be copied to the selected folder first. " +
+                        "After a successful copy, the original project folder will be removed.",
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        pendingMoveConfirmation = null
+                        ideViewModel.moveProjectStorage(sourceUri, destinationUri)
+                    },
+                    colors = ButtonDefaults.textButtonColors(
+                        contentColor = MaterialTheme.colorScheme.error,
+                    ),
+                ) { Text("Move") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingMoveConfirmation = null }) { Text("Cancel") }
             },
         )
     }

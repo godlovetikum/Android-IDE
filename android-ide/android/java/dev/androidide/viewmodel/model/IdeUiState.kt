@@ -7,6 +7,7 @@ package dev.androidide.viewmodel.model
 import dev.androidide.data.model.AppTheme
 import dev.androidide.data.model.EditorSettings
 import dev.androidide.data.model.Project
+import dev.androidide.data.model.ProjectDetails
 import dev.androidide.data.model.RecoveryEntry
 import dev.androidide.data.model.VolumeKeyMode
 
@@ -24,6 +25,15 @@ data class IdeUiState(
 
     /** Recently-opened project registry, most-recent first. */
     val recentProjects: List<Project> = emptyList(),
+
+    /** Computed metadata for the project-details dialog. */
+    val projectDetails: ProjectDetails? = null,
+
+    /** True while project details are being calculated from storage. */
+    val projectDetailsLoading: Boolean = false,
+
+    /** Cached metadata used for project-list sorting and detail screens. */
+    val projectDetailsByUri: Map<String, ProjectDetails> = emptyMap(),
 
     // ── File tree ──────────────────────────────────────────────────────────
     /** Root nodes of the file tree sidebar. */

@@ -43,6 +43,7 @@ class ProjectRepository(context: Context) {
                 put("name",         p.name)
                 put("uri",          p.uri)
                 put("lastOpenedMs", p.lastOpenedMs)
+                put("createdMs",    p.createdMs)
             })
         }
         prefs.edit().putString(KEY, arr.toString()).apply()
@@ -52,10 +53,12 @@ class ProjectRepository(context: Context) {
         val arr = JSONArray(json)
         (0 until arr.length()).map { i ->
             val obj = arr.getJSONObject(i)
+            val lastOpenedMs = obj.optLong("lastOpenedMs", System.currentTimeMillis())
             Project(
                 name         = obj.getString("name"),
                 uri          = obj.getString("uri"),
-                lastOpenedMs = obj.optLong("lastOpenedMs", System.currentTimeMillis()),
+                lastOpenedMs = lastOpenedMs,
+                createdMs    = obj.optLong("createdMs", lastOpenedMs),
             )
         }
     }.getOrElse { emptyList() }

@@ -21,6 +21,7 @@ import dev.androidide.data.ThemeRepository
 import dev.androidide.data.model.AppTheme
 import dev.androidide.data.model.EditorSettings
 import dev.androidide.data.model.Project
+import dev.androidide.data.model.ProjectDetails
 import dev.androidide.data.model.VolumeKeyMode
 import dev.androidide.editor.EditorInbound
 import dev.androidide.editor.EditorLanguageRegistry
@@ -99,6 +100,7 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
         val previousSessionDirty = crashRecovery.isPreviousSessionDirty()
         crashRecovery.markSessionStart()
         restoreSession(previousSessionDirty)
+        refreshProjectMetadata()
     }
 
     override fun onCleared() {
@@ -217,9 +219,10 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
         // F020: validate that the saved project URI still has a persisted SAF permission
         // grant before attempting to open it.  Grants can be revoked after device reboot
         // (if the provider does not survive reboot) or an explicit permission reset.
-        val hasPermission = getApplication<Application>().contentResolver
-            .persistedUriPermissions
-            .any { it.uri.toString() == projectUri && it.isReadPermission && it.isWritePermission }
+        val hasPermission = projectUri.startsWith("file://") ||
+            getApplication<Application>().contentResolver
+                .persistedUriPermissions
+                .any { it.uri.toString() == projectUri && it.isReadPermission && it.isWritePermission }
         if (!hasPermission) {
             _uiState.update {
                 it.copy(statusMessage = "Previous project no longer accessible — re-open it from Projects")
@@ -432,6 +435,9 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
 
     private suspend fun openProjectInternal(treeUriString: String) {
         val name = extractProjectName(treeUriString)
+        val registeredProject = projectRepository.getAll().firstOrNull { it.uri == treeUriString }
+        val displayName = registeredProject?.name ?: name
+        val openedAt = System.currentTimeMillis()
         // F019: dispose all Monaco models from the previous project before clearing
         // tabs — prevents stale models from leaking into the new project (same filename
         // in both projects would reuse the old model and show wrong content).
@@ -439,15 +445,23 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
         // Close tabs from the previous project; restore tabs for the new project.
         _uiState.value.openTabs.forEach { pendingContent.remove(it.id) }
         _uiState.update { it.copy(
-            projectName    = name,
+            projectName    = displayName,
             projectRootUri = treeUriString,
             currentScreen  = AppScreen.EDITOR,
             openTabs       = emptyList(),
             activeTabId    = null,
             recoveryEntries = emptyList(),
         ) }
-        projectRepository.upsert(Project(name = name, uri = treeUriString))
+        projectRepository.upsert(
+            Project(
+                name = displayName,
+                uri = treeUriString,
+                lastOpenedMs = openedAt,
+                createdMs = registeredProject?.createdMs ?: openedAt,
+            ),
+        )
         _uiState.update { it.copy(recentProjects = projectRepository.getAll()) }
+        refreshProjectMetadata()
         val nodes = safRepository.listChildren(treeUriString)
         _uiState.update { it.copy(fileTree = nodes.sortedForTree()) }
 
@@ -459,6 +473,29 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
         }
         if (_uiState.value.activeTabId == null) {
             _uiState.value.openTabs.firstOrNull()?.id?.let(::selectTab)
+        }
+    }
+
+    fun refreshProjectMetadata() {
+        viewModelScope.launch {
+            val projects = projectRepository.getAll()
+            _uiState.update { it.copy(projectDetailsByUri = emptyMap()) }
+            val details = projects.mapNotNull { project ->
+                val metadata = safRepository.projectMetadata(project.uri) ?: return@mapNotNull null
+                project.uri to ProjectDetails(
+                    project = project,
+                    creationTimeMs = metadata.creationTimeMs ?: project.createdMs,
+                    lastModifiedTimeMs = metadata.lastModifiedTimeMs,
+                    storageProvider = metadata.storageProvider,
+                    storagePath = metadata.storagePath,
+                    fileCount = metadata.fileCount,
+                    folderCount = metadata.folderCount,
+                    totalBytes = metadata.totalBytes,
+                    languageBytes = metadata.languageBytes,
+                    git = metadata.git,
+                )
+            }.toMap()
+            _uiState.update { it.copy(projectDetailsByUri = details) }
         }
     }
 
@@ -517,18 +554,185 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
      * Does NOT rename the filesystem folder.
      */
     fun renameProjectInRegistry(uri: String, newName: String) {
-        projectRepository.upsert(Project(name = newName, uri = uri))
+        val trimmed = newName.trim()
+        if (trimmed.isEmpty()) {
+            _uiState.update { it.copy(statusMessage = "Project name cannot be empty") }
+            return
+        }
+        val existing = projectRepository.getAll().firstOrNull { it.uri == uri }
+        projectRepository.upsert(
+            existing?.copy(name = trimmed) ?: Project(name = trimmed, uri = uri),
+        )
+        if (_uiState.value.projectRootUri == uri) {
+            _uiState.update { it.copy(projectName = trimmed) }
+        }
         _uiState.update { it.copy(recentProjects = projectRepository.getAll()) }
+        refreshProjectMetadata()
     }
 
-    /** Placeholder — project duplication will be implemented in a later phase. */
+    /**
+     * Duplicate a project into a user-selected destination directory.
+     * The destination folder is supplied by Android's document-tree picker.
+     */
     fun duplicateProject(uri: String) {
-        _uiState.update { it.copy(statusMessage = "Duplicate project not yet implemented") }
+        _uiState.update { it.copy(statusMessage = "Choose a destination folder to duplicate the project") }
+    }
+
+    fun duplicateProject(uri: String, targetParentUri: String) {
+        viewModelScope.launch {
+            when (safRepository.isSameOrDescendant(uri, targetParentUri)) {
+                true -> {
+                    _uiState.update { it.copy(statusMessage = "A project cannot be duplicated inside itself") }
+                    return@launch
+                }
+                null -> {
+                    _uiState.update { it.copy(statusMessage = "Could not validate the destination folder") }
+                    return@launch
+                }
+                false -> Unit
+            }
+            if (uri == targetParentUri) {
+                return@launch
+            }
+            val source = projectRepository.getAll().firstOrNull { it.uri == uri }
+            val baseName = source?.name ?: extractProjectName(uri)
+            val targetName = nextAvailableProjectName(targetParentUri, "$baseName Copy")
+                ?: run {
+                    _uiState.update { it.copy(statusMessage = "Could not inspect the destination folder") }
+                    return@launch
+                }
+            when (val result = safRepository.copyDocumentWithExactName(uri, targetParentUri, targetName)) {
+                is SafeMutationResult.Created -> {
+                    projectRepository.upsert(
+                        Project(
+                            name = targetName,
+                            uri = result.documentUri,
+                            lastOpenedMs = System.currentTimeMillis(),
+                        ),
+                    )
+                    _uiState.update {
+                        it.copy(
+                            recentProjects = projectRepository.getAll(),
+                            statusMessage = "Duplicated project as $targetName",
+                        )
+                    }
+                    refreshProjectMetadata()
+                }
+                else -> _uiState.update {
+                    it.copy(statusMessage = "Duplicate failed: ${projectMutationReason(result)}")
+                }
+            }
+        }
+    }
+
+    /**
+     * Move a project into a user-selected destination directory. The project is
+     * copied first and the original is deleted only after the copy succeeds.
+     */
+    fun moveProjectStorage(uri: String, targetParentUri: String) {
+        viewModelScope.launch {
+            when (safRepository.isSameOrDescendant(uri, targetParentUri)) {
+                true -> {
+                    _uiState.update { it.copy(statusMessage = "Choose a folder outside the project") }
+                    return@launch
+                }
+                null -> {
+                    _uiState.update { it.copy(statusMessage = "Could not validate the destination folder") }
+                    return@launch
+                }
+                false -> Unit
+            }
+            val source = projectRepository.getAll().firstOrNull { it.uri == uri }
+            val projectName = source?.name ?: extractProjectName(uri)
+            val storageName = safRepository.getDisplayName(uri) ?: projectName
+            if (uri == _uiState.value.projectRootUri && !saveDirtyTabsForProject()) return@launch
+
+            when (val copied = safRepository.copyDocumentWithExactName(uri, targetParentUri, storageName)) {
+                is SafeMutationResult.Created -> {
+                    if (!safRepository.deleteDocument(uri)) {
+                        // Keep the original as the source of truth if deletion is denied.
+                        safRepository.deleteDocument(copied.documentUri)
+                        _uiState.update {
+                            it.copy(statusMessage = "Storage path was not changed — the original could not be removed")
+                        }
+                        return@launch
+                    }
+
+                    projectRepository.remove(uri)
+                    projectRepository.upsert(
+                        Project(
+                            name = projectName,
+                            uri = copied.documentUri,
+                            lastOpenedMs = System.currentTimeMillis(),
+                            createdMs = source?.createdMs ?: System.currentTimeMillis(),
+                        ),
+                    )
+                    if (uri == _uiState.value.projectRootUri) {
+                        openProjectInternal(copied.documentUri)
+                    } else {
+                        _uiState.update { it.copy(recentProjects = projectRepository.getAll()) }
+                    }
+                    refreshProjectMetadata()
+                    _uiState.update {
+                        it.copy(statusMessage = "Moved project to $targetParentUri")
+                    }
+                }
+                else -> _uiState.update {
+                    it.copy(statusMessage = "Move failed: ${projectMutationReason(copied)}")
+                }
+            }
+        }
+    }
+
+    fun showProjectDetails(uri: String) {
+        val project = projectRepository.getAll().firstOrNull { it.uri == uri }
+            ?: Project(extractProjectName(uri), uri)
+        _uiState.update {
+            it.copy(projectDetails = null, projectDetailsLoading = true)
+        }
+        viewModelScope.launch {
+            val metadata = safRepository.projectMetadata(uri)
+            if (metadata == null) {
+                _uiState.update {
+                    it.copy(
+                        projectDetailsLoading = false,
+                        statusMessage = "Could not read project details",
+                    )
+                }
+            } else {
+                _uiState.update {
+                    it.copy(
+                        projectDetails = ProjectDetails(
+                            project = project,
+                            creationTimeMs = metadata.creationTimeMs ?: project.createdMs,
+                            lastModifiedTimeMs = metadata.lastModifiedTimeMs,
+                            storageProvider = metadata.storageProvider,
+                            storagePath = metadata.storagePath,
+                            fileCount = metadata.fileCount,
+                            folderCount = metadata.folderCount,
+                            totalBytes = metadata.totalBytes,
+                            languageBytes = metadata.languageBytes,
+                            git = metadata.git,
+                        ),
+                        projectDetailsLoading = false,
+                    )
+                }
+            }
+        }
+    }
+
+    fun dismissProjectDetails() {
+        _uiState.update { it.copy(projectDetails = null, projectDetailsLoading = false) }
     }
 
     fun removeProjectFromRegistry(uri: String) {
         projectRepository.remove(uri)
-        _uiState.update { it.copy(recentProjects = projectRepository.getAll()) }
+        _uiState.update {
+            it.copy(
+                recentProjects = projectRepository.getAll(),
+                projectDetailsByUri = it.projectDetailsByUri - uri,
+            )
+        }
     }
 
     fun closeCurrentProject() {
@@ -717,14 +921,44 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** Placeholder — ZIP export will be implemented in a later phase. */
     fun exportDirectory(node: FileNode) {
-        _uiState.update { it.copy(statusMessage = "Export not yet implemented") }
+        _uiState.update {
+            it.copy(statusMessage = "Choose a destination file to export ${node.displayName}")
+        }
     }
 
-    /** Placeholder — ZIP export will be implemented in a later phase. */
     fun exportProject() {
-        _uiState.update { it.copy(statusMessage = "Export not yet implemented") }
+        _uiState.update { it.copy(statusMessage = "Choose a destination file to export the project") }
+    }
+
+    fun exportProject(projectUri: String, destinationUri: String) {
+        viewModelScope.launch {
+            val result = safRepository.exportZip(projectUri, destinationUri)
+            _uiState.update {
+                it.copy(
+                    statusMessage = if (result == null) {
+                        "Export failed"
+                    } else {
+                        "Exported ${result.fileCount} file(s) (${formatBytes(result.totalBytes)})",
+                    },
+                )
+            }
+        }
+    }
+
+    fun exportDirectory(node: FileNode, destinationUri: String) {
+        viewModelScope.launch {
+            val result = safRepository.exportZip(node.documentUri, destinationUri)
+            _uiState.update {
+                it.copy(
+                    statusMessage = if (result == null) {
+                        "Export failed for ${node.displayName}"
+                    } else {
+                        "Exported ${node.displayName} (${result.fileCount} file(s))",
+                    },
+                )
+            }
+        }
     }
 
     // ── Editor tabs ────────────────────────────────────────────────────────
@@ -2024,6 +2258,40 @@ ul,ol{padding-left:2em}
         replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
 
     // ── Private helpers ────────────────────────────────────────────────────
+
+    private suspend fun nextAvailableProjectName(
+        targetParentUri: String,
+        baseName: String,
+    ): String? {
+        val children = when (val inspection = safRepository.inspectChildren(targetParentUri)) {
+            is ChildrenInspectionResult.Success -> inspection.children
+            is ChildrenInspectionResult.Failed -> return null
+        }
+        fun occupied(candidate: String): Boolean =
+            children.any { it.isDirectory && it.displayName.equals(candidate, ignoreCase = true) }
+
+        if (!occupied(baseName)) return baseName
+        for (index in 2..100) {
+            val candidate = "$baseName $index"
+            if (!occupied(candidate)) return candidate
+        }
+        return null
+    }
+
+    private fun projectMutationReason(result: SafeMutationResult): String =
+        when (result) {
+            SafeMutationResult.Duplicate -> "a project with that name already exists"
+            SafeMutationResult.InspectionFailed -> "the destination could not be inspected"
+            SafeMutationResult.Failed -> "the storage provider rejected the operation"
+            is SafeMutationResult.Created -> "unexpected result"
+        }
+
+    private fun formatBytes(bytes: Long): String = when {
+        bytes < 1024L -> "$bytes B"
+        bytes < 1024L * 1024L -> "${bytes / 1024L} KB"
+        bytes < 1024L * 1024L * 1024L -> "${bytes / (1024L * 1024L)} MB"
+        else -> "${bytes / (1024L * 1024L * 1024L)} GB"
+    }
 
     private fun extractProjectName(treeUriString: String): String = try {
         Uri.decode(treeUriString).substringAfterLast('/').ifEmpty { "Project" }

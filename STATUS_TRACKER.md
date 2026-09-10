@@ -1,7 +1,7 @@
 # STATUS_TRACKER.md — Android IDE
 
-**Current Date:** 2026-06-13
-**Active Phase:** Phase 1 — Correction Pass #2 (in planning)
+**Current Date:** 2026-09-09
+**Active Phase:** Phase 1 — Foundation
 **Stack:** Kotlin 1.9.22 + Jetpack Compose + Material3 + Monaco WebView
 
 ---
@@ -17,6 +17,27 @@
 | Phase 3 — Git | Not Started | 0 / 8 |
 | Phase 4 — Language Intelligence | Not Started | 0 / 6 |
 | Phase 5 — Extensions | Not Started | 0 / 5 |
+
+---
+
+## Project Management — COMPLETE ✅
+
+This feature set covers the project registry and project-level storage workflows:
+
+- Search and sort the project list
+- Search by project name, URI, or resolved storage path
+- Deterministic sorting by recently opened, name A–Z/Z–A, last modified,
+  creation date, total size, and file count
+- Project details with creation/modified times, provider/path, storage statistics,
+  source-language byte ratios, and Git branch/remote/commit metadata
+- Registry rename and removal
+- Real project duplication
+- ZIP export for projects and folders
+- Moving an existing project to a different storage location
+
+Implementation is being kept within the existing Compose, ViewModel, repository, and SAF
+boundaries. Destination folders are selected through Android's document-tree picker so the
+same workflow works with content-provider URIs and app-local file URIs.
 
 ---
 

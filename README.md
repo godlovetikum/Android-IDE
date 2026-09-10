@@ -135,6 +135,8 @@ Message types:
 - Editor tab lifecycle (open, select, close)
 - File save (explicit and Ctrl+S triggered)
 - Cursor position and language state
+- Project registry actions, searchable and sortable project metadata/details,
+  export, duplication, and storage migration
 
 **Dependencies:** `editor/`, `saf/`
 
@@ -148,6 +150,7 @@ Message types:
 - SAF picker integration (`rememberLauncherForActivityResult`)
 - Monaco `WebView` lifecycle via `remember {}` in `EditorPane`
 - Live preview WebView (conditionally shown alongside editor)
+- Searchable/sortable project management screen and project action dialogs
 
 **Dependencies:** `viewmodel/`, `editor/`
 
@@ -188,6 +191,7 @@ Deliverables:
 - [x] Launcher icon (adaptive icon, API 26+)
 - [x] GitHub Actions CI (lint + debug APK, release APK)
 - [x] Monaco offline bundle (`fetch-monaco.sh`, git-ignored `vs/`)
+- [x] Project management: search/sort/details, ZIP export, duplication, and storage migration
 
 ---
 

@@ -24,6 +24,7 @@ data class FileNode(
     val displayName: String,
     val mimeType: String,
     val size: Long = 0L,
+    val lastModifiedMs: Long? = null,
     val parentDocumentUri: String? = null,
     val children: List<FileNode> = emptyList(),
     val isExpanded: Boolean = false,

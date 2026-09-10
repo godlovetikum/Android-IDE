@@ -82,6 +82,10 @@ fun IdeScreen(
     uiState: IdeUiState,
     onOpenProjectFolder: () -> Unit,
     onCreateBlankProject: () -> Unit,
+    onExportProject: (String) -> Unit,
+    onDuplicateProject: (String) -> Unit,
+    onMoveProject: (String) -> Unit,
+    onExportDirectory: (FileNode) -> Unit,
     onSaveAs: () -> Unit,
     onImportFilesAt: (FileNode) -> Unit,
     onImportFilesAtRoot: () -> Unit,
@@ -190,14 +194,20 @@ fun IdeScreen(
                 onCutNode                = ideViewModel::cutFileNode,
                 onPasteInto              = ideViewModel::pasteFileNode,
                 onImportFilesAt          = onImportFilesAt,
-                onExportDirectory        = ideViewModel::exportDirectory,
+                onExportDirectory        = onExportDirectory,
                 onNewFileAtRoot          = { ideViewModel.showCreateFileDialog(rootNode) },
                 onNewFolderAtRoot        = { ideViewModel.showCreateFolderDialog(rootNode) },
                 onImportFilesAtRoot      = onImportFilesAtRoot,
-                onExportProject          = ideViewModel::exportProject,
+                onExportProject          = {
+                    uiState.projectRootUri?.let(onExportProject)
+                },
                 onPasteAtRoot            = { ideViewModel.pasteFileNode(rootNode) },
                 onRefresh                = ideViewModel::refreshProject,
-                onRenameProject          = { ideViewModel.noteStatusMessage("Rename Project available in Phase 2") },
+                onRenameProject          = {
+                    uiState.projectRootUri?.let { uri ->
+                        ideViewModel.renameProjectInRegistry(uri, uiState.projectName)
+                    }
+                },
                 onRemoveProject          = {
                     uiState.projectRootUri?.let { ideViewModel.requestRemoveProject(it) }
                 },
@@ -254,8 +264,17 @@ fun IdeScreen(
                                 onNewFolder        = { ideViewModel.showCreateFolderDialog(rootNode) },
                                 onImportFiles      = onImportFilesAtRoot,
                                 onRefresh          = ideViewModel::refreshProject,
-                                onExportProject    = ideViewModel::exportProject,
-                                onRenameProject    = { ideViewModel.noteStatusMessage("Rename Project available in Phase 2") },
+                                onExportProject    = {
+                                    uiState.projectRootUri?.let(onExportProject)
+                                },
+                                onMoveProject      = {
+                                    uiState.projectRootUri?.let(onMoveProject)
+                                },
+                                onRenameProject    = {
+                                    ideViewModel.noteStatusMessage(
+                                        "Rename the project from the Projects screen",
+                                    )
+                                },
                                 onRemoveProject    = {
                                     uiState.projectRootUri?.let { ideViewModel.requestRemoveProject(it) }
                                 },
@@ -340,6 +359,9 @@ fun IdeScreen(
                         ideViewModel         = ideViewModel,
                         onOpenProjectFolder  = onOpenProjectFolder,
                         onCreateBlankProject = onCreateBlankProject,
+                        onExportProject      = onExportProject,
+                        onDuplicateProject   = onDuplicateProject,
+                        onMoveProject        = onMoveProject,
                         onNavigationIconClick = onToggleSidebar,
                     )
                 }
@@ -724,6 +746,7 @@ private fun FilesHeader(
     onImportFiles: () -> Unit,
     onRefresh: () -> Unit,
     onExportProject: () -> Unit,
+    onMoveProject: () -> Unit,
     onRenameProject: () -> Unit,
     onRemoveProject: () -> Unit,
 ) {
@@ -816,6 +839,10 @@ private fun FilesHeader(
                 DropdownMenuItem(
                     text    = { Text("Export Project\u2026") },
                     onClick = { menuOpen = false; onExportProject() },
+                )
+                DropdownMenuItem(
+                    text    = { Text("Move Storage\u2026") },
+                    onClick = { menuOpen = false; onMoveProject() },
                 )
                 HorizontalDivider()
                 DropdownMenuItem(
