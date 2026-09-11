@@ -60,6 +60,10 @@ data class EditorSettings(
     // ── File tree ───────────────────────────────────────────────────────────
     /** Hide the root .git folder in the file tree sidebar. */
     val hideGitFolder: Boolean       = true,
+    /** Hide the project-local .androidide metadata folder in the file tree sidebar. */
+    val hideProjectMetadataFolder: Boolean = true,
+    /** Hide the project README.md file in the file tree sidebar. */
+    val hideReadmeFile: Boolean = false,
 
     // ── UI font scaling ─────────────────────────────────────────────────────
     /**

@@ -30,6 +30,7 @@ import dev.androidide.data.model.AppTheme
 import dev.androidide.data.model.EditorSettings
 import dev.androidide.data.model.PreviewLayout
 import dev.androidide.data.model.VolumeKeyMode
+import dev.androidide.ui.theme.IdeColors
 import dev.androidide.ui.theme.LocalIdeColors
 import dev.androidide.viewmodel.IdeViewModel
 import dev.androidide.viewmodel.model.IdeUiState
@@ -474,6 +475,22 @@ fun SettingsScreen(
                         }
                         Switch(checked = s.hideGitFolder, onCheckedChange = { ideViewModel.setEditorSettings(s.copy(hideGitFolder = it)) })
                     }
+                    HorizontalDivider(color = colors.separator)
+                    VisibilitySettingRow(
+                        title = "Hide .androidide Metadata",
+                        description = "Hide project-local workspace metadata from the file tree",
+                        checked = s.hideProjectMetadataFolder,
+                        onCheckedChange = { ideViewModel.setEditorSettings(s.copy(hideProjectMetadataFolder = it)) },
+                        colors = colors,
+                    )
+                    HorizontalDivider(color = colors.separator)
+                    VisibilitySettingRow(
+                        title = "Hide README.md",
+                        description = "Keep the project README out of the file tree when preferred",
+                        checked = s.hideReadmeFile,
+                        onCheckedChange = { ideViewModel.setEditorSettings(s.copy(hideReadmeFile = it)) },
+                        colors = colors,
+                    )
                 }
             }
 
@@ -577,6 +594,28 @@ fun SettingsScreen(
             ComingSoonItem(icon = Icons.Default.MergeType, title = "Git",        description = "Commit, push, pull, and branch directly in the editor.")
             ComingSoonItem(icon = Icons.Default.Extension, title = "Extensions", description = "Install language servers and plugins.")
         }
+    }
+}
+
+@Composable
+private fun VisibilitySettingRow(
+    title: String,
+    description: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    colors: IdeColors,
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .selectable(selected = checked, role = Role.Switch, onClick = { onCheckedChange(!checked) }),
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(title, color = colors.textPrimary, style = MaterialTheme.typography.bodyMedium)
+            Text(description, color = colors.textSecondary, style = MaterialTheme.typography.bodySmall)
+        }
+        Switch(checked = checked, onCheckedChange = onCheckedChange)
     }
 }
 

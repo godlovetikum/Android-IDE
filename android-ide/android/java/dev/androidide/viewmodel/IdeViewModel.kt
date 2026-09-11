@@ -313,7 +313,8 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
     // ── Editor settings ─────────────────────────────────────────────────────
 
     fun setEditorSettings(settings: EditorSettings) {
-        val previousTheme = _uiState.value.editorSettings.editorTheme
+        val previousSettings = _uiState.value.editorSettings
+        val previousTheme = previousSettings.editorTheme
         editorSettingsRepo.setEditorSettings(settings)
         _uiState.update { it.copy(editorSettings = settings) }
         sendEditorCommand(EditorOutbound.SetEditorOptions(
@@ -330,6 +331,12 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
         ))
         if (_uiState.value.isEditorReady && settings.editorTheme != previousTheme) {
             sendEditorCommand(EditorOutbound.SetTheme(resolveMonacoTheme()))
+        }
+        if (settings.hideGitFolder != previousSettings.hideGitFolder ||
+            settings.hideProjectMetadataFolder != previousSettings.hideProjectMetadataFolder ||
+            settings.hideReadmeFile != previousSettings.hideReadmeFile
+        ) {
+            refreshProject()
         }
     }
 
@@ -472,7 +479,7 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
         )
         _uiState.update { it.copy(recentProjects = projectRepository.getAll()) }
         refreshProjectMetadata()
-        val nodes = safRepository.listChildren(treeUriString)
+        val nodes = visibleFileTreeChildren(treeUriString)
         _uiState.update { it.copy(fileTree = nodes.sortedForTree()) }
 
         // Restore this project's workspace state.
@@ -797,13 +804,25 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch { refreshProjectNow() }
     }
 
+    private suspend fun visibleFileTreeChildren(parentUri: String): List<FileNode> =
+        safRepository.listChildren(parentUri).filterNot { node ->
+            (node.displayName == ".git" && _uiState.value.editorSettings.hideGitFolder) ||
+                (node.displayName == ".androidide" && _uiState.value.editorSettings.hideProjectMetadataFolder) ||
+                (node.displayName.equals("README.md", ignoreCase = true) && _uiState.value.editorSettings.hideReadmeFile)
+        }
+
     private suspend fun refreshProjectNow() {
         val rootUri = _uiState.value.projectRootUri ?: return
         _uiState.update { it.copy(fileTreeLoading = true) }
         try {
             when (val inspection = safRepository.inspectChildren(rootUri)) {
                 is ChildrenInspectionResult.Success -> {
-                    val refreshed = inspection.children.sortedForTree()
+                    val settings = _uiState.value.editorSettings
+                    val refreshed = inspection.children.filterNot { node ->
+                        (node.displayName == ".git" && settings.hideGitFolder) ||
+                            (node.displayName == ".androidide" && settings.hideProjectMetadataFolder) ||
+                            (node.displayName.equals("README.md", ignoreCase = true) && settings.hideReadmeFile)
+                    }.sortedForTree()
                     val merged = mergeRefreshedTree(_uiState.value.fileTree, refreshed)
                     _uiState.update { it.copy(fileTree = merged) }
                 }
@@ -845,7 +864,7 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
         val node = _uiState.value.fileTree.findNode(documentUri)
         if (node != null && node.isExpanded && node.isDirectory && node.children.isEmpty()) {
             viewModelScope.launch {
-                val children = safRepository.listChildren(documentUri)
+                val children = visibleFileTreeChildren(documentUri)
                 _uiState.update { state ->
                     state.copy(fileTree = state.fileTree.setChildren(documentUri, children.sortedForTree()))
                 }
@@ -2169,7 +2188,7 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
      * live data regardless of which tree nodes are expanded.
      */
     suspend fun loadNavChildren(parentUri: String): List<FileNode> =
-        safRepository.listChildren(parentUri)
+        visibleFileTreeChildren(parentUri)
 
     // ── F004: Project-relative Save As ────────────────────────────────────────
 

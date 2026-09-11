@@ -10,7 +10,7 @@
 
 | Phase | Status | Notes |
 |-------|--------|-------|
-| Phase 1 — Foundation | **COMPLETE** ✅ | All deliverables verified |
+| Phase 1 — Foundation | **Foundation complete; hardening open** | Core editor/project workflows exist; production gate remains open |
 | Phase 1 — Correction Pass #1 (C-series) | **COMPLETE** ✅ | 18 items, completed 2026-06-13 |
 | Phase 1 — Correction Pass #2 (F-series) | **COMPLETE** ✅ | All 26 F-series defects implemented across 2 sessions |
 | Phase 2 — Linux Runtime | Not Started | 0 / 5 |
@@ -20,7 +20,7 @@
 
 ---
 
-## Project Management — COMPLETE ✅
+## Project Management — FUNCTIONAL; PRODUCTION HARDENING OPEN
 
 This feature set covers the project registry and project-level storage workflows:
 
@@ -34,6 +34,8 @@ This feature set covers the project registry and project-level storage workflows
 - Real project duplication
 - ZIP export for projects and folders
 - Moving an existing project to a different storage location
+- Configurable visibility for `.git`, `.androidide`, and `README.md`
+- Project-local `.androidide/project.json` and `.androidide/workspace.json`
 
 Implementation is being kept within the existing Compose, ViewModel, repository, and SAF
 boundaries. Destination folders are selected through Android's document-tree picker so the
@@ -337,5 +339,7 @@ The file context menu has "Select" which enters multi-select mode for files. The
 **2026-06-13 (Pass 1):** Phase 1 UI Correction Pass #1. 18 C-series items completed. Key items: preview crash (BUG-006/018/019), base64→loadDataWithBaseURL (BUG-007), drawer gesture (BUG-008), sidebar restructure, keyboard toolbar redesign (BUG-012/024), editor focus/IME (BUG-013/025), multi-select clipboard, session restore, temporary tabs, text selection guard (C016).
 
 **2026-06-13 (Pass 2 planning):** Full re-audit of all source files. 26 defects catalogued across crash-level, core workflow, sidebar/UI, Monaco settings, CI, and data integrity categories. Three new defects identified this session: F022 (Rename Project dead button), F023 (Duplicate missing from file menu), F024 (text selection — click handler missing guard), F025 (full-path duplicate verification). Root cause analysis complete for all. No code edits yet.
+
+**2026-09-12 (Production-readiness review):** Foundation functionality is present, but Phase 1 is not yet production-complete. The remaining gate includes device/provider matrix validation, permission-loss recovery, robust mutation rollback, project metadata migration, workspace restoration guarantees, and release build validation. Terminal, persistent process hosting, full Git mutation workflows, and LSP remain later phases rather than hidden Phase 1 requirements.
 
 Last updated: 2026-06-13

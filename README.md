@@ -178,7 +178,7 @@ Message types:
 ### Phase 1 — Foundation
 **Goal:** User can create projects, open projects, browse files, and edit files.
 
-**Status: COMPLETE ✅**
+**Status: Foundation complete; production-readiness hardening in progress**
 
 Deliverables:
 - [x] Compose application shell (MainActivity, IdeScreen, adaptive layout)
@@ -192,6 +192,11 @@ Deliverables:
 - [x] GitHub Actions CI (lint + debug APK, release APK)
 - [x] Monaco offline bundle (`fetch-monaco.sh`, git-ignored `vs/`)
 - [x] Project management: search/sort/details, ZIP export, duplication, and storage migration
+- [x] Project-local `.androidide/project.json` and `.androidide/workspace.json` metadata
+- [x] Configurable file-tree visibility for `.git`, `.androidide`, and `README.md`
+- [ ] Production-readiness hardening: verified mutation recovery, permission-loss recovery, workspace migration, and release-device validation
+- [ ] Integrated terminal and persistent background process sessions
+- [ ] Integrated Git mutations, credentials, history, and diff review
 
 ---
 
