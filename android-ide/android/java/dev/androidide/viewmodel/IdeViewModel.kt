@@ -690,7 +690,11 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
         val project = projectRepository.getAll().firstOrNull { it.uri == uri }
             ?: Project(extractProjectName(uri), uri)
         _uiState.update {
-            it.copy(projectDetails = null, projectDetailsLoading = true)
+            it.copy(
+                projectDetails = null,
+                projectDetailsLoading = true,
+                currentScreen = AppScreen.PROJECT_DETAILS,
+            )
         }
         viewModelScope.launch {
             val metadata = safRepository.projectMetadata(uri)
@@ -724,7 +728,13 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun dismissProjectDetails() {
-        _uiState.update { it.copy(projectDetails = null, projectDetailsLoading = false) }
+        _uiState.update {
+            it.copy(
+                projectDetails = null,
+                projectDetailsLoading = false,
+                currentScreen = AppScreen.PROJECTS,
+            )
+        }
     }
 
     fun removeProjectFromRegistry(uri: String) {

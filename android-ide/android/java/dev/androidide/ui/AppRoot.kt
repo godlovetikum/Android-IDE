@@ -45,7 +45,7 @@ fun AppRoot(ideViewModel: IdeViewModel = viewModel()) {
     var importTargetDirUri      by remember { mutableStateOf("") }
     var showCreateProjectDialog by remember { mutableStateOf(false) }
     var createProjectName       by remember { mutableStateOf("") }
-    var pendingCreateProjectName by remember { mutableStateOf<String?>(null) }
+    var createDestinationUri    by remember { mutableStateOf<String?>(null) }
     var pendingExportSourceUri  by remember { mutableStateOf<String?>(null) }
     var pendingDestinationUri   by remember { mutableStateOf<String?>(null) }
     var pendingDestinationAction by remember { mutableStateOf<ProjectDestinationAction?>(null) }
@@ -67,14 +67,12 @@ fun AppRoot(ideViewModel: IdeViewModel = viewModel()) {
     val createProjectDestinationLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocumentTree()
     ) { uri ->
-        val name = pendingCreateProjectName
-        pendingCreateProjectName = null
-        if (uri != null && name != null) {
+        if (uri != null) {
             context.contentResolver.takePersistableUriPermission(
                 uri,
                 Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
             )
-            ideViewModel.createBlankProject(name, uri.toString())
+            createDestinationUri = uri.toString()
         }
     }
 
@@ -162,6 +160,7 @@ fun AppRoot(ideViewModel: IdeViewModel = viewModel()) {
                     onOpenProjectFolder = { openProjectLauncher.launch(null) },
                     onCreateBlankProject = { suggestedName ->
                         createProjectName       = suggestedName?.takeIf { it.isNotBlank() } ?: "MyProject"
+                        createDestinationUri   = null
                         showCreateProjectDialog = true
                     },
                     onExportProject      = { uri -> launchExport(uri, "project") },
@@ -203,23 +202,26 @@ fun AppRoot(ideViewModel: IdeViewModel = viewModel()) {
                         placeholder   = { Text("MyProject") },
                     )
                     Text(
-                        text = "You will choose a destination folder after selecting Create.",
+                        text = createDestinationUri?.let { "Destination selected. The project folder will be created there." }
+                            ?: "Choose a destination folder before creating the project.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = androidx.compose.ui.Modifier.padding(top = 8.dp),
                     )
+                    TextButton(onClick = { createProjectDestinationLauncher.launch(null) }) {
+                        Text(if (createDestinationUri == null) "Choose destination" else "Change destination")
+                    }
                 }
             },
             confirmButton = {
                 TextButton(
                     onClick = {
-                        if (createProjectName.isNotBlank()) {
+                        if (createProjectName.isNotBlank() && createDestinationUri != null) {
                             showCreateProjectDialog = false
-                            pendingCreateProjectName = createProjectName.trim()
-                            createProjectDestinationLauncher.launch(null)
+                            ideViewModel.createBlankProject(createProjectName.trim(), createDestinationUri!!)
                         }
                     },
-                    enabled = createProjectName.isNotBlank(),
+                    enabled = createProjectName.isNotBlank() && createDestinationUri != null,
                 ) { Text("Create") }
             },
             dismissButton = {

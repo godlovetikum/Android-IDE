@@ -356,83 +356,6 @@ fun ProjectsScreen(
         )
     }
 
-    if (uiState.projectDetailsLoading) {
-        AlertDialog(
-            onDismissRequest = ideViewModel::dismissProjectDetails,
-            title = { Text("Project details") },
-            text = { CircularProgressIndicator() },
-            confirmButton = {
-                TextButton(onClick = ideViewModel::dismissProjectDetails) { Text("Cancel") }
-            },
-        )
-    } else {
-        uiState.projectDetails?.let { details ->
-            AlertDialog(
-                onDismissRequest = ideViewModel::dismissProjectDetails,
-                title = { Text(details.project.name) },
-                text = {
-                    Column(
-                        modifier = Modifier.verticalScroll(rememberScrollState()),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        DetailLine("Storage provider", details.storageProvider)
-                        DetailLine("Location", details.storagePath)
-                        DetailLine("Last opened", formatRelativeDate(details.project.lastOpenedMs))
-                        DetailLine("Created", formatDateTime(details.creationTimeMs))
-                        DetailLine("Last modified", formatDateTime(details.lastModifiedTimeMs))
-                        DetailLine("Files", details.fileCount.toString())
-                        DetailLine("Folders", details.folderCount.toString())
-                        DetailLine("Size", formatBytes(details.totalBytes))
-                        Text(
-                            "Source languages",
-                            style = MaterialTheme.typography.titleSmall,
-                        )
-                        val languageTotal = details.languageBytes.values.sum()
-                        if (details.languageBytes.isEmpty()) {
-                            Text("No source files detected", style = MaterialTheme.typography.bodySmall)
-                        } else {
-                            details.languageBytes.entries
-                                .sortedByDescending { it.value }
-                                .forEach { (language, bytes) ->
-                                    val percentage = if (languageTotal == 0L) {
-                                        0
-                                    } else {
-                                        ((bytes * 100L) / languageTotal).toInt()
-                                    }
-                                    DetailLine(
-                                        language,
-                                        "$percentage% • ${formatBytes(bytes)}",
-                                    )
-                                }
-                        }
-                        Text("Git", style = MaterialTheme.typography.titleSmall)
-                        details.git?.let { git ->
-                            DetailLine("Branch", git.currentBranch ?: "Detached HEAD")
-                            DetailLine("HEAD", git.headCommit?.take(12) ?: "Unavailable")
-                            DetailLine(
-                                "Branches",
-                                if (git.branches.isEmpty()) "None detected" else git.branches.joinToString(", "),
-                            )
-                            if (git.remotes.isEmpty()) {
-                                DetailLine("Remotes", "None configured")
-                            } else {
-                                git.remotes.forEach { remote ->
-                                    DetailLine("Remote ${remote.name}", remote.url)
-                                }
-                            }
-                            DetailLine("Latest commit", git.latestCommitMessage ?: "Unavailable")
-                            git.latestCommitTimeMs?.let {
-                                DetailLine("Commit time", formatDateTime(it))
-                            }
-                        } ?: Text("Not a Git repository", style = MaterialTheme.typography.bodySmall)
-                    }
-                },
-                confirmButton = {
-                    TextButton(onClick = ideViewModel::dismissProjectDetails) { Text("Close") }
-                },
-            )
-        }
-    }
 }
 
 @Composable
@@ -476,15 +399,19 @@ private fun ProjectItem(
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
-                text  = buildString {
-                    append("Last opened ${formatRelativeDate(project.lastOpenedMs)}")
-                    details?.let {
-                        append(" • ${it.fileCount} files • ${formatBytes(it.totalBytes)}")
-                    }
-                },
+                text  = details?.storagePath ?: project.uri,
                 style = MaterialTheme.typography.bodySmall,
                 color = colors.textSecondary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
+            details?.let {
+                Text(
+                    text = "Size: ${formatBytes(it.totalBytes)}   Files: ${it.fileCount}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = colors.textSecondary,
+                )
+            }
         }
         if (isActive) {
             Spacer(Modifier.width(8.dp))
@@ -495,21 +422,15 @@ private fun ProjectItem(
             )
         }
         Spacer(Modifier.width(4.dp))
-
-        // ••• overflow menu
-        Box {
-            IconButton(onClick = { menuOpen = true }) {
-                Icon(
-                    imageVector        = Icons.Default.MoreVert,
-                    contentDescription = "Project options",
-                    tint               = colors.textDisabled,
-                    modifier           = Modifier.size(18.dp),
-                )
-            }
-            DropdownMenu(
-                expanded         = menuOpen,
-                onDismissRequest = { menuOpen = false },
-            ) {
+        Column(horizontalAlignment = Alignment.End) {
+            Box {
+                IconButton(onClick = { menuOpen = true }) {
+                    Icon(Icons.Default.MoreVert, "Project options", tint = colors.textDisabled, modifier = Modifier.size(18.dp))
+                }
+                DropdownMenu(
+                    expanded         = menuOpen,
+                    onDismissRequest = { menuOpen = false },
+                ) {
                 DropdownMenuItem(
                     text    = { Text("Details") },
                     onClick = { menuOpen = false; onDetails() },
@@ -535,7 +456,13 @@ private fun ProjectItem(
                     text    = { Text("Remove From Registry") },
                     onClick = { menuOpen = false; onRemove() },
                 )
+                }
             }
+            Text(
+                text = "Last opened ${formatRelativeDate(project.lastOpenedMs)}",
+                style = MaterialTheme.typography.labelSmall,
+                color = colors.textSecondary,
+            )
         }
     }
     HorizontalDivider(thickness = 1.dp, color = colors.separator)

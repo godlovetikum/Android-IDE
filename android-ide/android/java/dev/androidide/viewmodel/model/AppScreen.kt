@@ -11,6 +11,9 @@ enum class AppScreen {
     /** Monaco editor with file tree sidebar. */
     EDITOR,
 
+    /** Developer-oriented details for the selected project. */
+    PROJECT_DETAILS,
+
     /** Theme, preferences, and coming-soon feature previews. */
     SETTINGS,
 }

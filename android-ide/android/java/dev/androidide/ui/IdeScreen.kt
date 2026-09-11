@@ -61,6 +61,7 @@ import dev.androidide.ui.components.EditorTabBar
 import dev.androidide.ui.components.FileTreePanel
 import dev.androidide.ui.components.IdeStatusBar
 import dev.androidide.ui.screen.ProjectsScreen
+import dev.androidide.ui.screen.ProjectDetailsScreen
 import dev.androidide.ui.screen.SettingsScreen
 import dev.androidide.ui.theme.LocalIdeColors
 import dev.androidide.viewmodel.IdeViewModel
@@ -122,6 +123,9 @@ fun IdeScreen(
         if (!ideViewModel.requestExit()) {
             ideViewModel.navigateTo(AppScreen.PROJECTS)
         }
+    }
+    BackHandler(enabled = uiState.currentScreen == AppScreen.PROJECT_DETAILS) {
+        ideViewModel.dismissProjectDetails()
     }
 
     // ── Shared root FileNode helpers ───────────────────────────────────────
@@ -244,8 +248,12 @@ fun IdeScreen(
             ) {
                 SidebarNavPanel(
                     currentScreen      = uiState.currentScreen,
+                    hasProject         = uiState.projectRootUri != null,
                     onNavigateProjects = { closeAfter { ideViewModel.navigateTo(AppScreen.PROJECTS) } },
                     onNavigateEditor   = { closeAfter { ideViewModel.navigateTo(AppScreen.EDITOR) } },
+                    onNavigateDetails  = {
+                        uiState.projectRootUri?.let { closeAfter { ideViewModel.showProjectDetails(it) } }
+                    },
                     onNavigateSettings = { closeAfter { ideViewModel.navigateTo(AppScreen.SETTINGS) } },
                 )
                 HorizontalDivider(thickness = 1.dp, color = colors.separator)
@@ -315,6 +323,9 @@ fun IdeScreen(
                                 onCloseDrawer?.invoke()
                             },
                         )
+                    }
+                    AppScreen.PROJECT_DETAILS -> {
+                        Spacer(Modifier.weight(1f))
                     }
                 }
             }
@@ -395,6 +406,12 @@ fun IdeScreen(
                         onDuplicateProject   = onDuplicateProject,
                         onMoveProject        = onMoveProject,
                         onNavigationIconClick = onToggleSidebar,
+                    )
+                }
+                AppScreen.PROJECT_DETAILS -> {
+                    ProjectDetailsScreen(
+                        uiState = uiState,
+                        onBack = ideViewModel::dismissProjectDetails,
                     )
                 }
                 AppScreen.SETTINGS -> {
@@ -536,8 +553,10 @@ private fun EditorContent(
 @Composable
 private fun SidebarNavPanel(
     currentScreen: AppScreen,
+    hasProject: Boolean,
     onNavigateProjects: () -> Unit,
     onNavigateEditor: () -> Unit,
+    onNavigateDetails: () -> Unit,
     onNavigateSettings: () -> Unit,
 ) {
     val colors = LocalIdeColors.current
@@ -570,15 +589,15 @@ private fun SidebarNavPanel(
                 modifier = Modifier.weight(1f),
             )
         }
-        // ── Row 2: Git, Terminal (disabled — Phase 2 / Phase 3) ───────────
+        // ── Row 2: Project details, Terminal ────────────────────────────────
         Row(modifier = Modifier.fillMaxWidth()) {
             Spacer(Modifier.weight(0.5f))
             NavCell(
                 icon     = Icons.Default.MergeType,
-                label    = "Git",
-                selected = false,
-                enabled  = false,
-                onClick  = {},
+                label    = "Details",
+                selected = currentScreen == AppScreen.PROJECT_DETAILS,
+                enabled  = hasProject,
+                onClick  = onNavigateDetails,
                 modifier = Modifier.weight(1f),
             )
             NavCell(
