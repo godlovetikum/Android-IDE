@@ -24,6 +24,7 @@ import android.util.Log
 import dev.androidide.data.model.GitDetails
 import dev.androidide.data.model.GitRemote
 import dev.androidide.editor.EditorLanguageRegistry
+import dev.androidide.editor.FileIconKind
 import dev.androidide.viewmodel.model.FileNode
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext

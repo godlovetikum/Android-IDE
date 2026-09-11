@@ -12,7 +12,9 @@ android/assets/editor/vs/
 # ── Android Gradle build outputs ─────────────────────────────────────────────
 android/app/build/
 android/.gradle/
-android/gradle/wrapper/gradle-wrapper.jar
+# The wrapper JAR is committed so APK workflows can invoke ./gradlew directly.
+# Keep this negation explicit if a broader ignore rule is added later.
+!android/gradle/wrapper/gradle-wrapper.jar
 
 # ── IntelliJ / Android Studio ────────────────────────────────────────────────
 .idea/

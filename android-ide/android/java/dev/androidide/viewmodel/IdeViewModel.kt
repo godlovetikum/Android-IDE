@@ -939,7 +939,7 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
                     statusMessage = if (result == null) {
                         "Export failed"
                     } else {
-                        "Exported ${result.fileCount} file(s) (${formatBytes(result.totalBytes)})",
+                        "Exported ${result.fileCount} file(s) (${formatBytes(result.totalBytes)})"
                     },
                 )
             }
@@ -954,7 +954,7 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
                     statusMessage = if (result == null) {
                         "Export failed for ${node.displayName}"
                     } else {
-                        "Exported ${node.displayName} (${result.fileCount} file(s))",
+                        "Exported ${node.displayName} (${result.fileCount} file(s))"
                     },
                 )
             }
