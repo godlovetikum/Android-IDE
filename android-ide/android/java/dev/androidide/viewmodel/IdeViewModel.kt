@@ -633,6 +633,7 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
      */
     fun moveProjectStorage(uri: String, targetParentUri: String) {
         viewModelScope.launch {
+            _uiState.update { it.copy(statusMessage = "Moving project…") }
             when (safRepository.isSameOrDescendant(uri, targetParentUri)) {
                 true -> {
                     _uiState.update { it.copy(statusMessage = "Choose a folder outside the project") }
@@ -649,7 +650,15 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
             val storageName = safRepository.getDisplayName(uri) ?: projectName
             if (uri == _uiState.value.projectRootUri && !saveDirtyTabsForProject()) return@launch
 
-            when (val copied = safRepository.copyDocumentWithExactName(uri, targetParentUri, storageName)) {
+            val copied = runCatching {
+                safRepository.copyDocumentWithExactName(uri, targetParentUri, storageName)
+            }.getOrElse {
+                _uiState.update {
+                    it.copy(statusMessage = "Move failed: ${it.message ?: "storage provider error"}")
+                }
+                return@launch
+            }
+            when (copied) {
                 is SafeMutationResult.Created -> {
                     if (!safRepository.deleteDocument(uri)) {
                         // Keep the original as the source of truth if deletion is denied.
@@ -1781,14 +1790,22 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
     fun confirmRemoveProject() {
         val uri = _uiState.value.confirmRemoveProjectUri ?: return
         projectRepository.remove(uri)
+        val wasCurrent = _uiState.value.projectRootUri == uri
+        if (wasCurrent) {
+            _uiState.value.openTabs.forEach { pendingContent.remove(it.id) }
+            crashRecovery.clearProject(uri)
+        }
         _uiState.update { state ->
-            val wasCurrent = state.projectRootUri == uri
             state.copy(
                 recentProjects          = projectRepository.getAll(),
                 confirmRemoveProjectUri = null,
                 projectRootUri          = if (wasCurrent) null else state.projectRootUri,
                 projectName             = if (wasCurrent) "" else state.projectName,
                 fileTree                = if (wasCurrent) emptyList() else state.fileTree,
+                openTabs                = if (wasCurrent) emptyList() else state.openTabs,
+                activeTabId             = if (wasCurrent) null else state.activeTabId,
+                isEditorReady           = if (wasCurrent) false else state.isEditorReady,
+                currentScreen           = if (wasCurrent) AppScreen.PROJECTS else state.currentScreen,
                 statusMessage           = "Project removed",
             )
         }

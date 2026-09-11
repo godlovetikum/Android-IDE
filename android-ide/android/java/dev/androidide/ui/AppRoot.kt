@@ -163,7 +163,11 @@ fun AppRoot(ideViewModel: IdeViewModel = viewModel()) {
                         createDestinationUri   = null
                         showCreateProjectDialog = true
                     },
-                    onExportProject      = { uri -> launchExport(uri, "project") },
+                    onExportProject      = { uri ->
+                        val name = uiState.recentProjects.firstOrNull { it.uri == uri }?.name
+                            ?: "project"
+                        launchExport(uri, name)
+                    },
                     onDuplicateProject   = { uri ->
                         launchProjectDestination(uri, ProjectDestinationAction.DUPLICATE)
                     },

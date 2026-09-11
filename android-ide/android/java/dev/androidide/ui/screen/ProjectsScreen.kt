@@ -233,6 +233,14 @@ fun ProjectsScreen(
             if (uiState.projectMetadataLoading) {
                 LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
             }
+            if (uiState.statusMessage.isNotBlank()) {
+                Text(
+                    text = uiState.statusMessage,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = colors.textSecondary,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                )
+            }
             if (searchVisible) {
                 OutlinedTextField(
                     value = searchQuery,
