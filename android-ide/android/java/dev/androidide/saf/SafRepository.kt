@@ -705,7 +705,11 @@ class SafRepository(private val context: Context) {
             .filter { it.isNotBlank() && !it.startsWith("#") && !it.startsWith("^") }
             .mapNotNull { line ->
                 val parts = line.split(' ', limit = 2)
-                if (parts.size == 2) parts[1] to parts[0] else null
+                if (parts.size == 2 && parts[1].startsWith("refs/heads/")) {
+                    parts[1].removePrefix("refs/heads/") to parts[0]
+                } else {
+                    null
+                }
             }
             .toMap()
         val branchRefs = entries
@@ -719,7 +723,7 @@ class SafRepository(private val context: Context) {
             .distinct()
             .sorted()
         val headCommit = when {
-            branchRef != null -> branchRefs[branch.orEmpty()] ?: packedRefs[branchRef]
+            branchRef != null -> branchRefs[branch.orEmpty()] ?: packedRefs[branch.orEmpty()]
             !headText.isNullOrBlank() && !headText.startsWith("ref: ") -> headText
             else -> null
         }?.takeIf { it.matches(Regex("[0-9a-fA-F]{40}")) }
