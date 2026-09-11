@@ -81,7 +81,7 @@ fun IdeScreen(
     ideViewModel: IdeViewModel,
     uiState: IdeUiState,
     onOpenProjectFolder: () -> Unit,
-    onCreateBlankProject: () -> Unit,
+    onCreateBlankProject: (String?) -> Unit,
     onExportProject: (String) -> Unit,
     onDuplicateProject: (String) -> Unit,
     onMoveProject: (String) -> Unit,

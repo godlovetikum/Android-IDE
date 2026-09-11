@@ -25,6 +25,9 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.androidide.data.model.Project
@@ -53,7 +56,7 @@ fun ProjectsScreen(
     uiState: IdeUiState,
     ideViewModel: IdeViewModel,
     onOpenProjectFolder: () -> Unit,
-    onCreateBlankProject: () -> Unit,
+    onCreateBlankProject: (String?) -> Unit,
     onExportProject: (String) -> Unit,
     onDuplicateProject: (String) -> Unit,
     onMoveProject: (String) -> Unit,
@@ -68,9 +71,19 @@ fun ProjectsScreen(
     var searchQuery by remember { mutableStateOf("") }
     var sort by remember { mutableStateOf(ProjectSort.RECENT) }
     var sortMenuOpen by remember { mutableStateOf(false) }
+    val searchFocusRequester = remember { FocusRequester() }
+    val keyboardController = LocalSoftwareKeyboardController.current
 
     LaunchedEffect(Unit) {
         ideViewModel.refreshProjectMetadata()
+    }
+    LaunchedEffect(searchVisible) {
+        if (searchVisible) {
+            searchFocusRequester.requestFocus()
+            keyboardController?.show()
+        } else {
+            keyboardController?.hide()
+        }
     }
 
     val visibleProjects = remember(
@@ -138,28 +151,22 @@ fun ProjectsScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = onCreateBlankProject) {
-                        Icon(
-                            imageVector        = Icons.Default.CreateNewFolder,
-                            contentDescription = "New blank project",
-                            tint               = colors.accent,
-                        )
+                    if (uiState.recentProjects.isNotEmpty()) {
+                        IconButton(onClick = { onCreateBlankProject(null) }) {
+                            Icon(Icons.Default.CreateNewFolder, "New blank project", tint = colors.accent)
+                        }
+                        IconButton(onClick = onOpenProjectFolder) {
+                            Icon(Icons.Default.Add, "Open folder", tint = colors.accent)
+                        }
                     }
-                    IconButton(onClick = onOpenProjectFolder) {
-                        Icon(
-                            imageVector        = Icons.Default.Add,
-                            contentDescription = "Open folder",
-                            tint               = colors.accent,
-                        )
-                    }
-                    IconButton(onClick = { searchVisible = !searchVisible }) {
+                    if (uiState.recentProjects.isNotEmpty()) IconButton(onClick = { searchVisible = !searchVisible }) {
                         Icon(
                             imageVector        = Icons.Default.Search,
                             contentDescription = "Search projects",
                             tint               = if (searchVisible) colors.accent else colors.textSecondary,
                         )
                     }
-                    Box {
+                    if (uiState.recentProjects.isNotEmpty()) Box {
                         IconButton(onClick = { sortMenuOpen = true }) {
                             Icon(
                                 imageVector        = Icons.Default.Sort,
@@ -171,6 +178,13 @@ fun ProjectsScreen(
                             expanded = sortMenuOpen,
                             onDismissRequest = { sortMenuOpen = false },
                         ) {
+                            Text(
+                                text = "Sort as",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = colors.textSecondary,
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                            )
+                            HorizontalDivider()
                             DropdownMenuItem(
                                 text = { Text("Recently opened") },
                                 onClick = { sort = ProjectSort.RECENT; sortMenuOpen = false },
@@ -225,18 +239,48 @@ fun ProjectsScreen(
                     placeholder = { Text("Name or storage path") },
                     modifier = Modifier
                         .fillMaxWidth()
+                        .focusRequester(searchFocusRequester)
                         .padding(horizontal = 16.dp, vertical = 8.dp),
                 )
+                if (searchQuery.isNotBlank()) {
+                    Text(
+                        text = if (visibleProjects.isEmpty()) {
+                            "No projects found"
+                        } else {
+                            "${visibleProjects.size} project${if (visibleProjects.size == 1) "" else "s"} found"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = colors.textSecondary,
+                        modifier = Modifier.padding(horizontal = 16.dp),
+                    )
+                }
             }
             if (uiState.recentProjects.isEmpty()) {
                 EmptyProjectsState(
                     onOpenFolder = onOpenProjectFolder,
-                    onCreateBlankProject = onCreateBlankProject,
+                    onCreateBlankProject = { onCreateBlankProject(null) },
                     modifier = Modifier.fillMaxSize(),
                 )
             } else if (visibleProjects.isEmpty()) {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text("No projects match \"$searchQuery\"", color = colors.textSecondary)
+                Column(
+                    modifier = Modifier.fillMaxSize().padding(32.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
+                ) {
+                    Text("No projects found", style = MaterialTheme.typography.titleMedium, color = colors.textPrimary)
+                    Text(
+                        "No project matches \"$searchQuery\".",
+                        color = colors.textSecondary,
+                        modifier = Modifier.padding(top = 8.dp),
+                    )
+                    OutlinedButton(
+                        onClick = { onCreateBlankProject(searchQuery.trim()) },
+                        modifier = Modifier.padding(top = 20.dp),
+                    ) {
+                        Icon(Icons.Default.CreateNewFolder, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Create \"${searchQuery.trim()}\"")
+                    }
                 }
             } else {
                 LazyColumn(
@@ -266,7 +310,7 @@ fun ProjectsScreen(
                             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
-                            OutlinedButton(onClick = onCreateBlankProject, modifier = Modifier.weight(1f)) {
+                            OutlinedButton(onClick = { onCreateBlankProject(null) }, modifier = Modifier.weight(1f)) {
                                 Icon(Icons.Default.CreateNewFolder, contentDescription = null)
                                 Spacer(Modifier.width(8.dp))
                                 Text("New Project")
@@ -463,10 +507,6 @@ private fun ProjectItem(
                 expanded         = menuOpen,
                 onDismissRequest = { menuOpen = false },
             ) {
-                DropdownMenuItem(
-                    text    = { Text("Open") },
-                    onClick = { menuOpen = false; onClick() },
-                )
                 DropdownMenuItem(
                     text    = { Text("Details") },
                     onClick = { menuOpen = false; onDetails() },

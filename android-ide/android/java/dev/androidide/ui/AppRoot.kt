@@ -145,8 +145,8 @@ fun AppRoot(ideViewModel: IdeViewModel = viewModel()) {
                     ideViewModel        = ideViewModel,
                     uiState             = uiState,
                     onOpenProjectFolder = { openProjectLauncher.launch(null) },
-                    onCreateBlankProject = {
-                        createProjectName       = "MyProject"
+                    onCreateBlankProject = { suggestedName ->
+                        createProjectName       = suggestedName?.takeIf { it.isNotBlank() } ?: "MyProject"
                         showCreateProjectDialog = true
                     },
                     onExportProject      = { uri -> launchExport(uri, "project") },
