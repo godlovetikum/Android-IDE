@@ -339,11 +339,27 @@ fun IdeScreen(
                             // F003: SAF-backed navigator bypasses in-memory expand state.
                             loadNavChildren  = { uri -> ideViewModel.loadNavChildren(uri) },
                         )
-                        EditorContent(
-                            uiState      = uiState,
-                            ideViewModel = ideViewModel,
-                            modifier     = Modifier.weight(1f).fillMaxWidth(),
-                        )
+                        if (uiState.projectRootUri != null && activeTab != null) {
+                            EditorContent(
+                                uiState      = uiState,
+                                ideViewModel = ideViewModel,
+                                modifier     = Modifier.weight(1f).fillMaxWidth(),
+                            )
+                        } else {
+                            Box(
+                                modifier = Modifier.weight(1f).fillMaxWidth(),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text(
+                                    text = if (uiState.projectRootUri == null) {
+                                        "Open a project to start editing"
+                                    } else {
+                                        "Open a file from the sidebar to start editing"
+                                    },
+                                    color = colors.textSecondary,
+                                )
+                            }
+                        }
                         IdeStatusBar(
                             cursorLine    = uiState.cursorLine,
                             cursorColumn  = uiState.cursorColumn,
