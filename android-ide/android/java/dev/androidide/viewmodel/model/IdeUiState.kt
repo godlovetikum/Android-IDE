@@ -45,6 +45,9 @@ data class IdeUiState(
     /** True while the file tree is being inspected or refreshed. */
     val fileTreeLoading: Boolean = false,
 
+    /** True while a provider-backed copy, cut, or paste mutation is running. */
+    val fileMutationLoading: Boolean = false,
+
     /** URI requested by the sidebar locate action. */
     val locateTargetUri: String? = null,
 

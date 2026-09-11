@@ -437,8 +437,9 @@ class SafRepository(private val context: Context) {
             else queryStringColumn(sourceUriString, DocumentsContract.Document.COLUMN_MIME_TYPE) ?: "text/plain",
         )) {
             is ExactCreateResult.Created -> {
-                if (writeFile(created.documentUri, bytes)) SafeMutationResult.Created(created.documentUri)
-                else {
+                if (writeFile(created.documentUri, bytes) && verifyDocument(sourceUriString, created.documentUri)) {
+                    SafeMutationResult.Created(created.documentUri)
+                } else {
                     deleteDocument(created.documentUri)
                     SafeMutationResult.Failed
                 }
@@ -446,6 +447,53 @@ class SafRepository(private val context: Context) {
             ExactCreateResult.Duplicate -> SafeMutationResult.Duplicate
             ExactCreateResult.InspectionFailed -> SafeMutationResult.InspectionFailed
             ExactCreateResult.Failed -> SafeMutationResult.Failed
+        }
+    }
+
+    /** Write a JSON/configuration file under a project's .androidide metadata folder. */
+    suspend fun writeProjectMetadataFile(
+        projectRootUriString: String,
+        fileName: String,
+        content: String,
+    ): Boolean = withContext(Dispatchers.IO) {
+        val metadata = (inspectChildren(projectRootUriString) as? ChildrenInspectionResult.Success)
+            ?.children?.firstOrNull { it.isDirectory && it.displayName == ".androidide" }
+            ?: return@withContext false
+        val existing = (inspectChildren(metadata.documentUri) as? ChildrenInspectionResult.Success)
+            ?.children?.firstOrNull { !it.isDirectory && it.displayName == fileName }
+        val target = existing?.documentUri ?: (createFileWithExactName(
+            metadata.documentUri,
+            fileName,
+            "application/json",
+        ) as? ExactCreateResult.Created)?.documentUri
+        target != null && writeFile(target, content.toByteArray(Charsets.UTF_8))
+    }
+
+    /** Verify a completed copy using provider metadata rather than trusting write success. */
+    private suspend fun verifyDocument(sourceUriString: String, targetUriString: String): Boolean {
+        val sourceMime = if (isFileUri(sourceUriString)) {
+            if (fileFromUri(sourceUriString)?.isDirectory == true) MIME_DIR else "application/octet-stream"
+        } else queryStringColumn(sourceUriString, DocumentsContract.Document.COLUMN_MIME_TYPE)
+        val targetMime = if (isFileUri(targetUriString)) {
+            if (fileFromUri(targetUriString)?.isDirectory == true) MIME_DIR else "application/octet-stream"
+        } else queryStringColumn(targetUriString, DocumentsContract.Document.COLUMN_MIME_TYPE)
+        if ((sourceMime == MIME_DIR) != (targetMime == MIME_DIR)) return false
+        if (sourceMime != MIME_DIR) {
+            val sourceSize = if (isFileUri(sourceUriString)) fileFromUri(sourceUriString)?.length()
+                else queryLongColumn(sourceUriString, DocumentsContract.Document.COLUMN_SIZE)
+            val targetSize = if (isFileUri(targetUriString)) fileFromUri(targetUriString)?.length()
+                else queryLongColumn(targetUriString, DocumentsContract.Document.COLUMN_SIZE)
+            return sourceSize != null && targetSize != null && sourceSize == targetSize
+        }
+        val sourceChildren = (inspectChildren(sourceUriString) as? ChildrenInspectionResult.Success)?.children
+            ?: return false
+        val targetChildren = (inspectChildren(targetUriString) as? ChildrenInspectionResult.Success)?.children
+            ?: return false
+        if (sourceChildren.size != targetChildren.size) return false
+        return sourceChildren.all { sourceChild ->
+            targetChildren.firstOrNull { it.displayName == sourceChild.displayName }?.let { targetChild ->
+                verifyDocument(sourceChild.documentUri, targetChild.documentUri)
+            } == true
         }
     }
 
@@ -822,7 +870,12 @@ class SafRepository(private val context: Context) {
                 }
             }
         }
-        return SafeMutationResult.Created(createdRoot)
+        return if (verifyDocument(sourceUriString, createdRoot)) {
+            SafeMutationResult.Created(createdRoot)
+        } else {
+            deleteDocument(createdRoot)
+            SafeMutationResult.Failed
+        }
     }
 
     suspend fun moveDocumentWithExactName(
@@ -854,7 +907,12 @@ class SafRepository(private val context: Context) {
                 name,
             )) {
                 is SafeMutationResult.Created -> {
-                    if (deleteDocument(sourceUriString)) copied else SafeMutationResult.Failed
+                    if (deleteDocument(sourceUriString) && !documentExistsIn(sourceParentUriString, sourceUriString)) {
+                        copied
+                    } else {
+                        deleteDocument(copied.documentUri)
+                        SafeMutationResult.Failed
+                    }
                 }
                 else -> copied
             }
@@ -866,14 +924,27 @@ class SafRepository(private val context: Context) {
                 name,
             )) {
                 is SafeMutationResult.Created -> {
-                    if (deleteDocument(sourceUriString)) copied else SafeMutationResult.Failed
+                    if (deleteDocument(sourceUriString) && !documentExistsIn(sourceParentUriString, sourceUriString)) {
+                        copied
+                    } else {
+                        deleteDocument(copied.documentUri)
+                        SafeMutationResult.Failed
+                    }
                 }
                 else -> copied
             }
         val movedName = getDisplayName(moved)
-        if (movedName != name) return@withContext SafeMutationResult.Failed
+        if (movedName != name || documentExistsIn(sourceParentUriString, sourceUriString)) {
+            return@withContext SafeMutationResult.Failed
+        }
         SafeMutationResult.Created(moved)
     }
+
+    private suspend fun documentExistsIn(parentUriString: String, documentUriString: String): Boolean =
+        (inspectChildren(parentUriString) as? ChildrenInspectionResult.Success)
+            ?.children
+            ?.any { it.documentUri == documentUriString }
+            ?: true
 
     suspend fun moveAndRenameDocumentWithExactName(
         sourceUriString: String,
@@ -1034,6 +1105,9 @@ class SafRepository(private val context: Context) {
                 queryStringColumn(documentUriString, DocumentsContract.Document.COLUMN_DISPLAY_NAME)
             }
         }
+
+    suspend fun documentExists(documentUriString: String): Boolean =
+        getDisplayName(documentUriString) != null
 
     // ── Private helpers ────────────────────────────────────────────────────
 

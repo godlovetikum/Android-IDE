@@ -295,6 +295,19 @@ fun IdeScreen(
                                         color = colors.accent,
                                     )
                                 }
+                                if (uiState.fileMutationLoading) {
+                                    Column(
+                                        modifier = Modifier.align(Alignment.Center),
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                    ) {
+                                        CircularProgressIndicator(color = colors.accent)
+                                        Text(
+                                            text = "Processing…",
+                                            color = colors.textSecondary,
+                                            modifier = Modifier.padding(top = 8.dp),
+                                        )
+                                    }
+                                }
                             }
                         } else {
                             SidebarNoProjectHint(

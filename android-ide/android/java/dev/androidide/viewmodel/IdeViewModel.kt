@@ -40,6 +40,7 @@ import dev.androidide.viewmodel.model.IdeUiState
 import dev.androidide.viewmodel.model.ProjectSwitchRequest
 import dev.androidide.viewmodel.model.NormalizedPathResult
 import dev.androidide.viewmodel.model.ancestorsOf
+import org.json.JSONObject
 import dev.androidide.viewmodel.model.findNode
 import dev.androidide.viewmodel.model.normalizeProjectPath
 import dev.androidide.viewmodel.model.pathTo
@@ -281,6 +282,15 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
             cursorPositions = state.tabCursorPositions,
             scrollPositions = state.tabScrollPositions,
         )
+        viewModelScope.launch {
+            val workspace = JSONObject().apply {
+                put("schemaVersion", 1)
+                put("activeTabUri", state.openTabs.firstOrNull { it.isActive && !it.isBlank }?.documentUri ?: JSONObject.NULL)
+                put("openTabUris", state.openTabs.filter { !it.isBlank }.map { it.documentUri })
+                put("updatedAt", System.currentTimeMillis())
+            }
+            safRepository.writeProjectMetadataFile(projectUri, "workspace.json", workspace.toString())
+        }
     }
 
     // ── Navigation ─────────────────────────────────────────────────────────
@@ -518,6 +528,16 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
                 ".androidide",
                 "vnd.android.document/directory",
             ) as? ExactCreateResult.Created)?.documentUri
+            if (metadataUri != null) {
+                val manifest = JSONObject().apply {
+                    put("schemaVersion", 1)
+                    put("projectName", trimmed)
+                    put("createdBy", "Android IDE")
+                    put("createdAt", System.currentTimeMillis())
+                    put("purpose", "Project-local workspace and recovery metadata")
+                }
+                safRepository.writeProjectMetadataFile(projectUri, "project.json", manifest.toString())
+            }
             val packageName = trimmed.lowercase().replace(Regex("[^a-z0-9-]"), "-")
             val files = listOf(
                 "package.json" to """{
@@ -879,6 +899,7 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
         val isCut  = _uiState.value.clipboardIsCut
         if (items.isEmpty()) return
         viewModelScope.launch {
+            _uiState.update { it.copy(fileMutationLoading = true, statusMessage = "Processing file operation…") }
             var successCount = 0
             items.forEach { source ->
                 if (source.isDirectory && (source.documentUri == targetDir.documentUri || containsDocumentUri(source, targetDir.documentUri))) {
@@ -919,9 +940,11 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
             refreshProjectNow()
             val verb = if (isCut) "Moved" else "Copied"
             _uiState.update { it.copy(
-                clipboardItems = emptyList(),
-                clipboardIsCut = false,
-                statusMessage  = "$verb $successCount item(s)",
+                fileMutationLoading = false,
+                clipboardItems = if (successCount == items.size) emptyList() else it.clipboardItems,
+                clipboardIsCut = if (successCount == items.size) false else it.clipboardIsCut,
+                statusMessage  = if (successCount == items.size) "$verb $successCount item(s)" else
+                    "$verb $successCount of ${items.size} item(s); some operations failed",
             ) }
         }
     }
@@ -1902,10 +1925,13 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
         val nodes = if (selectedNodes.isEmpty()) listOf(node) else selectedNodes
         val allAffectedUris = nodes.flatMap { affectedUris(it) }.toSet()
         viewModelScope.launch {
+            _uiState.update { it.copy(fileMutationLoading = true, statusMessage = "Deleting ${nodes.size} item(s)…") }
             var deletedCount = 0
             val deletedUris = mutableSetOf<String>()
             nodes.forEach { selectedNode ->
-                if (safRepository.deleteDocument(selectedNode.documentUri)) {
+                if (safRepository.deleteDocument(selectedNode.documentUri) &&
+                    !safRepository.documentExists(selectedNode.documentUri)
+                ) {
                     deletedCount++
                     deletedUris += allAffectedUris.intersect(affectedUris(selectedNode))
                 }
@@ -1915,6 +1941,7 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
                 .forEach { closeTab(it.id) }
             refreshProjectNow()
             _uiState.update { it.copy(
+                fileMutationLoading = false,
                 fileOpDialog = null,
                 isMultiSelectMode = false,
                 selectedUris = emptySet(),
