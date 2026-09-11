@@ -1,0 +1,65 @@
+name: Generate Gradle Wrapper
+
+# Manual-only workflow. This intentionally does not run lint, tests, or APK builds.
+# Run it from Actions → Generate Gradle Wrapper → Run workflow, then download
+# the "gradle-wrapper" artifact. The ZIP preserves repository-relative paths,
+# so extracting it at the repository root restores the generated files in place.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  generate-wrapper:
+    name: Generate and package Gradle wrapper
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: "17"
+          distribution: temurin
+
+      - name: Set up Gradle 8.7
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: "8.7"
+
+      - name: Generate Gradle wrapper
+        working-directory: android-ide/android
+        run: gradle wrapper --gradle-version=8.7 --distribution-type=bin
+
+      - name: Verify generated wrapper files
+        working-directory: android-ide/android
+        run: |
+          set -euo pipefail
+          test -s gradlew
+          test -s gradlew.bat
+          test -s gradle/wrapper/gradle-wrapper.jar
+          test -s gradle/wrapper/gradle-wrapper.properties
+          grep -F 'distributionUrl=' gradle/wrapper/gradle-wrapper.properties
+          chmod +x gradlew
+
+      - name: Package repository-relative wrapper files
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          zip -q dist/gradle-wrapper-bundle.zip \
+            android-ide/android/gradlew \
+            android-ide/android/gradlew.bat \
+            android-ide/android/gradle/wrapper/gradle-wrapper.jar \
+            android-ide/android/gradle/wrapper/gradle-wrapper.properties
+
+          unzip -Z1 dist/gradle-wrapper-bundle.zip
+
+      - name: Upload Gradle wrapper bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: gradle-wrapper
+          path: dist/gradle-wrapper-bundle.zip
+          if-no-files-found: error
+          retention-days: 30
