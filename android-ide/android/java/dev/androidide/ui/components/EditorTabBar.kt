@@ -99,7 +99,12 @@ private fun EditorTabItem(
     onCloseAll: () -> Unit,
 ) {
     val colors  = LocalIdeColors.current
-    val bgColor = if (tab.isActive) colors.background else colors.surface
+    val bgColor = when {
+        tab.isDirty && tab.isActive -> colors.modified.copy(alpha = 0.22f)
+        tab.isDirty -> colors.modified.copy(alpha = 0.10f)
+        tab.isActive -> colors.background
+        else -> colors.surface
+    }
     var menuOpen by remember { mutableStateOf(false) }
 
     Box(

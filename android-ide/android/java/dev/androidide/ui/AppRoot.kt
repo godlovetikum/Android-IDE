@@ -45,6 +45,7 @@ fun AppRoot(ideViewModel: IdeViewModel = viewModel()) {
     var importTargetDirUri      by remember { mutableStateOf("") }
     var showCreateProjectDialog by remember { mutableStateOf(false) }
     var createProjectName       by remember { mutableStateOf("") }
+    var pendingCreateProjectName by remember { mutableStateOf<String?>(null) }
     var pendingExportSourceUri  by remember { mutableStateOf<String?>(null) }
     var pendingDestinationUri   by remember { mutableStateOf<String?>(null) }
     var pendingDestinationAction by remember { mutableStateOf<ProjectDestinationAction?>(null) }
@@ -60,6 +61,20 @@ fun AppRoot(ideViewModel: IdeViewModel = viewModel()) {
                 Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
             )
             ideViewModel.openProject(uri.toString())
+        }
+    }
+
+    val createProjectDestinationLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocumentTree()
+    ) { uri ->
+        val name = pendingCreateProjectName
+        pendingCreateProjectName = null
+        if (uri != null && name != null) {
+            context.contentResolver.takePersistableUriPermission(
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+            )
+            ideViewModel.createBlankProject(name, uri.toString())
         }
     }
 
@@ -187,23 +202,21 @@ fun AppRoot(ideViewModel: IdeViewModel = viewModel()) {
                         singleLine    = true,
                         placeholder   = { Text("MyProject") },
                     )
-                    val dir = uiState.editorSettings.defaultProjectDir
-                    if (dir.isNotEmpty()) {
-                        Text(
-                            text  = "Location: $dir",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = androidx.compose.ui.Modifier.padding(top = 8.dp),
-                        )
-                    }
+                    Text(
+                        text = "You will choose a destination folder after selecting Create.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = androidx.compose.ui.Modifier.padding(top = 8.dp),
+                    )
                 }
             },
             confirmButton = {
                 TextButton(
                     onClick = {
                         if (createProjectName.isNotBlank()) {
-                            ideViewModel.createBlankProject(createProjectName.trim())
                             showCreateProjectDialog = false
+                            pendingCreateProjectName = createProjectName.trim()
+                            createProjectDestinationLauncher.launch(null)
                         }
                     },
                     enabled = createProjectName.isNotBlank(),

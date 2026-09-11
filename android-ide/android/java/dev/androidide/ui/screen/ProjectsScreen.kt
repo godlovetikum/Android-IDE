@@ -230,6 +230,9 @@ fun ProjectsScreen(
                 .fillMaxSize()
                 .padding(innerPadding),
         ) {
+            if (uiState.projectMetadataLoading) {
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            }
             if (searchVisible) {
                 OutlinedTextField(
                     value = searchQuery,
@@ -331,12 +334,12 @@ fun ProjectsScreen(
     if (renamingUri != null) {
         AlertDialog(
             onDismissRequest = { renamingUri = null },
-            title   = { Text("Rename Project") },
+            title   = { Text("Rename Display Name") },
             text    = {
                 OutlinedTextField(
                     value         = renameText,
                     onValueChange = { renameText = it },
-                    label         = { Text("Project name") },
+                    label         = { Text("Display name") },
                     singleLine    = true,
                 )
             },
@@ -347,7 +350,7 @@ fun ProjectsScreen(
                         renamingUri = null
                     },
                     enabled  = renameText.isNotBlank(),
-                ) { Text("Rename") }
+                ) { Text("Save") }
             },
             dismissButton = { TextButton(onClick = { renamingUri = null }) { Text("Cancel") } },
         )
@@ -512,7 +515,7 @@ private fun ProjectItem(
                     onClick = { menuOpen = false; onDetails() },
                 )
                 DropdownMenuItem(
-                    text    = { Text("Rename\u2026") },
+                    text    = { Text("Edit display name\u2026") },
                     onClick = { menuOpen = false; onRename() },
                 )
                 DropdownMenuItem(

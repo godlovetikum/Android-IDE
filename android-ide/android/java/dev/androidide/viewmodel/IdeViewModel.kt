@@ -478,6 +478,7 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
 
     fun refreshProjectMetadata() {
         viewModelScope.launch {
+            _uiState.update { it.copy(projectMetadataLoading = true) }
             val projects = projectRepository.getAll()
             _uiState.update { it.copy(projectDetailsByUri = emptyMap()) }
             val details = projects.mapNotNull { project ->
@@ -495,58 +496,59 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
                     git = metadata.git,
                 )
             }.toMap()
-            _uiState.update { it.copy(projectDetailsByUri = details) }
+            _uiState.update { it.copy(projectDetailsByUri = details, projectMetadataLoading = false) }
         }
     }
 
-    /**
-     * Create a new blank project folder using [defaultProjectDir] from settings
-     * (falling back to the app-specific external storage directory).
-     *
-     * The new project gets a minimal `package.json` template so it behaves like
-     * a Node project out of the box.
-     */
-    fun createBlankProject(name: String) {
+    /** Create a project under a user-selected SAF directory; never use app-internal storage. */
+    fun createBlankProject(name: String, targetParentUri: String) {
         val trimmed = name.trim().ifEmpty { "Project" }
-        val settings = _uiState.value.editorSettings
-
-        // Determine the parent directory.
-        val projectsDir = when {
-            settings.defaultProjectDir.isNotEmpty() -> File(settings.defaultProjectDir)
-            else -> getApplication<Application>().getExternalFilesDir("Projects")
-                ?: File(getApplication<Application>().filesDir, "projects")
-        }
-        projectsDir.mkdirs()
-
-        val newDir = File(projectsDir, trimmed)
-        if (!newDir.exists() && !newDir.mkdirs()) {
-            _uiState.update { it.copy(statusMessage = "Could not create project folder") }
-            return
-        }
-
-        // Write a minimal package.json template.
-        val packageJson = File(newDir, "package.json")
-        if (!packageJson.exists()) {
-            packageJson.writeText(
-                """{
-  "name": "${trimmed.lowercase().replace(Regex("[^a-z0-9-]"), "-")}",
+        viewModelScope.launch {
+            val created = safRepository.createFileWithExactName(
+                targetParentUri,
+                trimmed,
+                "vnd.android.document/directory",
+            )
+            val projectUri = (created as? ExactCreateResult.Created)?.documentUri ?: run {
+                _uiState.update { it.copy(statusMessage = "Could not create project folder: choose another name or location") }
+                return@launch
+            }
+            val metadataUri = (safRepository.createFileWithExactName(
+                projectUri,
+                ".androidide",
+                "vnd.android.document/directory",
+            ) as? ExactCreateResult.Created)?.documentUri
+            val packageName = trimmed.lowercase().replace(Regex("[^a-z0-9-]"), "-")
+            val files = listOf(
+                "package.json" to """{
+  "name": "$packageName",
   "version": "1.0.0",
   "description": "",
   "main": "index.js",
-  "scripts": {
-    "start": "node index.js"
-  },
+  "scripts": { "start": "node index.js" },
   "keywords": [],
   "author": "",
   "license": "ISC"
 }
 """,
-                Charsets.UTF_8,
+                "README.md" to "# $trimmed\n\nCreated with Android IDE.\n",
+                ".gitignore" to ".androidide/\n",
             )
+            files.forEach { (fileName, content) ->
+                val fileUri = (safRepository.createFileWithExactName(
+                    projectUri,
+                    fileName,
+                    EditorLanguageRegistry.mimeTypeForFileName(fileName),
+                ) as? ExactCreateResult.Created)?.documentUri
+                if (fileUri != null) safRepository.writeFile(fileUri, content.toByteArray(Charsets.UTF_8))
+            }
+            if (metadataUri == null) {
+                _uiState.update { it.copy(statusMessage = "Project created, but its metadata folder could not be initialized") }
+            } else {
+                _uiState.update { it.copy(statusMessage = "Project created in the selected location") }
+            }
+            openProject(projectUri)
         }
-
-        val newDirUri = Uri.fromFile(newDir).toString()
-        openProject(newDirUri)
     }
 
     /**
@@ -758,14 +760,19 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
 
     private suspend fun refreshProjectNow() {
         val rootUri = _uiState.value.projectRootUri ?: return
-        when (val inspection = safRepository.inspectChildren(rootUri)) {
-            is ChildrenInspectionResult.Success -> {
-                val refreshed = inspection.children.sortedForTree()
-                val merged = mergeRefreshedTree(_uiState.value.fileTree, refreshed)
-                _uiState.update { it.copy(fileTree = merged) }
+        _uiState.update { it.copy(fileTreeLoading = true) }
+        try {
+            when (val inspection = safRepository.inspectChildren(rootUri)) {
+                is ChildrenInspectionResult.Success -> {
+                    val refreshed = inspection.children.sortedForTree()
+                    val merged = mergeRefreshedTree(_uiState.value.fileTree, refreshed)
+                    _uiState.update { it.copy(fileTree = merged) }
+                }
+                is ChildrenInspectionResult.Failed ->
+                    _uiState.update { it.copy(statusMessage = "Could not refresh the project tree") }
             }
-            is ChildrenInspectionResult.Failed ->
-                _uiState.update { it.copy(statusMessage = "Could not refresh the project tree") }
+        } finally {
+            _uiState.update { it.copy(fileTreeLoading = false) }
         }
     }
 
@@ -985,11 +992,13 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
 
     fun openFile(documentUri: String) {
         // C011: single-tap opens a temporary (preview) tab.
+        _uiState.update { it.copy(editorFileLoading = true) }
         viewModelScope.launch { openFileInternal(documentUri, markActive = true, temporary = true) }
     }
 
     /** C011: double-tap on a file tree item opens (or upgrades) a permanent tab. */
     fun openFilePermanent(documentUri: String) {
+        _uiState.update { it.copy(editorFileLoading = true) }
         viewModelScope.launch { openFileInternal(documentUri, markActive = true, temporary = false) }
     }
 
@@ -1003,6 +1012,7 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
             // C011: pinning action (temporary=false) upgrades a preview tab to permanent.
             if (!temporary && existing.isTemporary) pinTab(existing.id)
             if (markActive) selectTab(existing.id)
+            _uiState.update { it.copy(editorFileLoading = false) }
             return
         }
 
@@ -1022,12 +1032,16 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
 
-        val bytes = safRepository.readFile(documentUri) ?: return
+        val bytes = safRepository.readFile(documentUri) ?: run {
+            _uiState.update { it.copy(editorFileLoading = false, statusMessage = "Could not open file") }
+            return
+        }
 
         // F005-A: size guard — reject files larger than 5 MB to prevent OOM in
         // Monaco and the Kotlin string allocation that precedes it.
         if (bytes.size > 5 * 1024 * 1024) {
             _uiState.update { it.copy(statusMessage = "Cannot open: file is ${bytes.size / 1_048_576} MB (5 MB limit)") }
+            _uiState.update { it.copy(editorFileLoading = false) }
             return
         }
         val displayName = _uiState.value.fileTree.findNode(documentUri)?.displayName
@@ -1037,6 +1051,7 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
         // Binary content (.apk, .class, compiled assets) corrupts Monaco's text model.
         if (bytes.take(8192).any { it == 0.toByte() }) {
             _uiState.update { it.copy(fileOpDialog = FileOpDialog.BinaryOpenError(displayName)) }
+            _uiState.update { it.copy(editorFileLoading = false) }
             return
         }
 
@@ -1062,6 +1077,7 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
                 activeTabId   = if (markActive) newTab.id else state.activeTabId,
                 currentScreen = AppScreen.EDITOR,
                 hasEditorSelection = false,
+                editorFileLoading = false,
             )
         }
     }

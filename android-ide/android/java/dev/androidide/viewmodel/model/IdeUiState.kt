@@ -35,9 +35,15 @@ data class IdeUiState(
     /** Cached metadata used for project-list sorting and detail screens. */
     val projectDetailsByUri: Map<String, ProjectDetails> = emptyMap(),
 
+    /** True while project-list metadata is being refreshed. */
+    val projectMetadataLoading: Boolean = false,
+
     // ── File tree ──────────────────────────────────────────────────────────
     /** Root nodes of the file tree sidebar. */
     val fileTree: List<FileNode> = emptyList(),
+
+    /** True while the file tree is being inspected or refreshed. */
+    val fileTreeLoading: Boolean = false,
 
     /** URI requested by the sidebar locate action. */
     val locateTargetUri: String? = null,
@@ -85,6 +91,9 @@ data class IdeUiState(
 
     /** True once Monaco sends the "ready" message. */
     val isEditorReady: Boolean = false,
+
+    /** True while the active file is being bound into Monaco. */
+    val editorFileLoading: Boolean = false,
 
     /** Whether the live-preview WebView is visible. */
     val isPreviewVisible: Boolean = false,

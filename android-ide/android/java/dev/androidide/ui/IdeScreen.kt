@@ -279,7 +279,15 @@ fun IdeScreen(
                                     uiState.projectRootUri?.let { ideViewModel.requestRemoveProject(it) }
                                 },
                             )
-                            fileTreePanelContent(Modifier.weight(1f).fillMaxWidth(), onCloseDrawer)
+                            Box(Modifier.weight(1f).fillMaxWidth()) {
+                                fileTreePanelContent(Modifier.fillMaxSize(), onCloseDrawer)
+                                if (uiState.fileTreeLoading) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.align(Alignment.TopCenter).padding(12.dp),
+                                        color = colors.accent,
+                                    )
+                                }
+                            }
                         } else {
                             SidebarNoProjectHint(
                                 onOpenProject = {
@@ -340,11 +348,19 @@ fun IdeScreen(
                             loadNavChildren  = { uri -> ideViewModel.loadNavChildren(uri) },
                         )
                         if (uiState.projectRootUri != null && activeTab != null) {
-                            EditorContent(
-                                uiState      = uiState,
-                                ideViewModel = ideViewModel,
-                                modifier     = Modifier.weight(1f).fillMaxWidth(),
-                            )
+                            Box(Modifier.weight(1f).fillMaxWidth()) {
+                                EditorContent(
+                                    uiState      = uiState,
+                                    ideViewModel = ideViewModel,
+                                    modifier     = Modifier.fillMaxSize(),
+                                )
+                                if (!uiState.isEditorReady || uiState.editorFileLoading) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.align(Alignment.Center),
+                                        color = colors.accent,
+                                    )
+                                }
+                            }
                         } else {
                             Box(
                                 modifier = Modifier.weight(1f).fillMaxWidth(),
