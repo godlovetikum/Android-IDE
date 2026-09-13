@@ -271,14 +271,48 @@ fun AppRoot(ideViewModel: IdeViewModel = viewModel()) {
                 Text("Remove this project from the list? The files on disk will NOT be deleted.")
             },
             confirmButton = {
-                TextButton(
-                    onClick  = { ideViewModel.confirmRemoveProject() },
-                    colors   = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
-                ) { Text("Remove") }
+                Row {
+                    TextButton(onClick = {
+                        ideViewModel.cancelRemoveProject()
+                        ideViewModel.requestDeleteProject(removeUri)
+                    }, colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)) {
+                        Text("Delete permanently")
+                    }
+                    TextButton(onClick = { ideViewModel.confirmRemoveProject() }) { Text("Remove") }
+                }
             },
             dismissButton = {
                 TextButton(onClick = { ideViewModel.cancelRemoveProject() }) { Text("Cancel") }
             },
+        )
+    }
+
+    val deleteUri = uiState.confirmDeleteProjectUri
+    if (deleteUri != null) {
+        var enteredDeleteCode by remember(deleteUri) { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { ideViewModel.cancelDeleteProject() },
+            title = { Text("Permanently Delete Project") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("This permanently deletes the project and all files from its storage provider. This cannot be undone.")
+                    Text("Type this code to continue: ${uiState.confirmDeleteProjectCode}", style = MaterialTheme.typography.titleMedium)
+                    OutlinedTextField(
+                        value = enteredDeleteCode,
+                        onValueChange = { enteredDeleteCode = it.filter(Char::isDigit).take(6) },
+                        label = { Text("Confirmation code") },
+                        singleLine = true,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = { ideViewModel.confirmDeleteProject(enteredDeleteCode) },
+                    enabled = enteredDeleteCode.length == 6,
+                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                ) { Text("Delete everything") }
+            },
+            dismissButton = { TextButton(onClick = { ideViewModel.cancelDeleteProject() }) { Text("Cancel") } },
         )
     }
 }

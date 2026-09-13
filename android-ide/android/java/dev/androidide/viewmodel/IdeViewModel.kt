@@ -333,8 +333,7 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
             sendEditorCommand(EditorOutbound.SetTheme(resolveMonacoTheme()))
         }
         if (settings.hideGitFolder != previousSettings.hideGitFolder ||
-            settings.hideProjectMetadataFolder != previousSettings.hideProjectMetadataFolder ||
-            settings.hideReadmeFile != previousSettings.hideReadmeFile
+            settings.hideProjectMetadataFolder != previousSettings.hideProjectMetadataFolder
         ) {
             refreshProject()
         }
@@ -807,8 +806,7 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
     private suspend fun visibleFileTreeChildren(parentUri: String): List<FileNode> =
         safRepository.listChildren(parentUri).filterNot { node ->
             (node.displayName == ".git" && _uiState.value.editorSettings.hideGitFolder) ||
-                (node.displayName == ".androidide" && _uiState.value.editorSettings.hideProjectMetadataFolder) ||
-                (node.displayName.equals("README.md", ignoreCase = true) && _uiState.value.editorSettings.hideReadmeFile)
+                (node.displayName == ".androidide" && _uiState.value.editorSettings.hideProjectMetadataFolder)
         }
 
     private suspend fun refreshProjectNow() {
@@ -820,8 +818,7 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
                     val settings = _uiState.value.editorSettings
                     val refreshed = inspection.children.filterNot { node ->
                         (node.displayName == ".git" && settings.hideGitFolder) ||
-                            (node.displayName == ".androidide" && settings.hideProjectMetadataFolder) ||
-                            (node.displayName.equals("README.md", ignoreCase = true) && settings.hideReadmeFile)
+                            (node.displayName == ".androidide" && settings.hideProjectMetadataFolder)
                     }.sortedForTree()
                     val merged = mergeRefreshedTree(_uiState.value.fileTree, refreshed)
                     _uiState.update { it.copy(fileTree = merged) }
@@ -1831,30 +1828,83 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
 
     fun confirmRemoveProject() {
         val uri = _uiState.value.confirmRemoveProjectUri ?: return
-        projectRepository.remove(uri)
-        val wasCurrent = _uiState.value.projectRootUri == uri
-        if (wasCurrent) {
-            _uiState.value.openTabs.forEach { pendingContent.remove(it.id) }
-            crashRecovery.clearProject(uri)
-        }
-        _uiState.update { state ->
-            state.copy(
-                recentProjects          = projectRepository.getAll(),
-                confirmRemoveProjectUri = null,
-                projectRootUri          = if (wasCurrent) null else state.projectRootUri,
-                projectName             = if (wasCurrent) "" else state.projectName,
-                fileTree                = if (wasCurrent) emptyList() else state.fileTree,
-                openTabs                = if (wasCurrent) emptyList() else state.openTabs,
-                activeTabId             = if (wasCurrent) null else state.activeTabId,
-                isEditorReady           = if (wasCurrent) false else state.isEditorReady,
-                currentScreen           = if (wasCurrent) AppScreen.PROJECTS else state.currentScreen,
-                statusMessage           = "Project removed",
-            )
+        _uiState.update { it.copy(statusMessage = "Removing project metadata…") }
+        viewModelScope.launch {
+            val metadataRemoved = safRepository.deleteChildIfPresent(uri, ".androidide")
+            projectRepository.remove(uri)
+            val wasCurrent = _uiState.value.projectRootUri == uri
+            if (wasCurrent) {
+                _uiState.value.openTabs.forEach { pendingContent.remove(it.id) }
+                crashRecovery.clearProject(uri)
+            }
+            _uiState.update { state ->
+                state.copy(
+                    recentProjects          = projectRepository.getAll(),
+                    confirmRemoveProjectUri = null,
+                    projectRootUri          = if (wasCurrent) null else state.projectRootUri,
+                    projectName             = if (wasCurrent) "" else state.projectName,
+                    fileTree                = if (wasCurrent) emptyList() else state.fileTree,
+                    openTabs                = if (wasCurrent) emptyList() else state.openTabs,
+                    activeTabId             = if (wasCurrent) null else state.activeTabId,
+                    isEditorReady           = if (wasCurrent) false else state.isEditorReady,
+                    currentScreen           = if (wasCurrent) AppScreen.PROJECTS else state.currentScreen,
+                    statusMessage           = if (metadataRemoved) "Project removed from registry" else "Project removed; metadata cleanup failed",
+                )
+            }
         }
     }
 
     fun cancelRemoveProject() {
         _uiState.update { it.copy(confirmRemoveProjectUri = null) }
+    }
+
+    fun requestDeleteProject(uri: String) {
+        val code = (100000..999999).random().toString()
+        _uiState.update {
+            it.copy(confirmDeleteProjectUri = uri, confirmDeleteProjectCode = code)
+        }
+    }
+
+    fun cancelDeleteProject() {
+        _uiState.update { it.copy(confirmDeleteProjectUri = null, confirmDeleteProjectCode = null) }
+    }
+
+    fun confirmDeleteProject(enteredCode: String) {
+        val state = _uiState.value
+        val uri = state.confirmDeleteProjectUri ?: return
+        if (enteredCode.trim() != state.confirmDeleteProjectCode) {
+            _uiState.update { it.copy(statusMessage = "Delete code is incorrect") }
+            return
+        }
+        _uiState.update { it.copy(statusMessage = "Deleting project…") }
+        viewModelScope.launch {
+            val deleted = safRepository.deleteDocument(uri) && !safRepository.documentExists(uri)
+            if (!deleted) {
+                _uiState.update { it.copy(statusMessage = "Project deletion failed; files were not confirmed removed") }
+                return@launch
+            }
+            projectRepository.remove(uri)
+            val wasCurrent = _uiState.value.projectRootUri == uri
+            if (wasCurrent) {
+                _uiState.value.openTabs.forEach { pendingContent.remove(it.id) }
+                crashRecovery.clearProject(uri)
+            }
+            _uiState.update { current ->
+                current.copy(
+                    recentProjects = projectRepository.getAll(),
+                    confirmDeleteProjectUri = null,
+                    confirmDeleteProjectCode = null,
+                    projectRootUri = if (wasCurrent) null else current.projectRootUri,
+                    projectName = if (wasCurrent) "" else current.projectName,
+                    fileTree = if (wasCurrent) emptyList() else current.fileTree,
+                    openTabs = if (wasCurrent) emptyList() else current.openTabs,
+                    activeTabId = if (wasCurrent) null else current.activeTabId,
+                    isEditorReady = if (wasCurrent) false else current.isEditorReady,
+                    currentScreen = if (wasCurrent) AppScreen.PROJECTS else current.currentScreen,
+                    statusMessage = "Project permanently deleted",
+                )
+            }
+        }
     }
 
     // ── File operations ────────────────────────────────────────────────────

@@ -14,7 +14,7 @@ Terminal execution, persistent local servers, full Git mutation workflows, and L
 
 ## Visibility and metadata policy
 
-`README.md` is a normal project document and is now visible by default. It can be hidden through the File Tree settings when a user prefers a lower-noise tree. The project-local `.androidide` directory is treated like `.git`: it is hidden by default, but it can be revealed through settings for inspection, backup, and advanced maintenance.
+`README.md` is a normal project document and remains visible in the file tree. The project-local `.androidide` directory is treated like `.git`: it is hidden by default, but it can be revealed through settings for inspection, backup, and advanced maintenance.
 
 The project metadata directory should contain only project-scoped IDE information. The current direction is appropriate:
 
@@ -102,8 +102,18 @@ The repository’s current architecture can support this direction, but the term
 
 ## Current local implementation changes
 
-This review also adds configurable visibility for `.git`, `.androidide`, and `README.md`, with `.git` and `.androidide` hidden by default and `README.md` visible by default. The settings are persisted and the current file tree refreshes when the preferences change.
+This review also adds configurable visibility for `.git` and `.androidide`, with `.git` and `.androidide` hidden by default. The settings are persisted and the current file tree refreshes when the preferences change.
 
 These changes are intentionally local and have not been pushed.
 
 <!-- End of review -->
+
+## Confirmed project-removal behavior
+
+The file tree exposes two independent project actions. **Remove from registry** removes the `.androidide` directory and its project-local metadata, removes the project from the app registry, and clears app-internal recovery/session records. It does not modify source files, the project directory, or `.git`. Unsaved editor content is intentionally discarded by this operation.
+
+**Delete permanently** is a destructive storage operation. The app generates a one-time numeric confirmation code. The user must type the code before deletion proceeds. The operation attempts to delete the entire project tree from the storage provider and verifies that the project root no longer exists before removing the registry entry.
+
+## Preview and crash reporting limitation
+
+Web preview and Monaco are protected against several known WebView renderer and payload failures, but an Android process-level crash can still terminate the application before the UI can display an error. The project does not yet have a persistent crash-report screen or durable diagnostic log. Preview reliability and process-level crash diagnostics remain open production-hardening work and must be validated on the affected device and Android version.

@@ -151,6 +151,10 @@ data class IdeUiState(
      */
     val confirmRemoveProjectUri: String? = null,
 
+    /** URI and one-time code for permanent project deletion. */
+    val confirmDeleteProjectUri: String? = null,
+    val confirmDeleteProjectCode: String? = null,
+
     /** Non-null when switching projects requires a dirty-tab decision. */
     val projectSwitchRequest: ProjectSwitchRequest? = null,
 

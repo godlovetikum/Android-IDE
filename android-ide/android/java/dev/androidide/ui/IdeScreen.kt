@@ -371,7 +371,7 @@ fun IdeScreen(
                             // F003: SAF-backed navigator bypasses in-memory expand state.
                             loadNavChildren  = { uri -> ideViewModel.loadNavChildren(uri) },
                         )
-                        if (uiState.projectRootUri != null && activeTab != null) {
+                        if (uiState.projectRootUri != null) {
                             Box(Modifier.weight(1f).fillMaxWidth()) {
                                 EditorContent(
                                     uiState      = uiState,

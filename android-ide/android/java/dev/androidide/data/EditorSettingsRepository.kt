@@ -25,7 +25,6 @@ class EditorSettingsRepository(context: Context) {
         private const val KEY_SHOW_SYMBOL_BAR      = "show_symbol_bar"
         private const val KEY_HIDE_GIT_FOLDER      = "hide_git_folder"
         private const val KEY_HIDE_METADATA_FOLDER = "hide_project_metadata_folder"
-        private const val KEY_HIDE_README_FILE     = "hide_readme_file"
         private const val KEY_CUSTOM_SYMBOLS       = "custom_symbols"
         private const val KEY_UI_FONT_SCALE        = "ui_font_scale"
         private const val KEY_DEFAULT_PROJECT_DIR  = "default_project_dir"
@@ -57,7 +56,6 @@ class EditorSettingsRepository(context: Context) {
         showSymbolBar        = prefs.getBoolean(KEY_SHOW_SYMBOL_BAR, true),
         hideGitFolder        = prefs.getBoolean(KEY_HIDE_GIT_FOLDER, true),
         hideProjectMetadataFolder = prefs.getBoolean(KEY_HIDE_METADATA_FOLDER, true),
-        hideReadmeFile       = prefs.getBoolean(KEY_HIDE_README_FILE, false),
         customSymbols        = prefs.getString(KEY_CUSTOM_SYMBOLS, null)
             ?.split(SYMBOL_SEPARATOR)
             ?.filter { it.isNotEmpty() }
@@ -88,7 +86,6 @@ class EditorSettingsRepository(context: Context) {
             .putBoolean(KEY_SHOW_SYMBOL_BAR,     settings.showSymbolBar)
             .putBoolean(KEY_HIDE_GIT_FOLDER,     settings.hideGitFolder)
             .putBoolean(KEY_HIDE_METADATA_FOLDER, settings.hideProjectMetadataFolder)
-            .putBoolean(KEY_HIDE_README_FILE,    settings.hideReadmeFile)
             .putString (KEY_CUSTOM_SYMBOLS,      settings.customSymbols.joinToString(SYMBOL_SEPARATOR))
             .putFloat  (KEY_UI_FONT_SCALE,       settings.uiFontScale
                 .coerceIn(EditorSettings.UI_FONT_SCALE_MIN, EditorSettings.UI_FONT_SCALE_MAX))

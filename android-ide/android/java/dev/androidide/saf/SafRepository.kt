@@ -1060,6 +1060,12 @@ class SafRepository(private val context: Context) {
         }
     }
 
+    suspend fun deleteChildIfPresent(parentUriString: String, childName: String): Boolean {
+        val child = listChildren(parentUriString).firstOrNull { it.displayName == childName }
+            ?: return true
+        return deleteDocument(child.documentUri) && !documentExists(child.documentUri)
+    }
+
     // ── Rename ─────────────────────────────────────────────────────────────
 
     /**

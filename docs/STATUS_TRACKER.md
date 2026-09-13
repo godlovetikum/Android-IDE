@@ -34,7 +34,7 @@ This feature set covers the project registry and project-level storage workflows
 - Real project duplication
 - ZIP export for projects and folders
 - Moving an existing project to a different storage location
-- Configurable visibility for `.git`, `.androidide`, and `README.md`
+- Configurable visibility for `.git` and `.androidide`
 - Project-local `.androidide/project.json` and `.androidide/workspace.json`
 
 Implementation is being kept within the existing Compose, ViewModel, repository, and SAF
@@ -343,3 +343,7 @@ The file context menu has "Select" which enters multi-select mode for files. The
 **2026-09-12 (Production-readiness review):** Foundation functionality is present, but Phase 1 is not yet production-complete. The remaining gate includes device/provider matrix validation, permission-loss recovery, robust mutation rollback, project metadata migration, workspace restoration guarantees, and release build validation. Terminal, persistent process hosting, full Git mutation workflows, and LSP remain later phases rather than hidden Phase 1 requirements.
 
 Last updated: 2026-06-13
+
+## Project removal semantics
+
+Registry removal and permanent deletion are separate operations. Removing a project deletes its `.androidide` project metadata and app-internal registry/recovery records, but does not modify source files, Git data, or the project directory. Permanent deletion requires a generated confirmation code and removes the project tree from its storage provider after postcondition verification.

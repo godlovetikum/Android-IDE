@@ -483,14 +483,6 @@ fun SettingsScreen(
                         onCheckedChange = { ideViewModel.setEditorSettings(s.copy(hideProjectMetadataFolder = it)) },
                         colors = colors,
                     )
-                    HorizontalDivider(color = colors.separator)
-                    VisibilitySettingRow(
-                        title = "Hide README.md",
-                        description = "Keep the project README out of the file tree when preferred",
-                        checked = s.hideReadmeFile,
-                        onCheckedChange = { ideViewModel.setEditorSettings(s.copy(hideReadmeFile = it)) },
-                        colors = colors,
-                    )
                 }
             }
 
