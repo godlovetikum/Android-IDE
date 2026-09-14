@@ -1833,9 +1833,9 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
             val metadataRemoved = safRepository.deleteChildIfPresent(uri, ".androidide")
             projectRepository.remove(uri)
             val wasCurrent = _uiState.value.projectRootUri == uri
+            crashRecovery.clearProject(uri)
             if (wasCurrent) {
                 _uiState.value.openTabs.forEach { pendingContent.remove(it.id) }
-                crashRecovery.clearProject(uri)
             }
             _uiState.update { state ->
                 state.copy(

@@ -1052,7 +1052,7 @@ class SafRepository(private val context: Context) {
             if (isFileUri(documentUriString)) {
                 fileFromUri(documentUriString)?.deleteRecursively() ?: false
             } else {
-                DocumentsContract.deleteDocument(resolver, Uri.parse(documentUriString))
+                DocumentsContract.deleteDocument(resolver, mutationDocumentUri(documentUriString))
             }
         } catch (e: Exception) {
             Log.e(TAG, "deleteDocument failed for $documentUriString: ${e.message}", e)
@@ -1132,6 +1132,18 @@ class SafRepository(private val context: Context) {
                 null
             }
         }
+
+    private fun mutationDocumentUri(documentUriString: String): Uri {
+        val uri = Uri.parse(documentUriString)
+        return if (DocumentsContract.isTreeUri(uri)) {
+            DocumentsContract.buildDocumentUriUsingTree(
+                uri,
+                DocumentsContract.getTreeDocumentId(uri),
+            )
+        } else {
+            uri
+        }
+    }
 
     private fun queryLongColumn(documentUriString: String, column: String): Long? {
         return try {
