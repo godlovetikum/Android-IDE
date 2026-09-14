@@ -201,8 +201,8 @@ fun SettingsScreen(
                     // Font size
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Column(modifier = Modifier.weight(1f)) {
-                            Text("Font Size", color = colors.textPrimary, style = MaterialTheme.typography.bodyMedium)
-                            Text("${s.fontSize} sp (Monaco editor only)", color = colors.textSecondary, style = MaterialTheme.typography.bodySmall)
+                            Text("Code Font Size", color = colors.textPrimary, style = MaterialTheme.typography.bodyMedium)
+                            Text("${s.fontSize} sp (Monaco code surface)", color = colors.textSecondary, style = MaterialTheme.typography.bodySmall)
                         }
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             OutlinedButton(

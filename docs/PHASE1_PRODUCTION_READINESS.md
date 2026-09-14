@@ -100,11 +100,9 @@ Do not call Phase 1 production-complete yet. Call it **“Phase 1 foundation imp
 
 The repository’s current architecture can support this direction, but the terminal and persistent-process design should be introduced as explicit services and session models rather than added as another short-lived screen inside the existing ViewModel.
 
-## Current local implementation changes
+## Implemented workspace behavior
 
-This review also adds configurable visibility for `.git` and `.androidide`, with `.git` and `.androidide` hidden by default. The settings are persisted and the current file tree refreshes when the preferences change.
-
-These changes are intentionally local and have not been pushed.
+The file tree provides persisted visibility controls for `.git` and `.androidide`. Both directories are hidden by default, and changing either setting refreshes the current tree without changing project files.
 
 <!-- End of review -->
 

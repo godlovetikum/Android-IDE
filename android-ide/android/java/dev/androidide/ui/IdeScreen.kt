@@ -51,6 +51,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.style.TextOverflow
@@ -126,6 +127,23 @@ fun IdeScreen(
     }
     BackHandler(enabled = uiState.currentScreen == AppScreen.PROJECT_DETAILS) {
         ideViewModel.dismissProjectDetails()
+    }
+
+    // Monaco is initialized independently of project/file state so the first
+    // project does not pay the WebView startup cost. It is deliberately kept
+    // outside the user-facing layout until a project is open.
+    if (uiState.projectRootUri == null) {
+        Box(
+            modifier = Modifier
+                .size(1.dp)
+                .graphicsLayer { alpha = 0f },
+        ) {
+            EditorContent(
+                uiState = uiState,
+                ideViewModel = ideViewModel,
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
     }
 
     // ── Shared root FileNode helpers ───────────────────────────────────────
@@ -591,6 +609,7 @@ private fun SidebarNavPanel(
                 icon     = Icons.Default.Code,
                 label    = "Editor",
                 selected = currentScreen == AppScreen.EDITOR,
+                enabled  = hasProject,
                 onClick  = onNavigateEditor,
                 modifier = Modifier.weight(1f),
             )
