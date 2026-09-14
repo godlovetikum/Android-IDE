@@ -578,32 +578,25 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
 """,
                 "README.md" to """# $trimmed
 
-> A project created with Android IDE.
-
-## Overview
-
-Describe what this project does, who it is for, and the problem it solves.
+This project was created with Android IDE.
 
 ## Getting started
 
-1. Install the project dependencies described by `package.json`.
-2. Update the scripts in `package.json` for the tools used by this project.
-3. Start the project using the appropriate development command.
+Install dependencies:
 
-## Project structure
+```bash
+npm install
+```
 
-- `README.md` — project documentation and setup instructions.
-- `package.json` — project name, metadata, and development scripts.
-- `.gitignore` — generated files and local-only artifacts excluded from Git.
-- `.androidide/` — Android IDE project metadata; it is managed by Android IDE.
+Start the project:
 
-## Development notes
+```bash
+npm start
+```
 
-Record commands, environment requirements, deployment steps, and known limitations here.
+## Project
 
-## License
-
-Add the project license and attribution information here.
+The project entry point is `index.js`. Update this README with the purpose, setup requirements, and deployment instructions for the application as it evolves.
 """,
                 ".gitignore" to """node_modules/
 dist/

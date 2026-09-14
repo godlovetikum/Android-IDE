@@ -50,7 +50,6 @@ APK builds are also available through the repository’s GitHub Actions workflow
 - [Project plan](docs/PROJECT_PLAN.md) — product scope, architecture, milestones, and phase definitions.
 - [Status tracker](docs/STATUS_TRACKER.md) — current implementation status and task history.
 - [Phase 1 production readiness](docs/PHASE1_PRODUCTION_READINESS.md) — open hardening gates for the editor and project workspace.
-- [Project metadata and workspace storage](docs/PROJECT_METADATA.md) — the exact fields stored in project metadata and application-private records.
 - [Product requirements](docs/PRODUCT_REQUIREMENTS.md) — editor access, text scaling, and independent background-session requirements.
 - [QA workflow](docs/QA_WORKFLOW.md) — validation and change-review process.
 - [Debug log](docs/DEBUG_LOG.md) — historical defect analysis and fixes.
