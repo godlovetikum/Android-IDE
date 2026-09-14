@@ -718,9 +718,9 @@ build/
 
             val copied = runCatching {
                 safRepository.copyDocumentWithExactName(uri, targetParentUri, storageName)
-            }.getOrElse {
-                _uiState.update {
-                    it.copy(statusMessage = "Move failed: ${it.message ?: "storage provider error"}")
+            }.getOrElse { error ->
+                _uiState.update { state ->
+                    state.copy(statusMessage = "Move failed: ${error.message ?: "storage provider error"}")
                 }
                 return@launch
             }
