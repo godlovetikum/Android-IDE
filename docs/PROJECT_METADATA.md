@@ -13,7 +13,7 @@ The `.git` directory is owned by Git. Android IDE reads selected Git metadata fo
 
 ## `.androidide/project.json`
 
-This file is created inside every newly created project’s `.androidide` directory. The current schema contains the following fields:
+This file is created inside every project’s `.androidide` directory. Android IDE initializes the directory when a project is created, imported, or opened for the first time. The current schema contains the following fields:
 
 | Field | Type | Current value or meaning |
 |---|---|---|
@@ -23,7 +23,7 @@ This file is created inside every newly created project’s `.androidide` direct
 | `createdAt` | Number | Unix epoch time in milliseconds recorded when the project metadata is initialized. |
 | `purpose` | String | `Project-local workspace and recovery metadata`. Describes the role of the directory to a human or migration tool. |
 
-The file does not contain source code, Git credentials, access tokens, or the complete project tree. It is safe to omit from source control only if the user deliberately chooses that policy; newly created projects receive a `.gitignore` entry for `.androidide/` by default.
+The file does not contain source code, Git credentials, access tokens, or the complete project tree. The `.androidide` directory is deliberately **not** added to the default `.gitignore`: it is project-owned Android IDE metadata and should remain available when the project is copied or transferred. Users may choose a different Git policy explicitly.
 
 ## `.androidide/workspace.json`
 
@@ -37,6 +37,79 @@ This file is written when the current project session is saved during project sw
 | `updatedAt` | Number | Unix epoch time in milliseconds for the last write of this workspace file. |
 
 The current project-local workspace file is intentionally small. Cursor and scroll positions are also maintained in the app-private session repository at present; they are not yet serialized into `workspace.json`.
+
+## Default files in a newly created project
+
+Android IDE creates the following project files in addition to `.androidide`.
+
+### `README.md`
+
+The default README is not a placeholder sentence. Its initial contents are:
+
+```markdown
+# Project name
+
+> A project created with Android IDE.
+
+## Overview
+
+Describe what this project does, who it is for, and the problem it solves.
+
+## Getting started
+
+1. Install the project dependencies described by `package.json`.
+2. Update the scripts in `package.json` for the tools used by this project.
+3. Start the project using the appropriate development command.
+
+## Project structure
+
+- `README.md` — project documentation and setup instructions.
+- `package.json` — project name, metadata, and development scripts.
+- `.gitignore` — generated files and local-only artifacts excluded from Git.
+- `.androidide/` — Android IDE project metadata; it is managed by Android IDE.
+
+## Development notes
+
+Record commands, environment requirements, deployment steps, and known limitations here.
+
+## License
+
+Add the project license and attribution information here.
+```
+
+The `Project name` heading is replaced with the trimmed project name entered by the user. The rest of the document is intentionally editable guidance, not generated project-specific claims.
+
+### `package.json`
+
+New projects receive a minimal JavaScript-oriented manifest containing:
+
+```json
+{
+  "name": "normalized-project-name",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": { "start": "node index.js" },
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
+}
+```
+
+The package name is lower-cased and non-alphanumeric runs are converted to hyphens. Android IDE does not install dependencies or claim that the `start` script is executable until a future terminal/runtime feature is available.
+
+### `.gitignore`
+
+The default ignore file contains only common generated or machine-local artifacts:
+
+```gitignore
+node_modules/
+dist/
+build/
+.DS_Store
+```
+
+It does **not** ignore `.androidide/`. The metadata directory is project-owned and must remain available for project transfer and workspace continuity unless the user deliberately changes the project’s Git policy.
 
 ## App-private project registry
 
@@ -86,6 +159,8 @@ The application font-scale multiplier is applied through Compose density so that
 ### Remove from registry
 
 Removing a project from the registry removes the project entry, its app-private session records, its crash-recovery records, and the project’s `.androidide` directory. It does not delete the project directory, source files, README, package files, or `.git`. Unsaved buffers are discarded as part of removing the project from the IDE.
+
+The metadata directory is initialized for an existing project when it is imported or opened and does not overwrite an existing manifest. This allows projects created outside Android IDE to receive the same project-local workspace contract without changing their source files.
 
 ### Permanently delete
 

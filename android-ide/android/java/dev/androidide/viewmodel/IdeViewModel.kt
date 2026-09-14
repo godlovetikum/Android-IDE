@@ -454,6 +454,7 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
         val registeredProject = projectRepository.getAll().firstOrNull { it.uri == treeUriString }
         val displayName = registeredProject?.name ?: name
         val openedAt = System.currentTimeMillis()
+        ensureProjectMetadata(treeUriString, displayName, registeredProject?.createdMs ?: openedAt)
         // F019: dispose all Monaco models from the previous project before clearing
         // tabs — prevents stale models from leaking into the new project (same filename
         // in both projects would reuse the old model and show wrong content).
@@ -489,6 +490,38 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
         }
         if (_uiState.value.activeTabId == null) {
             _uiState.value.openTabs.firstOrNull()?.id?.let(::selectTab)
+        }
+    }
+
+    private suspend fun ensureProjectMetadata(
+        projectUri: String,
+        displayName: String,
+        createdAt: Long,
+    ) {
+        val metadata = safRepository.listChildren(projectUri)
+            .firstOrNull { it.isDirectory && it.displayName == ".androidide" }
+            ?: (safRepository.createFileWithExactName(
+                projectUri,
+                ".androidide",
+                "vnd.android.document/directory",
+            ) as? ExactCreateResult.Created)?.let { created ->
+                safRepository.listChildren(projectUri).firstOrNull { it.documentUri == created.documentUri }
+            }
+        if (metadata == null) {
+            _uiState.update { it.copy(statusMessage = "Project opened, but Android IDE metadata could not be initialized") }
+            return
+        }
+        val hasManifest = safRepository.listChildren(metadata.documentUri)
+            .any { !it.isDirectory && it.displayName == "project.json" }
+        if (!hasManifest) {
+            val manifest = JSONObject().apply {
+                put("schemaVersion", 1)
+                put("projectName", displayName)
+                put("createdBy", "Android IDE")
+                put("createdAt", createdAt)
+                put("purpose", "Project-local Android IDE workspace metadata")
+            }
+            safRepository.writeProjectMetadataFile(projectUri, "project.json", manifest.toString())
         }
     }
 
@@ -529,21 +562,7 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
                 _uiState.update { it.copy(statusMessage = "Could not create project folder: choose another name or location") }
                 return@launch
             }
-            val metadataUri = (safRepository.createFileWithExactName(
-                projectUri,
-                ".androidide",
-                "vnd.android.document/directory",
-            ) as? ExactCreateResult.Created)?.documentUri
-            if (metadataUri != null) {
-                val manifest = JSONObject().apply {
-                    put("schemaVersion", 1)
-                    put("projectName", trimmed)
-                    put("createdBy", "Android IDE")
-                    put("createdAt", System.currentTimeMillis())
-                    put("purpose", "Project-local workspace and recovery metadata")
-                }
-                safRepository.writeProjectMetadataFile(projectUri, "project.json", manifest.toString())
-            }
+            ensureProjectMetadata(projectUri, trimmed, System.currentTimeMillis())
             val packageName = trimmed.lowercase().replace(Regex("[^a-z0-9-]"), "-")
             val files = listOf(
                 "package.json" to """{
@@ -557,8 +576,40 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
   "license": "ISC"
 }
 """,
-                "README.md" to "# $trimmed\n\nCreated with Android IDE.\n",
-                ".gitignore" to ".androidide/\n",
+                "README.md" to """# $trimmed
+
+> A project created with Android IDE.
+
+## Overview
+
+Describe what this project does, who it is for, and the problem it solves.
+
+## Getting started
+
+1. Install the project dependencies described by `package.json`.
+2. Update the scripts in `package.json` for the tools used by this project.
+3. Start the project using the appropriate development command.
+
+## Project structure
+
+- `README.md` — project documentation and setup instructions.
+- `package.json` — project name, metadata, and development scripts.
+- `.gitignore` — generated files and local-only artifacts excluded from Git.
+- `.androidide/` — Android IDE project metadata; it is managed by Android IDE.
+
+## Development notes
+
+Record commands, environment requirements, deployment steps, and known limitations here.
+
+## License
+
+Add the project license and attribution information here.
+""",
+                ".gitignore" to """node_modules/
+dist/
+build/
+.DS_Store
+""",
             )
             files.forEach { (fileName, content) ->
                 val fileUri = (safRepository.createFileWithExactName(
@@ -568,11 +619,7 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
                 ) as? ExactCreateResult.Created)?.documentUri
                 if (fileUri != null) safRepository.writeFile(fileUri, content.toByteArray(Charsets.UTF_8))
             }
-            if (metadataUri == null) {
-                _uiState.update { it.copy(statusMessage = "Project created, but its metadata folder could not be initialized") }
-            } else {
-                _uiState.update { it.copy(statusMessage = "Project created in the selected location") }
-            }
+            _uiState.update { it.copy(statusMessage = "Project created in the selected location") }
             openProject(projectUri)
         }
     }
