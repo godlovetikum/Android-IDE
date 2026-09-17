@@ -61,7 +61,9 @@ jobs:
           distribution: "temurin"
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
+        with:
+          packages: ''
 
       - name: Install Android platform
         run: sdkmanager "platforms;android-${{ env.ANDROID_TARGET_SDK }}"
