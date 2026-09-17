@@ -8,8 +8,6 @@
 //   KeyboardToolbar (optional, 2-page pager of icon buttons, NO horizontal scroll)
 //
 // Keyboard toolbar pages:
-//   Page 1: Indent, Outdent, ↑, ↓, ←, →, Undo, Redo   (8 actions; C017)
-//   Page 2: Cut, Copy, Paste*, Select All, Toggle KB    (5 actions; C017)
 //
 // *Paste reads from the Android ClipboardManager via Kotlin (onPasteFromClipboard)
 //  instead of the WebView clipboard API, which is slow and permission-gated.
@@ -305,7 +303,6 @@ fun EditorPane(
         if (isPreviewVisible && previewHtmlContent.isNotEmpty()) {
             previewCrashed = false
 
-            // F001-B: cap content at 2 MB (ASCII length ≈ byte count for the
             // HTML markdownToPreviewHtml produces). Prevents OOM on low-RAM
             // devices and avoids Binder-layer edge cases on some OEM firmwares.
             if (previewHtmlContent.length > 2_097_152) {
@@ -313,12 +310,10 @@ fun EditorPane(
                 return@LaunchedEffect
             }
 
-            // F001-A: post() defers until the WebView is attached to the view
             // hierarchy via AndroidView factory — prevents RuntimeException
             // from calling loadDataWithBaseURL on an unattached WebView during
             // the first Compose frame where isPreviewVisible flips to true.
             previewWebView.post {
-                // F001-C: catch RuntimeException thrown by loadDataWithBaseURL
                 // itself (malformed content, renderer not ready) and surface it
                 // as a crash overlay rather than terminating the process.
                 runCatching {
@@ -505,13 +500,11 @@ private data class KeyboardAction(
     val commandId: String?,            // null for special Kotlin-side actions
     val isPaste: Boolean = false,      // triggers onPasteFromClipboard instead of executeCommand
     val requiresSelection: Boolean = false,
-    /** C017: replaced "Show Keyboard"+"Hide Keyboard" with a single stateful toggle. */
     val isKeyboardToggle: Boolean = false,
 )
 
 // Page 1: navigation + indent/outdent + undo/redo (8 actions)
 private val TOOLBAR_PAGE_1 = listOf(
-    // C017: smartIndent — inserts tab-width spaces when no selection; indents lines when selection exists.
     KeyboardAction(Icons.Default.FormatIndentIncrease, "Indent",       "smartIndent"),
     KeyboardAction(Icons.Default.FormatIndentDecrease, "Outdent",      "smartOutdent"),
     KeyboardAction(Icons.Default.KeyboardArrowUp,      "Cursor Up",    "cursorUp"),
@@ -523,7 +516,6 @@ private val TOOLBAR_PAGE_1 = listOf(
 )
 
 // Page 2: clipboard + selection + keyboard toggle (5 actions)
-// F016: cut/copy now use requestCut/requestCopy so Monaco posts the selected
 // text to the Kotlin layer where it is written to the Android ClipboardManager.
 // The old editor.action.clipboardCutAction / clipboardCopyAction use the browser
 // Clipboard API which is gated behind a user-permission prompt and fails silently.
@@ -532,7 +524,6 @@ private val TOOLBAR_PAGE_2 = listOf(
     KeyboardAction(Icons.Default.ContentCopy,   "Copy",             "requestCopy", requiresSelection = true),
     KeyboardAction(Icons.Default.ContentPaste,  "Paste",            null, isPaste = true),
     KeyboardAction(Icons.Default.SelectAll,     "Select All",       "editor.action.selectAll"),
-    // C017: single toggle replaces the former "Show Keyboard" + "Hide Keyboard" pair.
     KeyboardAction(Icons.Default.Keyboard,      "Toggle Keyboard",  null, isKeyboardToggle = true),
 )
 
@@ -547,7 +538,25 @@ private val TOOLBAR_PAGE_3 = listOf(
     KeyboardAction(Icons.Default.KeyboardArrowRight, "Select to End",     "cursorEndSelect"),
 )
 
-private val TOOLBAR_PAGES = listOf(TOOLBAR_PAGE_1, TOOLBAR_PAGE_2, TOOLBAR_PAGE_3)
+// Developer actions remain on a dedicated page so the primary navigation and
+// clipboard controls stay stable and easy to reach on a phone.
+private val TOOLBAR_PAGE_4 = listOf(
+    KeyboardAction(Icons.Default.FormatIndentIncrease, "Format Document", "editor.action.formatDocument"),
+    KeyboardAction(Icons.Default.ContentCopy, "Comment / Uncomment", "editor.action.commentLine"),
+    KeyboardAction(Icons.Default.ContentCopy, "Duplicate Line", "editor.action.duplicateSelection"),
+    KeyboardAction(Icons.Default.KeyboardArrowUp, "Move Line Up", "editor.action.moveLinesUpAction"),
+    KeyboardAction(Icons.Default.KeyboardArrowDown, "Move Line Down", "editor.action.moveLinesDownAction"),
+    KeyboardAction(Icons.Default.KeyboardArrowUp, "Fold", "editor.action.fold"),
+    KeyboardAction(Icons.Default.KeyboardArrowDown, "Unfold", "editor.action.unfold"),
+)
+
+private val TOOLBAR_PAGE_5 = listOf(
+    KeyboardAction(Icons.Default.KeyboardArrowUp, "Previous Match", "editor.action.previousMatchFindAction"),
+    KeyboardAction(Icons.Default.KeyboardArrowDown, "Next Match", "editor.action.nextMatchFindAction"),
+    KeyboardAction(Icons.Default.KeyboardArrowLeft, "Close Find", "closeSearch"),
+)
+
+private val TOOLBAR_PAGES = listOf(TOOLBAR_PAGE_1, TOOLBAR_PAGE_2, TOOLBAR_PAGE_3, TOOLBAR_PAGE_4, TOOLBAR_PAGE_5)
 
 @OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
@@ -559,7 +568,6 @@ private fun KeyboardToolbar(
 ) {
     val colors     = LocalIdeColors.current
     val pagerState = rememberPagerState(pageCount = { TOOLBAR_PAGES.size })
-    // F015: read actual IME visibility from window insets.  The local-bool approach
     // used previously goes out of sync when the system dismisses the keyboard (Back
     // button, predictive-back gesture, navigation) without our code knowing.
     val density         = LocalDensity.current
@@ -580,7 +588,6 @@ private fun KeyboardToolbar(
             ) {
                 TOOLBAR_PAGES[pageIndex].forEach { action ->
                     ToolbarIconButton(
-                        // F015: correct icon — show KeyboardHide when keyboard is visible
                         // (tap hides it) and the Keyboard icon when hidden (tap shows it).
                         // Previous code had the logic inverted.
                         icon             = if (action.isKeyboardToggle)
@@ -600,7 +607,6 @@ private fun KeyboardToolbar(
                                 } else {
                                     onExecuteCommand("focusEditor")
                                 }
-                                // F015: no local-state flip — WindowInsets.ime updates
                                 // automatically after the IME transition completes.
                             }
                         } else null,
@@ -640,7 +646,6 @@ private fun ToolbarIconButton(
     enabled: Boolean = true,
     onExecuteCommand: (String) -> Unit,
     onPaste: () -> Unit,
-    /** C017: optional override used by the keyboard-toggle button. */
     onCustomClick: (() -> Unit)? = null,
 ) {
     val colors       = LocalIdeColors.current

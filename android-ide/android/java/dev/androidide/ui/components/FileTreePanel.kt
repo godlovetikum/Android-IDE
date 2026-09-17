@@ -9,7 +9,7 @@
 //   • Active file highlighting
 //   • Multi-selection mode with exit button
 //   • .git folder filtering (controlled by hideGitFolder)
-//   • File name search panel (controlled by isSearchVisible)
+//   • Project-content search panel (controlled by isSearchVisible)
 //
 // Clipboard:
 //   clipboardItems: List<FileNode> replaces the old clipboard: FileNode? to support
@@ -70,11 +70,13 @@ fun FileTreePanel(
     isMultiSelectMode: Boolean,
     selectedUris: Set<String>,
     isSearchVisible: Boolean,
+    isContentSearchVisible: Boolean,
     fileSearchQuery: String,
     fileSearchResults: List<FileSearchResult>,
+    contentSearchQuery: String,
+    contentSearchResults: List<FileSearchResult>,
     // ── File-level callbacks ───────────────────────────────────────────────
     onFileClick: (String) -> Unit,
-    /** C011: double-tap opens a permanent (non-preview) tab. */
     onFileDoubleClick: (String) -> Unit,
     onDirToggle: (String) -> Unit,
     onShowRenameDialog: (FileNode) -> Unit,
@@ -93,15 +95,18 @@ fun FileTreePanel(
     onImportFilesAtRoot: () -> Unit,
     onExportProject: () -> Unit,
     onRefresh: () -> Unit,
-    onRenameProject: () -> Unit,
+    onShowProjectDetails: () -> Unit,
+    onDeleteProject: () -> Unit,
     onRemoveProject: () -> Unit,
-    // F012: root-folder paste; restriction that disallowed pasting at root removed.
     onPasteAtRoot: () -> Unit,
     // ── Search / selection / path callbacks ───────────────────────────────
     onCopyPath: (String) -> Unit,
     onToggleNodeSelection: (String) -> Unit,
     onExitSelectionMode: () -> Unit,
     onSearchQueryChange: (String) -> Unit,
+    onContentSearchQueryChange: (String) -> Unit,
+    onHideFileSearch: () -> Unit,
+    onHideContentSearch: () -> Unit,
     onSearchFileSelect: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -112,22 +117,24 @@ fun FileTreePanel(
     val imeTrailingPadding = with(density) { (imeBottomPx * 1.2f).toDp() }
 
     when {
-        // ── File-name search results panel ─────────────────────────────────
-        isSearchVisible -> {
+        // ── Filename and project-content search panels ──────────────────────
+        isSearchVisible || isContentSearchVisible -> {
+            val query = if (isContentSearchVisible) contentSearchQuery else fileSearchQuery
+            val results = if (isContentSearchVisible) contentSearchResults else fileSearchResults
             Column(modifier = modifier) {
                 OutlinedTextField(
-                    value         = fileSearchQuery,
-                    onValueChange = onSearchQueryChange,
+                    value         = query,
+                    onValueChange = if (isContentSearchVisible) onContentSearchQueryChange else onSearchQueryChange,
                     modifier      = Modifier.fillMaxWidth().padding(8.dp),
-                    placeholder   = { Text("Search files…", style = MaterialTheme.typography.bodyMedium) },
+                    placeholder   = { Text(if (isContentSearchVisible) "Search project contents…" else "Search filenames…", style = MaterialTheme.typography.bodyMedium) },
                     singleLine    = true,
                     leadingIcon   = { Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(18.dp)) },
                     textStyle     = MaterialTheme.typography.bodyMedium,
                 )
-                if (fileSearchResults.isEmpty() && fileSearchQuery.isNotEmpty()) {
+                if (results.isEmpty() && query.isNotEmpty()) {
                     Box(modifier = Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.TopCenter) {
                         Text(
-                            text  = "No files matching \u201c$fileSearchQuery\u201d",
+                            text  = if (isContentSearchVisible) "No project content matching \u201c$query\u201d" else "No filenames matching \u201c$query\u201d",
                             style = MaterialTheme.typography.bodyMedium,
                             color = colors.textDisabled,
                         )
@@ -137,11 +144,15 @@ fun FileTreePanel(
                         modifier = Modifier.fillMaxSize(),
                         contentPadding = PaddingValues(bottom = imeTrailingPadding),
                     ) {
-                        items(fileSearchResults, key = { it.documentUri }) { result ->
+                        items(results, key = { it.documentUri }) { result ->
                             SearchResultRow(result = result, onSelect = onSearchFileSelect)
                         }
                     }
                 }
+                TextButton(
+                    onClick = if (isContentSearchVisible) onHideContentSearch else onHideFileSearch,
+                    modifier = Modifier.padding(horizontal = 8.dp),
+                ) { Text("Close search") }
             }
         }
 
@@ -217,7 +228,8 @@ fun FileTreePanel(
                             onNewFolder    = onNewFolderAtRoot,
                             onImportFiles  = onImportFilesAtRoot,
                             onExport       = onExportProject,
-                            onRename       = onRenameProject,
+                            onShowDetails  = onShowProjectDetails,
+                            onDelete       = onDeleteProject,
                             onRemove       = onRemoveProject,
                             onPasteAtRoot  = onPasteAtRoot,
                         )
@@ -298,6 +310,15 @@ private fun SearchResultRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
+            if (result.matchPreview.isNotBlank()) {
+                Text(
+                    text = result.matchPreview,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = colors.textSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
     }
 }
@@ -312,7 +333,8 @@ private fun RootProjectNode(
     onNewFolder: () -> Unit,
     onImportFiles: () -> Unit,
     onExport: () -> Unit,
-    onRename: () -> Unit,
+    onShowDetails: () -> Unit,
+    onDelete: () -> Unit,
     onRemove: () -> Unit,
     onPasteAtRoot: () -> Unit,
 ) {
@@ -365,7 +387,6 @@ private fun RootProjectNode(
                     text    = { Text("Import Files") },
                     onClick = { menuOpen = false; onImportFiles() },
                 )
-                // F012: root-folder paste — the spec prohibits restricting paste at project root.
                 if (clipboardItems.isNotEmpty()) {
                     val count = clipboardItems.size
                     DropdownMenuItem(
@@ -383,11 +404,15 @@ private fun RootProjectNode(
                 )
                 HorizontalDivider()
                 DropdownMenuItem(
-                    text    = { Text("Rename Project") },
-                    onClick = { menuOpen = false; onRename() },
+                    text    = { Text("Project details") },
+                    onClick = { menuOpen = false; onShowDetails() },
                 )
                 DropdownMenuItem(
-                    text    = { Text("Remove from List", color = LocalIdeColors.current.error) },
+                    text    = { Text("Delete permanently") },
+                    onClick = { menuOpen = false; onDelete() },
+                )
+                DropdownMenuItem(
+                    text    = { Text("Remove from registry", color = LocalIdeColors.current.error) },
                     onClick = { menuOpen = false; onRemove() },
                 )
             }
@@ -447,7 +472,6 @@ private fun FileTreeRow(
                     else onFileClick(node.documentUri)
                 },
                 onDoubleClick = {
-                    // C011: double-tap opens a permanent (non-preview) tab
                     if (!isMultiSelectMode && !node.isDirectory) onFileDoubleClick(node.documentUri)
                 },
                 onLongClick = { menuOpen = true },
@@ -585,7 +609,6 @@ private fun FileTreeRow(
                         text    = { Text("Delete", color = LocalIdeColors.current.error) },
                         onClick = { menuOpen = false; onShowDeleteDialog(node) },
                     )
-                    // F026: folders were missing Select; multi-select must work for both files and folders.
                     HorizontalDivider()
                     DropdownMenuItem(
                         text    = { Text("Select") },
@@ -597,7 +620,6 @@ private fun FileTreeRow(
                         text    = { Text("Rename") },
                         onClick = { menuOpen = false; onShowRenameDialog(node) },
                     )
-                    // F023: Duplicate was wired through all callback layers but the menu item was absent.
                     DropdownMenuItem(
                         text    = { Text("Duplicate") },
                         onClick = { menuOpen = false; onShowDuplicateDialog(node) },
@@ -634,7 +656,6 @@ private fun FileTreeRow(
 // ── File type icon ─────────────────────────────────────────────────────────────
 
 /**
- * F013: return a Material icon that gives a visual cue about the file's purpose.
  *
  * Priority: image formats → text/docs → code → generic.
  * Uses only icons confirmed present in material-icons-extended.

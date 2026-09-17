@@ -93,11 +93,8 @@ fun ProjectsScreen(
         sort,
     ) {
         val filtered = uiState.recentProjects.filter {
-            val storagePath = uiState.projectDetailsByUri[it.uri]?.storagePath.orEmpty()
             searchQuery.isBlank() ||
-                it.name.contains(searchQuery, ignoreCase = true) ||
-                it.uri.contains(searchQuery, ignoreCase = true) ||
-                storagePath.contains(searchQuery, ignoreCase = true)
+                it.name.contains(searchQuery, ignoreCase = true)
         }
         val details = uiState.projectDetailsByUri
         when (sort) {
@@ -247,7 +244,7 @@ fun ProjectsScreen(
                     onValueChange = { searchQuery = it },
                     singleLine = true,
                     label = { Text("Search projects") },
-                    placeholder = { Text("Name or storage path") },
+                    placeholder = { Text("Project name") },
                     modifier = Modifier
                         .fillMaxWidth()
                         .focusRequester(searchFocusRequester)
@@ -313,25 +310,8 @@ fun ProjectsScreen(
                             onExport = { onExportProject(project.uri) },
                             onMove = { onMoveProject(project.uri) },
                             onRemove = { ideViewModel.requestRemoveProject(project.uri) },
+                            onDelete = { ideViewModel.requestDeleteProject(project.uri) },
                         )
-                    }
-                    item {
-                        Spacer(Modifier.height(8.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            OutlinedButton(onClick = { onCreateBlankProject(null) }, modifier = Modifier.weight(1f)) {
-                                Icon(Icons.Default.CreateNewFolder, contentDescription = null)
-                                Spacer(Modifier.width(8.dp))
-                                Text("New Project")
-                            }
-                            OutlinedButton(onClick = onOpenProjectFolder, modifier = Modifier.weight(1f)) {
-                                Icon(Icons.Default.Add, contentDescription = null)
-                                Spacer(Modifier.width(8.dp))
-                                Text("Open Folder")
-                            }
-                        }
                     }
                 }
             }
@@ -378,6 +358,7 @@ private fun ProjectItem(
     onExport: () -> Unit,
     onMove: () -> Unit,
     onRemove: () -> Unit,
+    onDelete: () -> Unit,
 ) {
     val colors   = LocalIdeColors.current
     val bg       = if (isActive) colors.activeHighlight else colors.background
@@ -406,13 +387,6 @@ private fun ProjectItem(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            Text(
-                text  = details?.storagePath ?: project.uri,
-                style = MaterialTheme.typography.bodySmall,
-                color = colors.textSecondary,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
             details?.let {
                 Text(
                     text = "Size: ${formatBytes(it.totalBytes)}   Files: ${it.fileCount}",
@@ -420,14 +394,6 @@ private fun ProjectItem(
                     color = colors.textSecondary,
                 )
             }
-        }
-        if (isActive) {
-            Spacer(Modifier.width(8.dp))
-            Text(
-                text  = "OPEN",
-                style = MaterialTheme.typography.labelSmall,
-                color = colors.accent,
-            )
         }
         Spacer(Modifier.width(4.dp))
         Column(horizontalAlignment = Alignment.End) {
@@ -456,12 +422,16 @@ private fun ProjectItem(
                     onClick = { menuOpen = false; onExport() },
                 )
                 DropdownMenuItem(
-                    text    = { Text("Move storage\u2026") },
+                    text    = { Text("Move storage…") },
                     onClick = { menuOpen = false; onMove() },
                 )
                 HorizontalDivider()
                 DropdownMenuItem(
-                    text    = { Text("Remove From Registry") },
+                    text    = { Text("Delete permanently") },
+                    onClick = { menuOpen = false; onDelete() },
+                )
+                DropdownMenuItem(
+                    text    = { Text("Remove from registry") },
                     onClick = { menuOpen = false; onRemove() },
                 )
                 }

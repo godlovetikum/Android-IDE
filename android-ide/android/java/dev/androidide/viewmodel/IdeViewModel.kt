@@ -57,12 +57,16 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.UUID
 
 class IdeViewModel(application: Application) : AndroidViewModel(application) {
+
+    private var projectSearchJob: Job? = null
 
     private val safRepository      = SafRepository(application)
     private val projectRepository  = ProjectRepository(application)
@@ -94,6 +98,7 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
      * Kept outside IdeUiState to avoid full Compose recomposition on every keystroke.
      */
     private val pendingContent = mutableMapOf<String, String>()
+    private var workspaceSaveJob: Job? = null
 
     init {
         // Read the previous session marker before marking this process as active.
@@ -217,7 +222,6 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
         val screen = screenName?.let { runCatching { AppScreen.valueOf(it) }.getOrNull() }
         if (screen != null) _uiState.update { it.copy(currentScreen = screen) }
 
-        // F020: validate that the saved project URI still has a persisted SAF permission
         // grant before attempting to open it.  Grants can be revoked after device reboot
         // (if the provider does not survive reboot) or an explicit permission reset.
         val hasPermission = projectUri.startsWith("file://") ||
@@ -231,18 +235,6 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        // Load cursor and scroll positions before tabs open so the positions are
-        // available in IdeUiState when EditorPane's LaunchedEffect fires.
-        val cursorPositions = sessionRepository.getCursorPositionsForProject(projectUri)
-        val scrollPositions = sessionRepository.getScrollPositionsForProject(projectUri)
-        if (cursorPositions.isNotEmpty() || scrollPositions.isNotEmpty()) {
-            _uiState.update { it.copy(
-                tabCursorPositions = cursorPositions,
-                tabScrollPositions = scrollPositions,
-            )}
-        }
-
-        // F002: single sequential coroutine prevents race where parallel launches
         // reset openTabs mid-flight (openProjectInternal wipes tabs; parallel
         // openFileInternal calls may have already added tabs before the wipe).
         viewModelScope.launch {
@@ -251,7 +243,6 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    // F022: surface a status-bar message from click handlers that have no ViewModel action yet.
     fun noteStatusMessage(msg: String) {
         _uiState.update { it.copy(statusMessage = msg) }
     }
@@ -272,24 +263,33 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
      * Save the current project's workspace state before switching to another project.
      * Called internally whenever openProjectInternal runs with a different URI.
      */
-    private fun saveCurrentProjectSession() {
+    private suspend fun saveCurrentProjectSession() {
         val state = _uiState.value
         val projectUri = state.projectRootUri ?: return
-        sessionRepository.saveTabsForProject(
-            projectUri      = projectUri,
-            openTabUris     = state.openTabs.filter { !it.isBlank }.map { it.documentUri },
-            activeTabUri    = state.openTabs.firstOrNull { it.isActive && !it.isBlank }?.documentUri,
-            cursorPositions = state.tabCursorPositions,
-            scrollPositions = state.tabScrollPositions,
-        )
-        viewModelScope.launch {
-            val workspace = JSONObject().apply {
-                put("schemaVersion", 1)
-                put("activeTabUri", state.openTabs.firstOrNull { it.isActive && !it.isBlank }?.documentUri ?: JSONObject.NULL)
-                put("openTabUris", state.openTabs.filter { !it.isBlank }.map { it.documentUri })
-                put("updatedAt", System.currentTimeMillis())
-            }
-            safRepository.writeProjectMetadataFile(projectUri, "workspace.json", workspace.toString())
+        val workspace = JSONObject().apply {
+            put("schemaVersion", 1)
+            put("activeTabUri", state.openTabs.firstOrNull { it.isActive && !it.isBlank }?.documentUri ?: JSONObject.NULL)
+            put("openTabUris", org.json.JSONArray(state.openTabs.filter { !it.isBlank }.map { it.documentUri }))
+            put("cursorPositions", JSONObject().apply {
+                state.tabCursorPositions.forEach { (uri, position) ->
+                    put(uri, org.json.JSONArray(listOf(position.first, position.second)))
+                }
+            })
+            put("scrollPositions", JSONObject().apply {
+                state.tabScrollPositions.forEach { (uri, scrollTop) -> put(uri, scrollTop) }
+            })
+            put("updatedAt", System.currentTimeMillis())
+        }
+        if (!safRepository.writeProjectMetadataFile(projectUri, "workspace.json", workspace.toString(2))) {
+            _uiState.update { it.copy(statusMessage = "Workspace state could not be saved") }
+        }
+    }
+
+    private fun scheduleWorkspaceSave() {
+        workspaceSaveJob?.cancel()
+        workspaceSaveJob = viewModelScope.launch {
+            delay(250)
+            saveCurrentProjectSession()
         }
     }
 
@@ -411,9 +411,12 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun switchProjectNow(treeUriString: String) {
-        saveCurrentProjectSession()
-        _uiState.update { it.copy(projectSwitchRequest = null) }
-        viewModelScope.launch { openProjectInternal(treeUriString) }
+        viewModelScope.launch {
+            workspaceSaveJob?.cancel()
+            saveCurrentProjectSession()
+            _uiState.update { it.copy(projectSwitchRequest = null) }
+            openProjectInternal(treeUriString)
+        }
     }
 
     private suspend fun saveDirtyTabsForProject(): Boolean {
@@ -455,7 +458,7 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
         val displayName = registeredProject?.name ?: name
         val openedAt = System.currentTimeMillis()
         ensureProjectMetadata(treeUriString, displayName, registeredProject?.createdMs ?: openedAt)
-        // F019: dispose all Monaco models from the previous project before clearing
+        ensureProjectReadme(treeUriString, displayName)
         // tabs — prevents stale models from leaking into the new project (same filename
         // in both projects would reuse the old model and show wrong content).
         sendEditorCommand(EditorOutbound.CloseAllModels)
@@ -483,8 +486,23 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update { it.copy(fileTree = nodes.sortedForTree()) }
 
         // Restore this project's workspace state.
-        val tabUris   = sessionRepository.getOpenTabUrisForProject(treeUriString)
-        val activeUri = sessionRepository.getActiveTabUriForProject(treeUriString)
+        val workspace = safRepository.readProjectMetadataFile(treeUriString, "workspace.json")
+        val tabUris = workspace?.optJSONArray("openTabUris")?.let { array ->
+            (0 until array.length()).mapNotNull { index -> array.optString(index).takeIf(String::isNotBlank) }
+        } ?: emptyList()
+        val activeUri = workspace?.optString("activeTabUri")?.takeIf { it.isNotBlank() && it != "null" }
+        val cursorPositions = workspace?.optJSONObject("cursorPositions")?.let { obj ->
+            obj.keys().asSequence().mapNotNull { uri ->
+                val position = obj.optJSONArray(uri)
+                if (position != null && position.length() >= 2) {
+                    uri to Pair(position.optInt(0, 1), position.optInt(1, 1))
+                } else null
+            }.toMap()
+        }.orEmpty()
+        val scrollPositions = workspace?.optJSONObject("scrollPositions")?.let { obj ->
+            obj.keys().asSequence().map { uri -> uri to obj.optInt(uri, 0) }.toMap()
+        }.orEmpty()
+        _uiState.update { it.copy(tabCursorPositions = cursorPositions, tabScrollPositions = scrollPositions) }
         tabUris.forEach { uri ->
             openFileInternal(uri, markActive = uri == activeUri)
         }
@@ -497,6 +515,7 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
         projectUri: String,
         displayName: String,
         createdAt: Long,
+        description: String = "",
     ) {
         val metadata = safRepository.listChildren(projectUri)
             .firstOrNull { it.isDirectory && it.displayName == ".androidide" }
@@ -516,13 +535,73 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
         if (!hasManifest) {
             val manifest = JSONObject().apply {
                 put("schemaVersion", 1)
-                put("projectName", displayName)
-                put("createdBy", "Android IDE")
-                put("createdAt", createdAt)
-                put("purpose", "Project-local Android IDE workspace metadata")
+                put("project", JSONObject().apply {
+                    put("name", displayName)
+                    put("description", description)
+                    put("createdAt", createdAt)
+                    put("updatedAt", createdAt)
+                })
             }
-            safRepository.writeProjectMetadataFile(projectUri, "project.json", manifest.toString())
+            safRepository.writeProjectMetadataFile(projectUri, "project.json", manifest.toString(2))
         }
+        val hasWorkspace = safRepository.listChildren(metadata.documentUri)
+            .any { !it.isDirectory && it.displayName == "workspace.json" }
+        if (!hasWorkspace) {
+            val workspace = JSONObject().apply {
+                put("schemaVersion", 1)
+                put("openTabUris", org.json.JSONArray())
+                put("activeTabUri", JSONObject.NULL)
+                put("cursorPositions", JSONObject())
+                put("scrollPositions", JSONObject())
+                put("updatedAt", System.currentTimeMillis())
+            }
+            safRepository.writeProjectMetadataFile(projectUri, "workspace.json", workspace.toString(2))
+        }
+        val hasMetadataReadme = safRepository.listChildren(metadata.documentUri)
+            .any { !it.isDirectory && it.displayName == "README.md" }
+        if (!hasMetadataReadme) {
+            val metadataReadme = """# Android IDE project metadata
+
+This folder is managed by Android IDE and stores project-local workspace state.
+
+- `project.json` stores the project name, description, and lifecycle timestamps.
+- `workspace.json` stores open tabs, the active tab, cursor positions, and scroll positions.
+
+These files are project-local and travel with the project. Global application preferences remain outside this folder.
+"""
+            val metadataReadmeFile = safRepository.createFileWithExactName(
+                metadata.documentUri,
+                "README.md",
+                EditorLanguageRegistry.mimeTypeForFileName("README.md"),
+            ) as? ExactCreateResult.Created
+            metadataReadmeFile?.let { created ->
+                safRepository.writeFile(created.documentUri, metadataReadme.toByteArray(Charsets.UTF_8))
+            }
+        }
+    }
+
+    /** Add the standard project README only when an imported project lacks one. */
+    private suspend fun ensureProjectReadme(projectUri: String, displayName: String) {
+        if (safRepository.listChildren(projectUri).any { !it.isDirectory && it.displayName == "README.md" }) return
+        val readme = """# $displayName
+
+## Attribution
+
+This project was created with [Android IDE](https://github.com/godlovetikum/Android-IDE).
+
+- **Author:** [godlovetikum](https://github.com/godlovetikum)
+- **Android IDE repository:** https://github.com/godlovetikum/Android-IDE
+
+## Development
+
+Add the purpose of this project, setup requirements, development commands, and deployment notes here.
+"""
+        val created = safRepository.createFileWithExactName(
+            projectUri,
+            "README.md",
+            EditorLanguageRegistry.mimeTypeForFileName("README.md"),
+        ) as? ExactCreateResult.Created ?: return
+        safRepository.writeFile(created.documentUri, readme.toByteArray(Charsets.UTF_8))
     }
 
     fun refreshProjectMetadata() {
@@ -534,6 +613,7 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
                 val metadata = safRepository.projectMetadata(project.uri) ?: return@mapNotNull null
                 project.uri to ProjectDetails(
                     project = project,
+                    description = metadata.description,
                     creationTimeMs = metadata.creationTimeMs ?: project.createdMs,
                     lastModifiedTimeMs = metadata.lastModifiedTimeMs,
                     storageProvider = metadata.storageProvider,
@@ -549,8 +629,7 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** Create a project under a user-selected SAF directory; never use app-internal storage. */
-    fun createBlankProject(name: String, targetParentUri: String) {
+    fun createBlankProject(name: String, description: String, targetParentUri: String) {
         val trimmed = name.trim().ifEmpty { "Project" }
         viewModelScope.launch {
             val created = safRepository.createFileWithExactName(
@@ -562,7 +641,7 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
                 _uiState.update { it.copy(statusMessage = "Could not create project folder: choose another name or location") }
                 return@launch
             }
-            ensureProjectMetadata(projectUri, trimmed, System.currentTimeMillis())
+            ensureProjectMetadata(projectUri, trimmed, System.currentTimeMillis(), description.trim())
             val packageName = trimmed.lowercase().replace(Regex("[^a-z0-9-]"), "-")
             val files = listOf(
                 "package.json" to """{
@@ -578,7 +657,14 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
 """,
                 "README.md" to """# $trimmed
 
-This project was created with Android IDE.
+${description.trim().ifEmpty { "This project was created with Android IDE." }}
+
+## Attribution
+
+This project was created with [Android IDE](https://github.com/godlovetikum/Android-IDE).
+
+- **Author:** [godlovetikum](https://github.com/godlovetikum)
+- **Android IDE repository:** https://github.com/godlovetikum/Android-IDE
 
 ## Getting started
 
@@ -785,6 +871,7 @@ build/
                     it.copy(
                         projectDetails = ProjectDetails(
                             project = project,
+                            description = metadata.description,
                             creationTimeMs = metadata.creationTimeMs ?: project.createdMs,
                             lastModifiedTimeMs = metadata.lastModifiedTimeMs,
                             storageProvider = metadata.storageProvider,
@@ -823,20 +910,22 @@ build/
     }
 
     fun closeCurrentProject() {
-        saveCurrentProjectSession()
-        _uiState.value.openTabs.forEach { pendingContent.remove(it.id) }
-        _uiState.update { state ->
-            state.copy(
-                projectName    = "",
-                projectRootUri = null,
-                fileTree       = emptyList(),
-                openTabs       = emptyList(),
-                activeTabId    = null,
-                isEditorReady  = false,
-                currentScreen  = AppScreen.PROJECTS,
-            )
+        viewModelScope.launch {
+            saveCurrentProjectSession()
+            _uiState.value.openTabs.forEach { pendingContent.remove(it.id) }
+            _uiState.update { state ->
+                state.copy(
+                    projectName    = "",
+                    projectRootUri = null,
+                    fileTree       = emptyList(),
+                    openTabs       = emptyList(),
+                    activeTabId    = null,
+                    isEditorReady  = false,
+                    currentScreen  = AppScreen.PROJECTS,
+                )
+            }
+            saveSession()
         }
-        saveSession()
     }
 
     fun refreshProject() {
@@ -1086,15 +1175,14 @@ build/
                 currentScreen = AppScreen.EDITOR,
             )
         }
+        scheduleWorkspaceSave()
     }
 
     fun openFile(documentUri: String) {
-        // C011: single-tap opens a temporary (preview) tab.
         _uiState.update { it.copy(editorFileLoading = true) }
         viewModelScope.launch { openFileInternal(documentUri, markActive = true, temporary = true) }
     }
 
-    /** C011: double-tap on a file tree item opens (or upgrades) a permanent tab. */
     fun openFilePermanent(documentUri: String) {
         _uiState.update { it.copy(editorFileLoading = true) }
         viewModelScope.launch { openFileInternal(documentUri, markActive = true, temporary = false) }
@@ -1107,14 +1195,12 @@ build/
     ) {
         val existing = _uiState.value.openTabs.find { it.documentUri == documentUri }
         if (existing != null) {
-            // C011: pinning action (temporary=false) upgrades a preview tab to permanent.
             if (!temporary && existing.isTemporary) pinTab(existing.id)
             if (markActive) selectTab(existing.id)
             _uiState.update { it.copy(editorFileLoading = false) }
             return
         }
 
-        // C011: single-tap replaces any existing temporary (preview) tab before opening a new one.
         if (temporary) {
             val oldTemp = _uiState.value.openTabs.firstOrNull { it.isTemporary }
             if (oldTemp != null) {
@@ -1135,7 +1221,6 @@ build/
             return
         }
 
-        // F005-A: size guard — reject files larger than 5 MB to prevent OOM in
         // Monaco and the Kotlin string allocation that precedes it.
         if (bytes.size > 5 * 1024 * 1024) {
             _uiState.update { it.copy(statusMessage = "Cannot open: file is ${bytes.size / 1_048_576} MB (5 MB limit)") }
@@ -1145,7 +1230,6 @@ build/
         val displayName = _uiState.value.fileTree.findNode(documentUri)?.displayName
             ?: safRepository.getDisplayName(documentUri)
             ?: displayNameFromUri(documentUri)
-        // F005-B: binary detection — scan the first 8 KB for null bytes.
         // Binary content (.apk, .class, compiled assets) corrupts Monaco's text model.
         if (bytes.take(8192).any { it == 0.toByte() }) {
             _uiState.update { it.copy(fileOpDialog = FileOpDialog.BinaryOpenError(displayName)) }
@@ -1178,6 +1262,7 @@ build/
                 editorFileLoading = false,
             )
         }
+        scheduleWorkspaceSave()
     }
 
     fun selectTab(tabId: String) {
@@ -1188,15 +1273,16 @@ build/
                 hasEditorSelection = false,
             )
         }
+        scheduleWorkspaceSave()
     }
 
-    /** C011: make a preview tab permanent so it survives the next single-tap. */
     fun pinTab(tabId: String) {
         _uiState.update { state ->
             state.copy(openTabs = state.openTabs.map {
                 if (it.id == tabId) it.copy(isTemporary = false) else it
             })
         }
+        scheduleWorkspaceSave()
     }
 
     /** Close a tab immediately, discarding unsaved changes without confirmation. */
@@ -1215,6 +1301,7 @@ build/
             )
         }
         tab?.let { sendEditorCommand(EditorOutbound.CloseTab(it.documentUri)) }
+        scheduleWorkspaceSave()
     }
 
     fun closeTabSafe(tabId: String) {
@@ -1334,7 +1421,6 @@ build/
                 pendingContent[tab.id] = message.content
                 _uiState.update { state ->
                     state.copy(openTabs = state.openTabs.map {
-                        // C011: first edit pins the preview tab permanently
                         if (it.id == tab.id) it.copy(isDirty = true, isTemporary = false) else it
                     })
                 }
@@ -1363,6 +1449,7 @@ build/
                         tabCursorPositions = updatedCursors,
                     )
                 }
+                scheduleWorkspaceSave()
             }
 
             is EditorInbound.SelectionChanged ->
@@ -1370,7 +1457,6 @@ build/
 
             is EditorInbound.FileSaved -> saveFile(message.path)
 
-            // F016: Monaco posted selected text; write it to the Android clipboard.
             // isCut=true means Monaco has already deleted the selection — nothing else
             // to do on the Kotlin side after placing the text in the clipboard.
             is EditorInbound.TextCopied -> {
@@ -1387,6 +1473,7 @@ build/
                     else state.tabScrollPositions
                     state.copy(tabScrollPositions = updatedScrolls)
                 }
+                scheduleWorkspaceSave()
             }
         }
     }
@@ -1480,7 +1567,6 @@ build/
     //   HTML and Markdown files → preview provider (togglePreview).
     //   All other file types   → status message; no crash.
     //
-    // Phase 2+ extensibility:
     //   Add new when-branches here for live server, terminal execution, etc.
     //   Each branch should launch its provider safely (coroutine + runCatching).
     //   The Run action must never terminate the application under any failure.
@@ -1494,7 +1580,6 @@ build/
             return
         }
 
-        // F006: project-scoped run — search the in-memory (expanded) file tree for
         // the first .html file.  When found, open it as the active tab so the user
         // can press Run once more to preview it.  This covers the common case where
         // a .css or .js file is active inside an HTML project.
@@ -1577,7 +1662,7 @@ build/
     // ── File search ────────────────────────────────────────────────────────
 
     fun showFileSearch() {
-        _uiState.update { it.copy(isSearchVisible = true, fileSearchQuery = "", fileSearchResults = emptyList()) }
+        _uiState.update { it.copy(isSearchVisible = true, isContentSearchVisible = false, fileSearchQuery = "", fileSearchResults = emptyList()) }
     }
 
     fun hideFileSearch() {
@@ -1592,22 +1677,78 @@ build/
         }
         val results = mutableListOf<FileSearchResult>()
         fun searchNodes(nodes: List<FileNode>, path: String) {
-            for (node in nodes) {
+            nodes.forEach { node ->
                 val nodePath = if (path.isEmpty()) node.displayName else "$path/${node.displayName}"
                 if (!node.isDirectory && node.displayName.contains(query, ignoreCase = true)) {
-                    results += FileSearchResult(
-                        documentUri  = node.documentUri,
-                        displayName  = node.displayName,
-                        relativePath = "/$nodePath",
-                    )
+                    results += FileSearchResult(node.documentUri, node.displayName, "/$nodePath")
                 }
-                if (node.isDirectory && node.children.isNotEmpty()) {
-                    searchNodes(node.children, nodePath)
-                }
+                if (node.isDirectory) searchNodes(node.children, nodePath)
             }
         }
         searchNodes(_uiState.value.fileTree, "")
         _uiState.update { it.copy(fileSearchResults = results) }
+    }
+
+    fun showContentSearch() {
+        _uiState.update { it.copy(isContentSearchVisible = true, isSearchVisible = false, contentSearchQuery = "", contentSearchResults = emptyList()) }
+    }
+
+    fun hideContentSearch() {
+        projectSearchJob?.cancel()
+        _uiState.update { it.copy(isContentSearchVisible = false, contentSearchQuery = "", contentSearchResults = emptyList()) }
+    }
+
+    fun searchProjectContents(query: String) {
+        _uiState.update { it.copy(contentSearchQuery = query) }
+        projectSearchJob?.cancel()
+        if (query.isBlank()) {
+            _uiState.update { it.copy(contentSearchResults = emptyList()) }
+            return
+        }
+        val rootUri = _uiState.value.projectRootUri ?: return
+        projectSearchJob = viewModelScope.launch {
+            delay(180)
+            val results = mutableListOf<FileSearchResult>()
+            suspend fun searchDirectory(uri: String, path: String) {
+                safRepository.listChildren(uri).forEach { node ->
+                    val nodePath = if (path.isEmpty()) node.displayName else "$path/${node.displayName}"
+                    if (node.displayName == ".git" || node.displayName == ".androidide") return@forEach
+                    if (node.isDirectory) {
+                        searchDirectory(node.documentUri, nodePath)
+                    } else if (node.size <= 5 * 1024 * 1024L) {
+                        val bytes = safRepository.readFile(node.documentUri) ?: return@forEach
+                        if (bytes.take(8192).any { it == 0.toByte() }) return@forEach
+                        val content = bytes.toString(Charsets.UTF_8)
+                        val matchingLine = content.lineSequence().firstOrNull { it.contains(query, ignoreCase = true) }
+                        if (matchingLine != null) {
+                            results += FileSearchResult(node.documentUri, node.displayName, "/$nodePath", matchingLine.trim().take(180))
+                        }
+                    }
+                }
+            }
+            searchDirectory(rootUri, "")
+            if (_uiState.value.contentSearchQuery == query) {
+                _uiState.update { it.copy(contentSearchResults = results.sortedBy { result -> result.relativePath.lowercase() }) }
+            }
+        }
+    }
+
+    fun showEditorFind() {
+        _uiState.update { it.copy(isEditorSearchVisible = true) }
+        sendEditorCommand(EditorOutbound.ShowFind)
+    }
+
+    fun showEditorReplace() {
+        _uiState.update { it.copy(isEditorSearchVisible = true) }
+        sendEditorCommand(EditorOutbound.ShowReplace)
+    }
+
+    fun dismissEditorSearch(): Boolean {
+        if (!_uiState.value.isEditorSearchVisible) return false
+        _uiState.update { it.copy(isEditorSearchVisible = false) }
+        sendEditorCommand(EditorOutbound.CloseSearch)
+        sendEditorCommand(EditorOutbound.ExecuteCommand("focusEditor"))
+        return true
     }
 
     // ── Reveal active file ─────────────────────────────────────────────────
@@ -1899,7 +2040,7 @@ build/
     }
 
     fun requestDeleteProject(uri: String) {
-        val code = (100000..999999).random().toString()
+        val code = (100..999).random().toString()
         _uiState.update {
             it.copy(confirmDeleteProjectUri = uri, confirmDeleteProjectCode = code)
         }
@@ -2250,7 +2391,6 @@ build/
             _uiState.update { it.copy(fileOpDialog = null, statusMessage = "Cannot duplicate: no parent") }
             return
         }
-        // F007: reject duplicate name in the same parent directory.
         val parentSiblings = _uiState.value.fileTree.findNode(parentUri)?.children
             ?: _uiState.value.fileTree
         if (parentSiblings.any { it.displayName.equals(newName, ignoreCase = true) }) {
@@ -2270,7 +2410,6 @@ build/
         }
     }
 
-    // ── F003: SAF-backed path navigator ───────────────────────────────────────
 
     /**
      * Load the immediate children of [parentUri] directly from SAF.
@@ -2280,7 +2419,6 @@ build/
     suspend fun loadNavChildren(parentUri: String): List<FileNode> =
         visibleFileTreeChildren(parentUri)
 
-    // ── F004: Project-relative Save As ────────────────────────────────────────
 
     /** Open the inline Save-As dialog pre-filled with the active tab name. */
     fun showSaveAsDialog() {

@@ -42,8 +42,6 @@
  *
  * Performance notes:
  *   - contextmenu disabled (Android long-press is handled natively).
- *   - quickSuggestions disabled (Phase 4: LSP autocomplete).
- *   - folding disabled (saves DOM nodes; re-enable with LSP in Phase 4).
  *   - links disabled (reduces highlight passes on every edit).
  *   - insertText uses editor.executeEdits for atomic paste with correct undo.
  *   - Content-change debounce is 150 ms (was 300 ms) for more responsive dirty-marking.
@@ -177,7 +175,6 @@ require(['vs/editor/editor.main'], function () {
     // context menu is slow and duplicates functionality.
     contextmenu: false,
 
-    // Quick suggestions (autocomplete) disabled until Phase 4 (LSP).
     // Suggestion computation on every keystroke adds latency on low-RAM devices.
     quickSuggestions: false,
     suggestOnTriggerCharacters: false,
@@ -185,13 +182,11 @@ require(['vs/editor/editor.main'], function () {
     snippetSuggestions: 'none',
     parameterHints: { enabled: false },
 
-    // Code folding uses a significant number of DOM nodes. Disabled until Phase 4.
     folding: false,
 
     // Link detection runs a regex over every visible line on every edit.
     links: false,
 
-    // Render validation decorations only when a language server is present (Phase 4).
     renderValidationDecorations: 'off',
 
     // Smooth caret animation adds GPU compositing overhead on Android.
@@ -200,7 +195,6 @@ require(['vs/editor/editor.main'], function () {
     // Bracket pair colorization is purely cosmetic — disable for less render work.
     'bracketPairColorization.enabled': false,
 
-    // ── C015: targeted performance and correctness fixes ─────────────────
     // formatOnPaste: true (default) passes pasted content through the language
     // formatter, which can silently corrupt indentation. Disabled here.
     formatOnPaste: false,
@@ -319,9 +313,7 @@ window.androidIDE = {
           if (msg.wordWrap         != null) { opts.wordWrap        = msg.wordWrap; wrapChanged = true; } // "on" / "off"
           if (msg.lineNumbers      != null) opts.lineNumbers       = msg.lineNumbers; // "on" / "off"
           if (msg.fontSize         != null) opts.fontSize          = msg.fontSize;
-          // C014: render whitespace — "none" | "selection" | "all" | "boundary"
           if (msg.renderWhitespace != null) opts.renderWhitespace  = msg.renderWhitespace;
-          // F017: new Monaco settings surface options
           if (msg.minimapEnabled         != null) opts.minimap              = { enabled: msg.minimapEnabled };
           if (msg.scrollBeyondLastLine   != null) opts.scrollBeyondLastLine = msg.scrollBeyondLastLine;
           if (msg.cursorStyle            != null) opts.cursorStyle          = msg.cursorStyle;
@@ -329,7 +321,6 @@ window.androidIDE = {
           if (msg.autoClosingBrackets    != null) opts.autoClosingBrackets  = msg.autoClosingBrackets;
           if (Object.keys(opts).length > 0) {
             editor.updateOptions(opts);
-            // C015: wordWrap changes alter line-height and column count — must
             // re-layout immediately or Monaco displays broken wrapped lines.
             if (wrapChanged) { applyLayout(); requestAnimationFrame(applyLayout); }
           }
@@ -360,7 +351,6 @@ window.androidIDE = {
         }
         break;
 
-      // F019: dispose all Monaco models — sent on project switch so stale models
       // from the previous project cannot leak into the new one.
       case 'closeAllModels':
         monaco.editor.getModels().forEach(function (m) { m.dispose(); });
@@ -383,7 +373,12 @@ window.androidIDE = {
           window.androidIDE.blurEditor();
           break;
         }
-        // F016: requestCopy — read selection from Monaco and post to Kotlin clipboard.
+        if (msg.command === 'closeSearch') {
+          var toolbarFindController = editor.getContribution('editor.contrib.findController');
+          if (toolbarFindController && toolbarFindController.closeFindWidget) toolbarFindController.closeFindWidget();
+          editor.focus();
+          break;
+        }
         if (msg.command === 'requestCopy') {
           var copyModel = editor.getModel();
           var copySel   = editor.getSelection();
@@ -393,7 +388,6 @@ window.androidIDE = {
           }
           break;
         }
-        // F016: requestCut — read selection, post to Kotlin clipboard, then delete selection.
         if (msg.command === 'requestCut') {
           var cutModel = editor.getModel();
           var cutSel   = editor.getSelection();
@@ -406,7 +400,6 @@ window.androidIDE = {
           }
           break;
         }
-        // C017: smart indent — insert tab-width spaces when no selection,
         // indent selected lines when a selection exists.
         if (msg.command === 'smartIndent') {
           var sel = editor.getSelection();
@@ -432,7 +425,6 @@ window.androidIDE = {
           }
           break;
         }
-        // C017: smart outdent — remove leading indent from selected lines, or
         // remove tab-width spaces behind cursor when no selection.
         if (msg.command === 'smartOutdent') {
           var sel2 = editor.getSelection();
@@ -491,6 +483,14 @@ window.androidIDE = {
         }
         break;
 
+      case 'closeSearch':
+        if (editor) {
+          var findController = editor.getContribution('editor.contrib.findController');
+          if (findController && findController.closeFindWidget) findController.closeFindWidget();
+          editor.focus();
+        }
+        break;
+
       case 'setCursorPosition':
         if (editor && msg.line != null && msg.column != null) {
           editor.setPosition({ lineNumber: msg.line, column: msg.column });
@@ -524,7 +524,6 @@ window.androidIDE = {
 };
 
 // ---------------------------------------------------------------------------
-// Internal helpers
 // ---------------------------------------------------------------------------
 
 /**

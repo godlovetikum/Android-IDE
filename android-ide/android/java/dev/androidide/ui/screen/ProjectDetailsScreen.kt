@@ -11,8 +11,11 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -22,6 +25,8 @@ import androidx.compose.material3.SmallTopAppBar
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -36,14 +41,65 @@ import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ProjectDetailsScreen(uiState: IdeUiState, onBack: () -> Unit) {
+fun ProjectDetailsScreen(
+    uiState: IdeUiState,
+    onBack: () -> Unit,
+    onDuplicate: (String) -> Unit = {},
+    onExport: (String) -> Unit = {},
+    onMove: (String) -> Unit = {},
+    onRename: (String, String) -> Unit = { _, _ -> },
+    onRemove: (String) -> Unit = {},
+    onDelete: (String) -> Unit = {},
+) {
     val colors = LocalIdeColors.current
     val details = uiState.projectDetails
     val clipboard = LocalClipboardManager.current
+    var actionsOpen by remember(details?.project?.uri) { mutableStateOf(false) }
+    var renameOpen by remember(details?.project?.uri) { mutableStateOf(false) }
+    var renameText by remember(details?.project?.uri) { mutableStateOf(details?.project?.name.orEmpty()) }
     Scaffold(topBar = {
         SmallTopAppBar(
             title = { Text(details?.project?.name ?: "Project details") },
             navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Back") } },
+            actions = {
+                if (details != null) {
+                    androidx.compose.foundation.layout.Box {
+                        IconButton(onClick = { actionsOpen = true }) {
+                            Icon(Icons.Default.MoreVert, "Project actions")
+                        }
+                        DropdownMenu(
+                            expanded = actionsOpen,
+                            onDismissRequest = { actionsOpen = false },
+                        ) {
+                            DropdownMenuItem(text = { Text("Rename") }, onClick = {
+                                actionsOpen = false
+                                renameText = details.project.name
+                                renameOpen = true
+                            })
+                            DropdownMenuItem(text = { Text("Duplicate") }, onClick = {
+                                actionsOpen = false
+                                onDuplicate(details.project.uri)
+                            })
+                            DropdownMenuItem(text = { Text("Export") }, onClick = {
+                                actionsOpen = false
+                                onExport(details.project.uri)
+                            })
+                            DropdownMenuItem(text = { Text("Move") }, onClick = {
+                                actionsOpen = false
+                                onMove(details.project.uri)
+                            })
+                            DropdownMenuItem(text = { Text("Remove from registry") }, onClick = {
+                                actionsOpen = false
+                                onRemove(details.project.uri)
+                            })
+                            DropdownMenuItem(text = { Text("Delete permanently") }, onClick = {
+                                actionsOpen = false
+                                onDelete(details.project.uri)
+                            })
+                        }
+                    }
+                }
+            },
         )
     }) { padding ->
         when {
@@ -69,6 +125,7 @@ fun ProjectDetailsScreen(uiState: IdeUiState, onBack: () -> Unit) {
             ) {
                 DetailSection("Identity") {
                     CopyableDetail("Display name", details.project.name, clipboard::setText)
+                    DetailValue("Description", details.description.ifBlank { "No description" })
                     CopyableDetail("Storage provider", details.storageProvider, clipboard::setText)
                     CopyableDetail("Location", details.storagePath, clipboard::setText)
                 }
@@ -94,6 +151,30 @@ fun ProjectDetailsScreen(uiState: IdeUiState, onBack: () -> Unit) {
                 GitSection(details.git, clipboard::setText)
             }
         }
+    }
+    if (renameOpen && details != null) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { renameOpen = false },
+            title = { Text("Rename project") },
+            text = {
+                androidx.compose.material3.OutlinedTextField(
+                    value = renameText,
+                    onValueChange = { renameText = it },
+                    label = { Text("Display name") },
+                    singleLine = true,
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        onRename(details.project.uri, renameText.trim())
+                        renameOpen = false
+                    },
+                    enabled = renameText.isNotBlank(),
+                ) { Text("Save") }
+            },
+            dismissButton = { TextButton(onClick = { renameOpen = false }) { Text("Cancel") } },
+        )
     }
 }
 

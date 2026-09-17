@@ -136,7 +136,6 @@ private fun EditorTabItem(
 
             Text(
                 text     = tab.displayName,
-                // C011: temporary (preview) tabs shown in italic
                 style    = MaterialTheme.typography.labelMedium.copy(
                     fontStyle = if (tab.isTemporary) FontStyle.Italic else FontStyle.Normal,
                 ),
@@ -166,7 +165,6 @@ private fun EditorTabItem(
                     expanded         = menuOpen,
                     onDismissRequest = { menuOpen = false },
                 ) {
-                    // C011: pin the preview tab to make it permanent
                     if (tab.isTemporary) {
                         DropdownMenuItem(
                             text    = { Text("Keep Open") },

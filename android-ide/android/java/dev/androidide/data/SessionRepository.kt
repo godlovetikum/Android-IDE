@@ -40,7 +40,7 @@ class SessionRepository(context: Context) {
 
     private val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
-    // ── Global (non-project-scoped) ────────────────────────────────────────
+    // ── Global session envelope ────────────────────────────────────────────
 
     fun save(
         projectUri: String?,
@@ -53,14 +53,6 @@ class SessionRepository(context: Context) {
         val editor = prefs.edit()
             .putString(KEY_PROJECT_URI, projectUri)
             .putString(KEY_SCREEN, screenName)
-        if (projectUri != null) {
-            val hash = projectHash(projectUri)
-            editor
-                .putString(KEY_PREFIX_TABS    + hash, openTabUris.filter { it.isNotBlank() }.joinToString("\n"))
-                .putString(KEY_PREFIX_ACTIVE  + hash, activeTabUri)
-                .putString(KEY_PREFIX_CURSORS + hash, serializeCursors(cursorPositions))
-                .putString(KEY_PREFIX_SCROLLS + hash, serializeScrolls(scrollPositions))
-        }
         editor.apply()
     }
 

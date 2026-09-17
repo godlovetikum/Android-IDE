@@ -55,14 +55,26 @@ data class IdeUiState(
     val locateRequestToken: Long = 0L,
 
     // ── File search ────────────────────────────────────────────────────────
-    /** Whether the file-name search panel is visible in the sidebar. */
+    /** Whether filename search is visible in the sidebar. */
     val isSearchVisible: Boolean = false,
 
-    /** Current search query (file name search only). */
+    /** Whether whole-project content search is visible in the sidebar. */
+    val isContentSearchVisible: Boolean = false,
+
+    /** Current filename query. */
     val fileSearchQuery: String = "",
 
-    /** Matching files for the current search query. */
+    /** Matching files for the filename query. */
     val fileSearchResults: List<FileSearchResult> = emptyList(),
+
+    /** Current case-insensitive content query scanned across project text files. */
+    val contentSearchQuery: String = "",
+
+    /** Files containing the current project-content query. */
+    val contentSearchResults: List<FileSearchResult> = emptyList(),
+
+    /** True while Monaco's find or replace widget is the active editor overlay. */
+    val isEditorSearchVisible: Boolean = false,
 
     // ── Multi-selection ────────────────────────────────────────────────────
     /** Whether multi-select mode is active in the file tree. */
@@ -113,7 +125,7 @@ data class IdeUiState(
     val cursorColumn: Int = 1,
 
     // ── Per-tab cursor and scroll position maps ─────────────────────────────
-    // Keyed by documentUri. Persisted per-project in SessionRepository.
+    // Keyed by documentUri. Persisted per-project in .androidide/workspace.json.
     val tabCursorPositions: Map<String, Pair<Int, Int>> = emptyMap(),
     val tabScrollPositions: Map<String, Int>            = emptyMap(),
 

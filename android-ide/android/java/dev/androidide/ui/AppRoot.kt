@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Density
@@ -40,11 +41,19 @@ private enum class ProjectDestinationAction {
 fun AppRoot(ideViewModel: IdeViewModel = viewModel()) {
     val uiState by ideViewModel.uiState.collectAsState()
     val context  = LocalContext.current
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    LaunchedEffect(uiState.statusMessage) {
+        if (uiState.statusMessage.isNotBlank()) {
+            snackbarHostState.showSnackbar(uiState.statusMessage)
+        }
+    }
 
     // ── State for multi-step flows ──────────────────────────────────────────
     var importTargetDirUri      by remember { mutableStateOf("") }
     var showCreateProjectDialog by remember { mutableStateOf(false) }
     var createProjectName       by remember { mutableStateOf("") }
+    var createProjectDescription by remember { mutableStateOf("") }
     var createDestinationUri    by remember { mutableStateOf<String?>(null) }
     var pendingExportSourceUri  by remember { mutableStateOf<String?>(null) }
     var pendingDestinationUri   by remember { mutableStateOf<String?>(null) }
@@ -118,7 +127,6 @@ fun AppRoot(ideViewModel: IdeViewModel = viewModel()) {
         projectDestinationLauncher.launch(null)
     }
 
-    // ── F004: Save As — now handled by the inline project-relative dialog ─────
     // The old ActivityResultContracts.CreateDocument launcher placed files outside
     // the project tree. The new dialog resolves a relative path within the project.
 
@@ -160,6 +168,7 @@ fun AppRoot(ideViewModel: IdeViewModel = viewModel()) {
                     onOpenProjectFolder = { openProjectLauncher.launch(null) },
                     onCreateBlankProject = { suggestedName ->
                         createProjectName       = suggestedName?.takeIf { it.isNotBlank() } ?: "MyProject"
+                        createProjectDescription = ""
                         createDestinationUri   = null
                         showCreateProjectDialog = true
                     },
@@ -187,6 +196,10 @@ fun AppRoot(ideViewModel: IdeViewModel = viewModel()) {
                         if (importTargetDirUri.isNotEmpty()) importFilesLauncher.launch(arrayOf("*/*"))
                     },
                 )
+                SnackbarHost(
+                    hostState = snackbarHostState,
+                    modifier = Modifier.align(Alignment.BottomCenter).padding(12.dp),
+                )
             }
         }
     }
@@ -205,27 +218,39 @@ fun AppRoot(ideViewModel: IdeViewModel = viewModel()) {
                         singleLine    = true,
                         placeholder   = { Text("MyProject") },
                     )
+                    OutlinedTextField(
+                        value         = createProjectDescription,
+                        onValueChange = { createProjectDescription = it },
+                        label         = { Text("Description") },
+                        modifier      = androidx.compose.ui.Modifier.padding(top = 8.dp),
+                        minLines      = 2,
+                    )
                     Text(
                         text = createDestinationUri?.let { "Destination selected. The project folder will be created there." }
-                            ?: "Choose a destination folder before creating the project.",
+                            ?: "Press Create to choose where the project will be created.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = androidx.compose.ui.Modifier.padding(top = 8.dp),
                     )
-                    TextButton(onClick = { createProjectDestinationLauncher.launch(null) }) {
-                        Text(if (createDestinationUri == null) "Choose destination" else "Change destination")
-                    }
                 }
             },
             confirmButton = {
                 TextButton(
                     onClick = {
-                        if (createProjectName.isNotBlank() && createDestinationUri != null) {
-                            showCreateProjectDialog = false
-                            ideViewModel.createBlankProject(createProjectName.trim(), createDestinationUri!!)
+                        if (createProjectName.isNotBlank()) {
+                            if (createDestinationUri == null) {
+                                createProjectDestinationLauncher.launch(null)
+                            } else {
+                                showCreateProjectDialog = false
+                                ideViewModel.createBlankProject(
+                                    createProjectName.trim(),
+                                    createProjectDescription.trim(),
+                                    createDestinationUri!!,
+                                )
+                            }
                         }
                     },
-                    enabled = createProjectName.isNotBlank() && createDestinationUri != null,
+                    enabled = createProjectName.isNotBlank(),
                 ) { Text("Create") }
             },
             dismissButton = {
@@ -271,15 +296,7 @@ fun AppRoot(ideViewModel: IdeViewModel = viewModel()) {
                 Text("Remove this project from the list? The files on disk will NOT be deleted.")
             },
             confirmButton = {
-                Row {
-                    TextButton(onClick = {
-                        ideViewModel.cancelRemoveProject()
-                        ideViewModel.requestDeleteProject(removeUri)
-                    }, colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)) {
-                        Text("Delete permanently")
-                    }
-                    TextButton(onClick = { ideViewModel.confirmRemoveProject() }) { Text("Remove") }
-                }
+                TextButton(onClick = { ideViewModel.confirmRemoveProject() }) { Text("Remove") }
             },
             dismissButton = {
                 TextButton(onClick = { ideViewModel.cancelRemoveProject() }) { Text("Cancel") }
@@ -296,10 +313,10 @@ fun AppRoot(ideViewModel: IdeViewModel = viewModel()) {
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("This permanently deletes the project and all files from its storage provider. This cannot be undone.")
-                    Text("Type this code to continue: ${uiState.confirmDeleteProjectCode}", style = MaterialTheme.typography.titleMedium)
+                    Text("Type this 3-digit code to continue: ${uiState.confirmDeleteProjectCode}", style = MaterialTheme.typography.titleMedium)
                     OutlinedTextField(
                         value = enteredDeleteCode,
-                        onValueChange = { enteredDeleteCode = it.filter(Char::isDigit).take(6) },
+                        onValueChange = { enteredDeleteCode = it.filter(Char::isDigit).take(3) },
                         label = { Text("Confirmation code") },
                         singleLine = true,
                     )
@@ -308,7 +325,7 @@ fun AppRoot(ideViewModel: IdeViewModel = viewModel()) {
             confirmButton = {
                 TextButton(
                     onClick = { ideViewModel.confirmDeleteProject(enteredDeleteCode) },
-                    enabled = enteredDeleteCode.length == 6,
+                    enabled = enteredDeleteCode.length == 3,
                     colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
                 ) { Text("Delete everything") }
             },

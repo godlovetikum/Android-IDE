@@ -14,14 +14,12 @@ data class EditorSettings(
     /** Monaco theme: "dark" | "light" | "system" (follows app theme). */
     val editorTheme: String    = "system",
     /**
-     * C014: Monaco renderWhitespace option.
      * "none"      — whitespace never highlighted
      * "selection" — whitespace highlighted in selected text (default)
      * "all"       — all whitespace always highlighted
      * "boundary"  — whitespace at block boundaries
      */
     val renderWhitespace: String = "selection",
-    // ── F017: additional Monaco settings surface ────────────────────────────
     /** Show/hide the minimap (code overview) on the right side of the editor. */
     val minimapEnabled: Boolean           = true,
     /** Allow scrolling past the last line so it can sit in the centre of the view. */

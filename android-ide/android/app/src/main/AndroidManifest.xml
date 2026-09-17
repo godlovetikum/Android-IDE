@@ -21,10 +21,8 @@
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- Available for future network features (LSP, remote AI, extension registry). -->
     <uses-permission android:name="android.permission.INTERNET" />
 
-    <!-- API 26–32: required for std file access outside internal storage. -->
     <uses-permission
         android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />

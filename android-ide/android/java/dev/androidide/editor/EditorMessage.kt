@@ -45,7 +45,6 @@ sealed class EditorInbound {
     data class FileSaved(val path: String) : EditorInbound()
 
     /**
-     * F016: Monaco has read the current selection and is asking Kotlin to put
      * [text] on the Android clipboard.  [isCut] is true when Monaco has already
      * deleted the selection (cut); false for a plain copy.
      */
@@ -125,9 +124,7 @@ sealed class EditorOutbound {
         val wordWrap: Boolean?      = null,
         val lineNumbers: Boolean?   = null,
         val fontSize: Int?          = null,
-        /** C014: "none" | "selection" | "all" | "boundary" */
         val renderWhitespace: String? = null,
-        // ── F017: additional Monaco settings surface ────────────────────────
         /** Show/hide the code minimap on the right side of the editor. */
         val minimapEnabled: Boolean? = null,
         /** Allow scrolling past the last line of the file. */
@@ -183,6 +180,9 @@ sealed class EditorOutbound {
     /** Show Monaco's built-in find + replace widget. */
     object ShowReplace : EditorOutbound()
 
+    /** Close Monaco's find or replace widget and return focus to the editor. */
+    object CloseSearch : EditorOutbound()
+
     /**
      * Restore the cursor to [line] / [column] in the active model.
      * Sent after LoadFile to re-establish the saved cursor position.
@@ -198,7 +198,6 @@ sealed class EditorOutbound {
     data class SetScrollPosition(val scrollTop: Int) : EditorOutbound()
 
     /**
-     * F019: Dispose every Monaco model that was created for the previous project.
      * Sent at the start of [openProjectInternal] before tabs are cleared, so stale
      * models from project A cannot leak into project B (would cause wrong content
      * or corrupt undo history when the same filename exists in both projects).
@@ -231,9 +230,7 @@ sealed class EditorOutbound {
                 msg.wordWrap?.let         { put("wordWrap", if (it) "on" else "off") }
                 msg.lineNumbers?.let      { put("lineNumbers", if (it) "on" else "off") }
                 msg.fontSize?.let         { put("fontSize", it) }
-                // C014: expose renderWhitespace to Monaco
                 msg.renderWhitespace?.let         { put("renderWhitespace", it) }
-                // F017: new Monaco settings surface options
                 msg.minimapEnabled?.let           { put("minimapEnabled", it) }
                 msg.scrollBeyondLastLine?.let     { put("scrollBeyondLastLine", it) }
                 msg.cursorStyle?.let              { put("cursorStyle", it) }
@@ -245,6 +242,7 @@ sealed class EditorOutbound {
             is InsertText      -> { put("type", "insertText");     put("text", msg.text) }
             is ShowFind           -> put("type", "showFind")
             is ShowReplace        -> put("type", "showReplace")
+            is CloseSearch        -> put("type", "closeSearch")
             is SetCursorPosition  -> { put("type", "setCursorPosition"); put("line", msg.line); put("column", msg.column) }
             is SetScrollPosition  -> { put("type", "setScrollPosition"); put("scrollTop", msg.scrollTop) }
             is CloseAllModels     -> put("type", "closeAllModels")

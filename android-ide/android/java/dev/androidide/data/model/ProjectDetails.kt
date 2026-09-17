@@ -8,6 +8,7 @@ package dev.androidide.data.model
 
 data class ProjectDetails(
     val project: Project,
+    val description: String,
     val creationTimeMs: Long?,
     val lastModifiedTimeMs: Long?,
     val storageProvider: String,

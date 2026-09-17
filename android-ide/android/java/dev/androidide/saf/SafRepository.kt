@@ -59,6 +59,7 @@ data class ZipExportResult(
 )
 
 data class ProjectStorageMetadata(
+    val description: String,
     val creationTimeMs: Long?,
     val lastModifiedTimeMs: Long?,
     val storageProvider: String,
@@ -469,6 +470,20 @@ class SafRepository(private val context: Context) {
         target != null && writeFile(target, content.toByteArray(Charsets.UTF_8))
     }
 
+    /** Read a project-local metadata JSON file from .androidide. */
+    suspend fun readProjectMetadataFile(
+        projectRootUriString: String,
+        fileName: String,
+    ): JSONObject? = withContext(Dispatchers.IO) {
+        val metadata = (inspectChildren(projectRootUriString) as? ChildrenInspectionResult.Success)
+            ?.children?.firstOrNull { it.isDirectory && it.displayName == ".androidide" }
+            ?: return@withContext null
+        val file = (inspectChildren(metadata.documentUri) as? ChildrenInspectionResult.Success)
+            ?.children?.firstOrNull { !it.isDirectory && it.displayName == fileName }
+            ?: return@withContext null
+        readFile(file.documentUri)?.toString(Charsets.UTF_8)?.let { runCatching { JSONObject(it) }.getOrNull() }
+    }
+
     /** Verify a completed copy using provider metadata rather than trusting write success. */
     private suspend fun verifyDocument(sourceUriString: String, targetUriString: String): Boolean {
         val sourceMime = if (isFileUri(sourceUriString)) {
@@ -534,6 +549,8 @@ class SafRepository(private val context: Context) {
             if (!walk(rootUriString, "")) return@withContext null
 
             val rootTimes = rootTimes(rootUriString)
+            val projectJson = readProjectMetadataFile(rootUriString, "project.json")
+            val project = projectJson?.optJSONObject("project")
             val files = entries.filterNot { it.isDirectory }
             val languageBytes = files
                 .filterNot { it.relativePath == ".git" || it.relativePath.startsWith(".git/") }
@@ -542,6 +559,7 @@ class SafRepository(private val context: Context) {
                 .toSortedMap()
 
             ProjectStorageMetadata(
+                description = project?.optString("description", "").orEmpty(),
                 creationTimeMs = rootTimes.first,
                 lastModifiedTimeMs = listOfNotNull(
                     rootTimes.second,

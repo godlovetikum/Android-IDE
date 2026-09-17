@@ -37,6 +37,7 @@ import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.FindInPage
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.MergeType
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.MoreVert
@@ -71,7 +72,6 @@ import dev.androidide.viewmodel.model.AppScreen
 import dev.androidide.viewmodel.model.FileNode
 import dev.androidide.viewmodel.model.FileOpDialog
 import dev.androidide.viewmodel.model.IdeUiState
-import dev.androidide.viewmodel.model.ancestorsOf
 import dev.androidide.viewmodel.model.findNode
 import dev.androidide.viewmodel.model.pathTo
 import kotlinx.coroutines.launch
@@ -119,8 +119,11 @@ fun IdeScreen(
         closeDrawer()
     }
 
+    BackHandler(enabled = uiState.currentScreen == AppScreen.EDITOR && uiState.isEditorSearchVisible) {
+        ideViewModel.dismissEditorSearch()
+    }
     // Back handler: when on EDITOR, confirm exit or go to Projects
-    BackHandler(enabled = uiState.currentScreen == AppScreen.EDITOR) {
+    BackHandler(enabled = uiState.currentScreen == AppScreen.EDITOR && !uiState.isEditorSearchVisible) {
         if (!ideViewModel.requestExit()) {
             ideViewModel.navigateTo(AppScreen.PROJECTS)
         }
@@ -159,7 +162,6 @@ fun IdeScreen(
     // sidebar collapses automatically and the editor is immediately visible.
     val fileTreePanelContent: @Composable (Modifier, onCloseDrawer: (() -> Unit)?) -> Unit =
         { mod, onCloseDrawer ->
-            // F010: coroutine scope used to post a delayed focusEditor command after
             // the drawer close animation completes.  150 ms gives the slide-out
             // animation time to finish before Monaco consumes the focus request.
             val scope = rememberCoroutineScope()
@@ -176,15 +178,17 @@ fun IdeScreen(
                 isMultiSelectMode        = uiState.isMultiSelectMode,
                 selectedUris             = uiState.selectedUris,
                 isSearchVisible          = uiState.isSearchVisible,
+                isContentSearchVisible   = uiState.isContentSearchVisible,
                 fileSearchQuery          = uiState.fileSearchQuery,
                 fileSearchResults        = uiState.fileSearchResults,
+                contentSearchQuery       = uiState.contentSearchQuery,
+                contentSearchResults     = uiState.contentSearchResults,
                 onFileClick              = { uri ->
                     if (uiState.isMultiSelectMode) ideViewModel.toggleNodeSelection(uri)
                     else {
                         ideViewModel.openFile(uri)
                         ideViewModel.navigateTo(AppScreen.EDITOR)
                         onCloseDrawer?.invoke()
-                        // F010: focus Monaco after the drawer closes so the soft keyboard
                         // appears immediately without requiring a second tap on the editor.
                         scope.launch {
                             kotlinx.coroutines.delay(300)
@@ -193,11 +197,9 @@ fun IdeScreen(
                     }
                 },
                 onFileDoubleClick        = { uri ->
-                    // C011: double-tap opens a permanent (non-preview) tab
                     ideViewModel.openFilePermanent(uri)
                     ideViewModel.navigateTo(AppScreen.EDITOR)
                     onCloseDrawer?.invoke()
-                    // F010: same focus fix for double-tap.
                     scope.launch {
                         kotlinx.coroutines.delay(300)
                         ideViewModel.sendEditorCommand(EditorOutbound.ExecuteCommand("focusEditor"))
@@ -225,10 +227,11 @@ fun IdeScreen(
                 },
                 onPasteAtRoot            = { ideViewModel.pasteFileNode(rootNode) },
                 onRefresh                = ideViewModel::refreshProject,
-                onRenameProject          = {
-                    uiState.projectRootUri?.let { uri ->
-                        ideViewModel.renameProjectInRegistry(uri, uiState.projectName)
-                    }
+                onShowProjectDetails     = {
+                    uiState.projectRootUri?.let { ideViewModel.showProjectDetails(it) }
+                },
+                onDeleteProject          = {
+                    uiState.projectRootUri?.let { ideViewModel.requestDeleteProject(it) }
                 },
                 onRemoveProject          = {
                     uiState.projectRootUri?.let { ideViewModel.requestRemoveProject(it) }
@@ -237,12 +240,15 @@ fun IdeScreen(
                 onToggleNodeSelection    = ideViewModel::toggleNodeSelection,
                 onExitSelectionMode      = ideViewModel::exitSelectionMode,
                 onSearchQueryChange      = ideViewModel::searchFiles,
+                onContentSearchQueryChange = ideViewModel::searchProjectContents,
+                onHideFileSearch         = ideViewModel::hideFileSearch,
+                onHideContentSearch      = ideViewModel::hideContentSearch,
                 onSearchFileSelect       = { uri ->
-                    ideViewModel.hideFileSearch()
+                    if (uiState.isContentSearchVisible) ideViewModel.hideContentSearch()
+                    else ideViewModel.hideFileSearch()
                     ideViewModel.openFile(uri)
                     ideViewModel.navigateTo(AppScreen.EDITOR)
                     onCloseDrawer?.invoke()
-                    // F010: focus Monaco after search-select too.
                     scope.launch {
                         kotlinx.coroutines.delay(300)
                         ideViewModel.sendEditorCommand(EditorOutbound.ExecuteCommand("focusEditor"))
@@ -275,7 +281,6 @@ fun IdeScreen(
                     onNavigateSettings = { closeAfter { ideViewModel.navigateTo(AppScreen.SETTINGS) } },
                 )
                 HorizontalDivider(thickness = 1.dp, color = colors.separator)
-                // C003: Sidebar content is screen-aware.
                 // The file tree is only relevant when the Editor is the active screen.
                 // Projects and Settings manage their own content in the main area.
                 when (uiState.currentScreen) {
@@ -285,6 +290,7 @@ fun IdeScreen(
                                 isSearchVisible    = uiState.isSearchVisible,
                                 onShowFileSearch   = ideViewModel::showFileSearch,
                                 onHideFileSearch   = ideViewModel::hideFileSearch,
+                                onShowContentSearch = ideViewModel::showContentSearch,
                                 onRevealActiveFile = ideViewModel::revealActiveFile,
                                 onNewFile          = { ideViewModel.showCreateFileDialog(rootNode) },
                                 onNewFolder        = { ideViewModel.showCreateFolderDialog(rootNode) },
@@ -296,13 +302,14 @@ fun IdeScreen(
                                 onMoveProject      = {
                                     uiState.projectRootUri?.let(onMoveProject)
                                 },
-                                onRenameProject    = {
-                                    ideViewModel.noteStatusMessage(
-                                        "Rename the project from the Projects screen",
-                                    )
+                                onShowProjectDetails = {
+                                    uiState.projectRootUri?.let { ideViewModel.showProjectDetails(it) }
                                 },
                                 onRemoveProject    = {
                                     uiState.projectRootUri?.let { ideViewModel.requestRemoveProject(it) }
+                                },
+                                onDeleteProject    = {
+                                    uiState.projectRootUri?.let { ideViewModel.requestDeleteProject(it) }
                                 },
                             )
                             Box(Modifier.weight(1f).fillMaxWidth()) {
@@ -336,7 +343,6 @@ fun IdeScreen(
                             )
                         }
                     }
-                    // F009: sidebar content for Projects and Settings screens.
                     AppScreen.PROJECTS -> {
                         SidebarRecentProjectsList(
                             projects       = uiState.recentProjects,
@@ -344,6 +350,14 @@ fun IdeScreen(
                             onOpenProject  = { uri ->
                                 closeAfter { ideViewModel.openProject(uri) }
                             },
+                            onShowDetails  = { uri ->
+                                closeAfter { ideViewModel.showProjectDetails(uri) }
+                            },
+                            onDuplicate    = { uri -> closeAfter { onDuplicateProject(uri) } },
+                            onExport       = { uri -> closeAfter { onExportProject(uri) } },
+                            onMove         = { uri -> closeAfter { onMoveProject(uri) } },
+                            onRemove       = { uri -> closeAfter { ideViewModel.requestRemoveProject(uri) } },
+                            onDelete       = { uri -> closeAfter { ideViewModel.requestDeleteProject(uri) } },
                         )
                     }
                     AppScreen.SETTINGS -> {
@@ -377,8 +391,8 @@ fun IdeScreen(
                             autoSave         = uiState.editorSettings.autoSave,
                             onSave           = ideViewModel::saveActiveFile,
                             onSaveAs         = onSaveAs,
-                            onFind           = { ideViewModel.sendEditorCommand(EditorOutbound.ShowFind) },
-                            onReplace        = { ideViewModel.sendEditorCommand(EditorOutbound.ShowReplace) },
+                            onFind           = ideViewModel::showEditorFind,
+                            onReplace        = ideViewModel::showEditorReplace,
                             onTogglePreview  = ideViewModel::requestRun,
                             onOpenFile       = { uri -> ideViewModel.openFile(uri) },
                             onRevealInTree   = { uri ->
@@ -386,7 +400,6 @@ fun IdeScreen(
                                 openDrawerIfClosed()
                             },
                             onMenuClick      = onToggleSidebar,
-                            // F003: SAF-backed navigator bypasses in-memory expand state.
                             loadNavChildren  = { uri -> ideViewModel.loadNavChildren(uri) },
                         )
                         if (uiState.projectRootUri != null) {
@@ -443,6 +456,12 @@ fun IdeScreen(
                     ProjectDetailsScreen(
                         uiState = uiState,
                         onBack = ideViewModel::dismissProjectDetails,
+                        onDuplicate = onDuplicateProject,
+                        onExport = onExportProject,
+                        onMove = onMoveProject,
+                        onRename = ideViewModel::renameProjectInRegistry,
+                        onRemove = ideViewModel::requestRemoveProject,
+                        onDelete = ideViewModel::requestDeleteProject,
                     )
                 }
                 AppScreen.SETTINGS -> {
@@ -576,10 +595,8 @@ private fun EditorContent(
 
 // ── Sidebar nav panel — 3-column icon grid ────────────────────────────────────
 //
-// F008: replaced the single 48dp-tall Row of 5 unlabelled buttons with a
 // 3-column compact grid that shows visible text labels.  Each cell is 56dp tall.
 // Row 1: Projects | Editor | Settings
-// Row 2: Git | Terminal  (disabled, centred; Git/Terminal land in Phase 2/3)
 
 @Composable
 private fun SidebarNavPanel(
@@ -710,7 +727,6 @@ private fun SidebarNoProjectHint(onOpenProject: () -> Unit) {
     }
 }
 
-// ── F009: Sidebar — Recent projects list (PROJECTS screen) ───────────────────
 //
 // Shown in the sidebar when the PROJECTS screen is active.
 // Tapping a project opens it and closes the drawer on narrow layouts.
@@ -719,6 +735,12 @@ private fun SidebarNoProjectHint(onOpenProject: () -> Unit) {
 private fun SidebarRecentProjectsList(
     projects: List<Project>,
     onOpenProject: (String) -> Unit,
+    onShowDetails: (String) -> Unit,
+    onDuplicate: (String) -> Unit,
+    onExport: (String) -> Unit,
+    onMove: (String) -> Unit,
+    onRemove: (String) -> Unit,
+    onDelete: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalIdeColors.current
@@ -745,7 +767,8 @@ private fun SidebarRecentProjectsList(
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                 )
             }
-            items(projects) { project ->
+            items(projects.sortedByDescending { it.lastOpenedMs }) { project ->
+                var menuOpen by remember(project.uri) { mutableStateOf(false) }
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier
@@ -764,16 +787,34 @@ private fun SidebarRecentProjectsList(
                         text     = project.name,
                         style    = MaterialTheme.typography.bodySmall,
                         color    = colors.textPrimary,
+                        modifier = Modifier.weight(1f),
                         maxLines = 1,
                         overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                     )
+                    IconButton(onClick = { menuOpen = true }) {
+                        Icon(Icons.Default.MoreVert, "Project options", tint = colors.textSecondary)
+                    }
+                    DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                        DropdownMenuItem(text = { Text("Details") }, onClick = { menuOpen = false; onShowDetails(project.uri) })
+                        DropdownMenuItem(text = { Text("Duplicate") }, onClick = { menuOpen = false; onDuplicate(project.uri) })
+                        DropdownMenuItem(text = { Text("Export") }, onClick = { menuOpen = false; onExport(project.uri) })
+                        DropdownMenuItem(text = { Text("Move") }, onClick = { menuOpen = false; onMove(project.uri) })
+                        HorizontalDivider()
+                        DropdownMenuItem(text = { Text("Delete permanently") }, onClick = { menuOpen = false; onDelete(project.uri) })
+                        DropdownMenuItem(text = { Text("Remove from registry") }, onClick = { menuOpen = false; onRemove(project.uri) })
+                    }
                 }
+                Text(
+                    text = "Last opened ${formatRelativeDate(project.lastOpenedMs)}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = colors.textSecondary,
+                    modifier = Modifier.padding(start = 44.dp, end = 16.dp, bottom = 8.dp),
+                )
             }
         }
     }
 }
 
-// ── F009: Sidebar — Settings section shortcuts (SETTINGS screen) ──────────────
 //
 // Shown in the sidebar when the SETTINGS screen is active.
 // Displays the available settings sections as a visual index.
@@ -823,6 +864,7 @@ private fun FilesHeader(
     isSearchVisible: Boolean,
     onShowFileSearch: () -> Unit,
     onHideFileSearch: () -> Unit,
+    onShowContentSearch: () -> Unit,
     onRevealActiveFile: () -> Unit,
     onNewFile: () -> Unit,
     onNewFolder: () -> Unit,
@@ -830,8 +872,9 @@ private fun FilesHeader(
     onRefresh: () -> Unit,
     onExportProject: () -> Unit,
     onMoveProject: () -> Unit,
-    onRenameProject: () -> Unit,
+    onShowProjectDetails: () -> Unit,
     onRemoveProject: () -> Unit,
+    onDeleteProject: () -> Unit,
 ) {
     val colors   = LocalIdeColors.current
     var menuOpen by remember { mutableStateOf(false) }
@@ -848,7 +891,6 @@ private fun FilesHeader(
             color    = colors.textDisabled,
             modifier = Modifier.weight(1f),
         )
-        // F014: increased from 28dp/16dp to 36dp/20dp to meet 44dp effective touch target
         //       requirement on Android (36dp IconButton + 4dp system touch delegation = ~40dp,
         //       approaching the 44dp minimum; 28dp was reliably misfire-prone in practice).
         IconButton(
@@ -863,7 +905,7 @@ private fun FilesHeader(
         ) {
             Icon(
                 imageVector        = Icons.Default.Search,
-                contentDescription = if (isSearchVisible) "Close search" else "Search files",
+                contentDescription = if (isSearchVisible) "Close filename search" else "Search filenames",
                 tint               = if (isSearchVisible) colors.accent else colors.textSecondary,
                 modifier           = Modifier.size(20.dp),
             )
@@ -892,6 +934,14 @@ private fun FilesHeader(
                 modifier           = Modifier.size(20.dp),
             )
         }
+        IconButton(onClick = onShowProjectDetails, modifier = Modifier.size(36.dp)) {
+            Icon(
+                imageVector        = Icons.Default.Info,
+                contentDescription = "Project details",
+                tint               = colors.textSecondary,
+                modifier           = Modifier.size(20.dp),
+            )
+        }
         Box {
             IconButton(onClick = { menuOpen = true }, modifier = Modifier.size(36.dp)) {
                 Icon(
@@ -914,6 +964,10 @@ private fun FilesHeader(
                     text    = { Text("Import Files") },
                     onClick = { menuOpen = false; onImportFiles() },
                 )
+                DropdownMenuItem(
+                    text    = { Text("Search project contents") },
+                    onClick = { menuOpen = false; onShowContentSearch() },
+                )
                 HorizontalDivider()
                 DropdownMenuItem(
                     text    = { Text("Refresh") },
@@ -929,11 +983,15 @@ private fun FilesHeader(
                 )
                 HorizontalDivider()
                 DropdownMenuItem(
-                    text    = { Text("Rename Project") },
-                    onClick = { menuOpen = false; onRenameProject() },
+                    text    = { Text("Project details") },
+                    onClick = { menuOpen = false; onShowProjectDetails() },
                 )
                 DropdownMenuItem(
-                    text    = { Text("Remove from List", color = LocalIdeColors.current.error) },
+                    text    = { Text("Delete permanently") },
+                    onClick = { menuOpen = false; onDeleteProject() },
+                )
+                DropdownMenuItem(
+                    text    = { Text("Remove from registry", color = LocalIdeColors.current.error) },
                     onClick = { menuOpen = false; onRemoveProject() },
                 )
             }
@@ -964,17 +1022,14 @@ private fun IdeTopBar(
     onOpenFile: (String) -> Unit,
     onRevealInTree: (String) -> Unit,
     onMenuClick: (() -> Unit)?,
-    // F003: SAF-backed navigator — loads children without expand-state dependency.
     loadNavChildren: suspend (String) -> List<FileNode>,
 ) {
     val colors           = LocalIdeColors.current
-    val scope            = rememberCoroutineScope()
     var overflowOpen     by remember { mutableStateOf(false) }
     var pathDropdownOpen by remember { mutableStateOf(false) }
 
-    // F003: navigator state machine — independent of in-memory tree expand state.
-    // navStack: history of visited folder URIs (most recent last).
-    // navItems: current directory's children as returned from SAF.
+    // SPCK-style sibling navigator: the menu lists the current folder's siblings.
+    // Tapping a folder descends; tapping a file opens it; ".." ascends.
     var navStack   by remember { mutableStateOf(emptyList<String>()) }
     var navItems   by remember { mutableStateOf(emptyList<FileNode>()) }
     var navLoading by remember { mutableStateOf(false) }
@@ -985,15 +1040,9 @@ private fun IdeTopBar(
         activeTab != null -> fileTree.pathTo(activeTab.documentUri)
             ?: if (projectName.isNotEmpty()) "/$projectName/${activeTab.displayName}" else activeTab.displayName
         projectName.isNotEmpty() -> projectName
-        else -> ""   // C006: no application title when nothing is open
+        else -> ""
     }
 
-    // Ancestors of the active file (for breadcrumb display inside the dropdown).
-    val ancestors = remember(activeTab?.documentUri, fileTree) {
-        activeTab?.documentUri?.let { fileTree.ancestorsOf(it) } ?: emptyList()
-    }
-
-    // F003: parent folder URI of the active file — obtained from the tree without
     // requiring expand state (findNode traverses all cached children unconditionally).
     val activeParentUri = remember(activeTab?.documentUri, fileTree) {
         activeTab?.documentUri?.let { uri ->
@@ -1001,7 +1050,7 @@ private fun IdeTopBar(
         }
     }
 
-    // F003: load children whenever the dropdown opens or the current nav folder changes.
+    // Load the current sibling list whenever the menu opens or navigation changes.
     LaunchedEffect(pathDropdownOpen, navStack) {
         if (!pathDropdownOpen) {
             navStack   = emptyList()
@@ -1017,44 +1066,37 @@ private fun IdeTopBar(
 
     TopAppBar(
         title = {
-            // Show ONLY the file path — no separate file name headline.
-            // The path doubles as a tappable quick-switcher via the SAF-backed navigator.
-            Box(modifier = Modifier.fillMaxHeight(), contentAlignment = Alignment.CenterStart) {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxHeight()) {
                 Text(
-                    text     = filePath,
-                    style    = MaterialTheme.typography.bodyMedium,
-                    color    = colors.textPrimary,
+                    text = filePath,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = colors.textPrimary,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = if (activeTab != null) Modifier.clickable { pathDropdownOpen = true }
-                               else Modifier,
+                    modifier = Modifier.weight(1f),
                 )
+                if (activeTab != null) {
+                    Box {
+                        IconButton(onClick = { pathDropdownOpen = true }) {
+                            Icon(Icons.Default.MoreVert, "Navigate path", tint = colors.textSecondary)
+                        }
+                    }
+                }
                 if (pathDropdownOpen) {
                     DropdownMenu(
                         expanded         = pathDropdownOpen,
                         onDismissRequest = { pathDropdownOpen = false },
                     ) {
-                        // ── Breadcrumb header ─────────────────────────────────────────
-                        if (ancestors.isNotEmpty()) {
-                            ancestors.forEach { ancestor ->
-                                DropdownMenuItem(
-                                    text    = { Text("\u25B8 ${ancestor.displayName}/", color = colors.textSecondary) },
-                                    onClick = {
-                                        // Navigate into this ancestor directory via SAF.
-                                        scope.launch { navStack = navStack + ancestor.documentUri }
-                                    },
-                                )
-                            }
-                            HorizontalDivider()
-                        }
-                        // ── Up button ────────────────────────────────────────────────
-                        if (navStack.isNotEmpty()) {
-                            DropdownMenuItem(
-                                text    = { Text("\u2191 Up", color = colors.accent) },
-                                onClick = { scope.launch { navStack = navStack.dropLast(1) } },
-                            )
-                            HorizontalDivider()
-                        }
+                        val currentUri = navStack.lastOrNull() ?: activeParentUri ?: projectRootUri
+                        val parentUri = currentUri?.let { uri -> fileTree.findNode(uri)?.parentDocumentUri }
+                        DropdownMenuItem(
+                            text = { Text("..", color = colors.accent) },
+                            enabled = navStack.isNotEmpty() || parentUri != null,
+                            onClick = {
+                                if (navStack.isNotEmpty()) navStack = navStack.dropLast(1)
+                                else parentUri?.let { navStack = listOf(it) }
+                            },
+                        )
                         // ── Directory contents from SAF ───────────────────────────────
                         when {
                             navLoading -> {
@@ -1096,8 +1138,7 @@ private fun IdeTopBar(
                                         },
                                         onClick = {
                                             if (item.isDirectory) {
-                                                // Navigate into sub-folder via SAF.
-                                                scope.launch { navStack = navStack + item.documentUri }
+                                                navStack = navStack + item.documentUri
                                             } else {
                                                 pathDropdownOpen = false
                                                 onOpenFile(item.documentUri)
@@ -1134,7 +1175,6 @@ private fun IdeTopBar(
                     )
                 }
             }
-            // Search — promotes Find to a first-class action (C006)
             IconButton(onClick = onFind) {
                 Icon(
                     imageVector        = Icons.Default.Search,
@@ -1234,7 +1274,6 @@ private fun FileOpDialogHost(
             onDiscard = { ideViewModel.confirmCloseTab(dialog.tabId) },
             onCancel  = ideViewModel::dismissFileOpDialog,
         )
-        // F004: project-relative Save As dialog.
         is FileOpDialog.SaveAs -> SaveAsDialog(
             suggestedName = dialog.suggestedName,
             onConfirm     = { ideViewModel.saveAsAtPath(it) },
@@ -1261,7 +1300,6 @@ private fun BinaryOpenErrorDialog(fileName: String, onDismiss: () -> Unit) {
 
 // ── Dialog composables ─────────────────────────────────────────────────────────
 
-// F004: Project-relative Save As dialog.
 // The user types a path relative to the project root, e.g. "src/utils/Foo.kt".
 // Intermediate directories are created automatically by IdeViewModel.saveAsAtPath.
 @Composable

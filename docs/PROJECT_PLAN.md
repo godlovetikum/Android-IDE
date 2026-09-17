@@ -193,7 +193,7 @@ Deliverables:
 - [x] Monaco offline bundle (`fetch-monaco.sh`, git-ignored `vs/`)
 - [x] Project management: search/sort/details, ZIP export, duplication, and storage migration
 - [x] Project-local `.androidide/project.json` and `.androidide/workspace.json` metadata
-- [x] Configurable file-tree visibility for `.git`, `.androidide`, and `README.md`
+- [x] Configurable file-tree visibility for `.git`, `.androidide`
 - [ ] Production-readiness hardening: verified mutation recovery, permission-loss recovery, workspace migration, and release-device validation
 - [ ] Integrated terminal and persistent background process sessions
 - [ ] Integrated Git mutations, credentials, history, and diff review

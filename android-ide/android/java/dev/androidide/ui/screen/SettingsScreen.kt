@@ -1,7 +1,6 @@
 // android-ide/android/java/dev/androidide/ui/screen/SettingsScreen.kt
 //
 // Settings screen — app theme, editor theme, preview layout, editor display,
-// volume key controls, UI font scaling, default project directory, and Phase 2
 // feature placeholders.
 
 package dev.androidide.ui.screen
@@ -266,7 +265,6 @@ fun SettingsScreen(
 
                     HorizontalDivider(color = colors.separator)
 
-                    // C014: Render whitespace (exposes Monaco's renderWhitespace option)
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text("Render Whitespace", color = colors.textPrimary, style = MaterialTheme.typography.bodyMedium)
@@ -285,7 +283,6 @@ fun SettingsScreen(
 
                     HorizontalDivider(color = colors.separator)
 
-                    // F017: Minimap
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier
@@ -303,7 +300,6 @@ fun SettingsScreen(
 
                     HorizontalDivider(color = colors.separator)
 
-                    // F017: Scroll beyond last line
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier
@@ -321,7 +317,6 @@ fun SettingsScreen(
 
                     HorizontalDivider(color = colors.separator)
 
-                    // F017: Bracket pair colorization
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier
@@ -339,7 +334,6 @@ fun SettingsScreen(
 
                     HorizontalDivider(color = colors.separator)
 
-                    // F017: Cursor style
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text("Cursor Style", color = colors.textPrimary, style = MaterialTheme.typography.bodyMedium)
@@ -358,7 +352,6 @@ fun SettingsScreen(
 
                     HorizontalDivider(color = colors.separator)
 
-                    // F017: Auto-closing brackets
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text("Auto-close Brackets", color = colors.textPrimary, style = MaterialTheme.typography.bodyMedium)
@@ -429,7 +422,6 @@ fun SettingsScreen(
                         Switch(checked = s.showSymbolBar, onCheckedChange = { ideViewModel.setEditorSettings(s.copy(showSymbolBar = it)) })
                     }
 
-                    // C014: disabled placeholder — code completion (Phase 4)
                     HorizontalDivider(color = colors.separator)
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -442,7 +434,6 @@ fun SettingsScreen(
                         Switch(checked = false, onCheckedChange = null, enabled = false)
                     }
 
-                    // C014: disabled placeholder — code folding (Phase 4)
                     HorizontalDivider(color = colors.separator)
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
