@@ -76,6 +76,19 @@ import dev.androidide.viewmodel.model.findNode
 import dev.androidide.viewmodel.model.pathTo
 import kotlinx.coroutines.launch
 
+private fun formatRelativeDate(timestampMs: Long): String {
+    val elapsedMs = (System.currentTimeMillis() - timestampMs).coerceAtLeast(0L)
+    val minuteMs = 60_000L
+    val hourMs = 60 * minuteMs
+    val dayMs = 24 * hourMs
+    return when {
+        elapsedMs < minuteMs -> "just now"
+        elapsedMs < hourMs -> "${elapsedMs / minuteMs} min ago"
+        elapsedMs < dayMs -> "${elapsedMs / hourMs} hr ago"
+        else -> "${elapsedMs / dayMs} days ago"
+    }
+}
+
 // ── IdeScreen ─────────────────────────────────────────────────────────────────
 
 @Composable
