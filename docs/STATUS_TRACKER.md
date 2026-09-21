@@ -1,41 +1,76 @@
 # Android IDE Status Tracker
 
-## Immediate planning gate
+## Current project state
 
-Review and approve `docs/NEXT_WORK_PRIORITY.md` and `docs/APP_STATE_AND_NAVIGATION.md` before further source implementation. The review must clarify the complete product direction, domain boundaries, application/project/surface state ownership, navigation behavior, editor/terminal/browser tab lifecycles, durable restoration, identity migration, and independent domain testing.
+The product-definition and provider-research discovery gate is complete. The approved documents now define what Android IDE is, the supported feature domains, the storage and runtime relationship, the selected provider direction, and the staged implementation order.
 
-The proposed application ID is `dev.android.ide`, and the proposed project metadata directory is `.dev-android-ide`. The current source still uses `dev.androidide` and `.androidide`; no identity migration has been authorized or implemented. Visibility settings are intended for the metadata folder and `.git` only. README files are ordinary project documentation and are not part of that toggle.
+The active canonical documents are:
 
-## Reported unresolved domains
+- `docs/ANDROID_IDE_PRODUCT_DEFINITION_APPROVED.md`
+- `docs/ANDROID_IDE_PROVIDER_RESEARCH_APPROVED.md`
+- `docs/ANDROID_IDE_IMPLEMENTATION_ROADMAP_APPROVED.md`
+- `docs/PHASE_0_IMPLEMENTATION_GUIDANCE.md`
 
-### Project and storage
+Superseded planning notes, earlier research reports, and working versions are retained under `docs/archive/` for traceability. They are not active implementation guidance.
 
-Delete, move, cut-paste, provider inconsistency, permission-loss, project-creation, and metadata-initialization problems remain unresolved and require independent acceptance testing.
+## Completed discovery gate
 
-### Editor
+The first implementation-planning objective—defining and clarifying the product—has been satisfied. The approved definition covers the six product domains, mobile-first navigation, project acquisition, storage ownership, the private Termux development workspace, global terminal behavior, browser and preview behavior, Git levels, editor behavior, lifecycle expectations, security boundaries, and the extensions placeholder.
 
-The Android 15 editing crash, false unsaved-state recovery, document/global search replacement workflow, keyboard navigation, repeat-press controls, templates, and language-intelligence requirements remain unresolved or only partially implemented.
+The approved provider research covers obtainable provider choices, versions, licenses, acquisition routes, customization boundaries, Termux runtime initialization, the private development filesystem, Monaco integration, GeckoView, browser tooling, Git, LSP, Keystore, and Android lifecycle constraints.
 
-### Terminal and runtime
+The approved roadmap establishes the implementation order and acceptance gates. No feature-domain implementation is authorized merely by the existence of these documents.
 
-Terminal UI, PTY management, Linux runtime, package installation, durable sessions, long-running task ownership, and explicit Hide versus Close behavior remain future work.
+## Active implementation gate
 
-### Git
+Complete Phase 0 contract preparation before expanding source implementation. Follow `docs/PHASE_0_IMPLEMENTATION_GUIDANCE.md`.
 
-Git status, staging, commits, branches, synchronization, credentials, and diff review remain future work and are separate from terminal implementation.
+Phase 0 must finalize or record the following contracts:
 
-### Browser
+- state ownership across project, portable metadata, runtime, and global layers;
+- user-visible versus private-development project locations;
+- storage capability validation and no-silent-substitution behavior;
+- Home, navigation, contextual sidebar, Back, Hide, Close, Leave Project, and Exit semantics;
+- durable restoration and unavailable-state handling;
+- terminal, editor, Git, browser, storage, and lifecycle adapter boundaries;
+- shared event, error, conflict, and operation-result vocabulary;
+- application identity and metadata-directory migration strategy;
+- the narrow Phase 1 foundation scope.
 
-The in-app browser, multiple browser tabs, preview integration, browser restoration, and WebView failure isolation are future work and were not part of the original project plan.
+## Domain status
+
+### Project and workspace management
+
+The product behavior is defined. Implementation remains future work and must follow Phase 2 of the approved roadmap. Required acceptance coverage includes acquisition, conflict preflight, metadata initialization, project registry, file and folder mutations, project location classes, export, duplication, relocation, removal, deletion, and permission loss.
+
+### Code editing
+
+The product behavior and Monaco provider direction are defined. Implementation remains future work and must follow Phase 4. Required acceptance coverage includes mobile controls, press-and-hold repetition, file tree behavior, search and replace, tab states, saving, recovery, external changes, and file mutation feedback.
+
+### Terminal, runtime, dependencies, and background processes
+
+The Termux runtime direction and private development workspace model are defined. Implementation remains future work and must follow Phase 3. Required acceptance coverage includes bootstrap initialization, package capability reporting, PTYs, global sessions, project working directories, child-process ownership, foreground lifecycle, process-loss reporting, and explicit close behavior.
+
+### Browser, previews, and developer tools
+
+The unified browser behavior and GeckoView/console direction are defined. Implementation remains future work and must follow Phase 5. Required acceptance coverage includes normal browsing, browser tabs, downloads, local previews, development-server access, console behavior, viewport testing, and failure isolation.
+
+### Git integration
+
+Repository-level and global Git behavior, credential boundaries, and terminal interoperability are defined. Implementation remains future work and must follow Phase 6.
 
 ### Language intelligence
 
-LSP lifecycle, diagnostics, completion, symbol navigation, references, code actions, and language-aware HTML behavior remain future work after the editor direction is stabilized.
+The LSP client and runtime-managed language-server direction are defined. Implementation remains future work and must follow Phase 7.
+
+### Settings, security, credentials, and customization
+
+The domain boundary and Keystore-backed security direction are defined. Implementation remains future work and must follow Phase 8.
 
 ### Extensions
 
-Extension packaging, loading, sandboxing, permissions, management, and examples remain future work after the core product domains are clarified.
+Extensions remain an explicit placeholder. Packaging, permissions, sandboxing, lifecycle, installation, execution, and update behavior are not yet product-defined and must not be implemented as an assumed marketplace or unrestricted dynamic-code system.
 
-## Validation rule
+## Repository discipline
 
-Each domain must be tested independently before cross-domain integration. The working tree contains uncommitted implementation changes from earlier passes; no change should be treated as accepted solely because it is present in source.
+The working tree contains pre-existing implementation changes and untracked documentation from earlier work. No existing change is accepted solely because it is present in source. Do not commit or push without explicit instruction. Keep validation targeted and avoid heavy Android builds or background processes unless explicitly authorized.
