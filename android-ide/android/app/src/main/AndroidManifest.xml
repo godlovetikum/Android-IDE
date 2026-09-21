@@ -3,8 +3,8 @@
     android-ide/android/app/src/main/AndroidManifest.xml
 
     Migration note (2026-06-12):
-      Replaced dev.androidide.IDEActivity (NativeActivity subclass, Slint-specific)
-      with dev.androidide.MainActivity (ComponentActivity, Kotlin/Jetpack Compose).
+      Replaced dev.android.ide.IDEActivity (NativeActivity subclass, Slint-specific)
+      with dev.android.ide.MainActivity (ComponentActivity, Kotlin/Jetpack Compose).
       Removed android.app.lib_name meta-data (Rust .so NativeActivity lookup).
       All other settings (permissions, configChanges, icons, SDK versions) unchanged.
 
@@ -50,7 +50,7 @@
             android:exported="true": required for the LAUNCHER intent filter.
         -->
         <activity
-            android:name="dev.androidide.MainActivity"
+            android:name="dev.android.ide.MainActivity"
             android:label="Android IDE"
             android:exported="true"
             android:launchMode="singleTop"

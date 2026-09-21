@@ -5,7 +5,7 @@
 // Stack: Kotlin 1.9.22 + Jetpack Compose BOM 2024.02.00 + Material3
 //
 // Source layout (relative to android/app/):
-//   ../java/dev/androidide/   — Kotlin source files (all .kt)
+//   ../java/dev/android/ide/   — Kotlin source files (all .kt)
 //   ../assets/editor/         — Monaco editor HTML + JS assets
 //   src/main/AndroidManifest.xml — Application manifest
 //   src/main/res/                — Launcher icon resources
@@ -28,11 +28,11 @@ plugins {
 }
 
 android {
-    namespace = "dev.androidide"
+    namespace = "dev.android.ide"
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "dev.androidide"
+        applicationId = "dev.android.ide"
         minSdk = 26
         targetSdk = 34
         versionCode = 1

@@ -77,7 +77,7 @@ This imported-project path does not create `package.json`, `.gitignore`, or any 
 
 ## 3. Metadata-folder README
 
-This is not a root README. It is created under the current `.androidide` project metadata directory when that directory exists and lacks its own README:
+This is not a root README. It is created under the `.dev-android-ide` project metadata directory when that directory exists and lacks its own README:
 
 ~~~markdown
 # Android IDE project metadata
@@ -90,7 +90,7 @@ This folder is managed by Android IDE and stores project-local workspace state.
 These files are project-local and travel with the project. Global application preferences remain outside this folder.
 ~~~
 
-The proposed future metadata-directory identity is `.dev-android-ide`, but the current source still writes and reads `.androidide`. That naming change has not yet been implemented.
+The target metadata directory is `.dev-android-ide`. During project acquisition or opening, an existing `.androidide` directory is migrated into the target and deleted only after successful migration. The legacy directory is not preserved alongside the target.
 
 ## 4. Current template observations
 

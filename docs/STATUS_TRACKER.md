@@ -10,6 +10,7 @@ The active canonical documents are:
 - `docs/ANDROID_IDE_PROVIDER_RESEARCH_APPROVED.md`
 - `docs/ANDROID_IDE_IMPLEMENTATION_ROADMAP_APPROVED.md`
 - `docs/PHASE_0_IMPLEMENTATION_GUIDANCE.md`
+- `docs/ARCHITECTURE_CONTRACTS.md`
 
 Superseded planning notes, earlier research reports, and working versions are retained under `docs/archive/` for traceability. They are not active implementation guidance.
 
@@ -21,9 +22,17 @@ The approved provider research covers obtainable provider choices, versions, lic
 
 The approved roadmap establishes the implementation order and acceptance gates. No feature-domain implementation is authorized merely by the existence of these documents.
 
-## Active implementation gate
+## Architecture contract status
 
-Complete Phase 0 contract preparation before expanding source implementation. Follow `docs/PHASE_0_IMPLEMENTATION_GUIDANCE.md`.
+Phase 0 contract/bootstrap work is complete on the `dev` branch. The accepted contract set records state ownership, storage authority, project-location capability rules, navigation and restoration behavior, lifecycle and session semantics, provider adapter boundaries, shared events, operation outcomes, error categories, and the identity migration decision. This is not a claim that later runtime, editor, browser, Git, or project-management gates are complete.
+
+The Kotlin contract types are in `android-ide/android/java/dev/android/ide/contracts/ApplicationContracts.kt`. They are provider-neutral and do not claim that any runtime, editor, browser, Git, language-intelligence, credentials, or extension feature is implemented.
+
+The identity migration from `dev.androidide` / `.androidide` to `dev.android.ide` / `.dev-android-ide` is implemented as a one-way acquisition/opening migration. The target directory is checked first; if absent, legacy files are copied into it and the legacy directory is deleted only after successful migration. All later reads and writes use only `.dev-android-ide`.
+
+## Application foundation entry status
+
+The architecture contracts and identity prerequisite are complete. The application-foundation implementation is complete at source level; its behavioral gate remains unverified until the repository workflow runs on Android tooling.
 
 Phase 0 must finalize or record the following contracts:
 
@@ -36,6 +45,12 @@ Phase 0 must finalize or record the following contracts:
 - shared event, error, conflict, and operation-result vocabulary;
 - application identity and metadata-directory migration strategy;
 - the narrow Phase 1 foundation scope.
+
+## Application foundation implementation status
+
+The application-foundation implementation is complete through `AppShell`, `AppShellViewModel`, `ApplicationStateStore`, `RuntimeStateStore`, `ProjectStateService`, `ProjectProviderAdapters`, `LifecycleStateStore`, and `KeystoreCredentialVault`. The active shell owns Home, top-level navigation, integrated mobile navigation, project restoration, last-project identity, capability state, Back handling, explicit Exit handling, and lifecycle coordination through the application contracts. The former monolithic `IdeViewModel`/`AppRoot` editor shell is inactive reference material for later domain work; it is not the foundation authority. Behavioral acceptance and remote build verification remain deferred to the repository’s GitHub Actions workflow.
+
+Terminal runtime, browser, Git, language intelligence, credentials, extensions, and advanced project acquisition remain intentionally outside this Phase 1 foundation and are represented only by explicit navigation placeholders or adapter boundaries.
 
 ## Domain status
 

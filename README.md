@@ -6,9 +6,9 @@ The project brings project management, SAF-backed file access, a Monaco-based ed
 
 ## Current status
 
-The **Phase 1 editor and project workspace foundation is implemented**. The project can create and open projects, browse files, edit and save documents, manage tabs, preview web content, and perform project-level operations. Production hardening remains in progress, particularly for Android storage providers, interrupted mutations, permission recovery, workspace restoration, and release-device validation.
+The active application shell provides Home, project registration state, location capability reporting, portable metadata handling, lifecycle state, and navigation placeholders. The editor and project-management implementation inherited from the earlier application remains reference code until it is rebuilt behind the application contracts.
 
-Terminal sessions, persistent background processes, integrated Git mutations, language intelligence, and extensions are planned follow-on capabilities. They are documented as separate phases rather than being represented as completed features.
+Terminal sessions, persistent background processes, integrated Git mutations, language intelligence, and extensions remain unavailable until their owning services and provider boundaries are implemented.
 
 ## Technology
 
@@ -49,6 +49,7 @@ APK builds are also available through the repository’s GitHub Actions workflow
 
 - [Project plan](docs/PROJECT_PLAN.md) — product scope, architecture, milestones, and phase definitions.
 - [Status tracker](docs/STATUS_TRACKER.md) — current implementation status and task history.
+- [Application architecture contracts](docs/ARCHITECTURE_CONTRACTS.md) — accepted ownership, lifecycle, adapter, event, error, and identity contracts.
 - [Phase 1 production readiness](docs/PHASE1_PRODUCTION_READINESS.md) — open hardening gates for the editor and project workspace.
 - [Product requirements](docs/PRODUCT_REQUIREMENTS.md) — editor access, text scaling, and independent background-session requirements.
 - [QA workflow](docs/QA_WORKFLOW.md) — validation and change-review process.

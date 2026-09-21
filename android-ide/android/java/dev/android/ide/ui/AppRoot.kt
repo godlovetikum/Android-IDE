@@ -1,0 +1,335 @@
+// android-ide/android/java/dev/android/ide/ui/AppRoot.kt
+//
+// Top-level navigation shell.
+// Wraps the app in AndroidIDETheme (so dark/light switching applies everywhere).
+// Owns all ActivityResultLaunchers so they are registered at the root
+// composable level and shared with child screens via callbacks.
+//
+// Global font scaling:
+//   uiFontScale from EditorSettings is applied here via LocalDensity so it
+//   affects ALL text in the application — file tree, menus, settings, dialogs,
+//   toolbar labels, and any other UI chrome — not just the Monaco editor.
+//
+// IdeScreen is always the root screen — no bottom NavigationBar.
+// Navigation between Projects / Editor / Settings is handled by the sidebar.
+
+package dev.android.ide.ui
+
+import android.content.Intent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.dp
+import androidx.lifecycle.viewmodel.compose.viewModel
+import dev.android.ide.ui.theme.AndroidIDETheme
+import dev.android.ide.viewmodel.IdeViewModel
+import dev.android.ide.viewmodel.model.FileNode
+
+private enum class ProjectDestinationAction {
+    DUPLICATE,
+    MOVE,
+}
+
+@Composable
+fun AppRoot(ideViewModel: IdeViewModel = viewModel()) {
+    val uiState by ideViewModel.uiState.collectAsState()
+    val context  = LocalContext.current
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    LaunchedEffect(uiState.statusMessage) {
+        if (uiState.statusMessage.isNotBlank()) {
+            snackbarHostState.showSnackbar(uiState.statusMessage)
+        }
+    }
+
+    // ── State for multi-step flows ──────────────────────────────────────────
+    var importTargetDirUri      by remember { mutableStateOf("") }
+    var showCreateProjectDialog by remember { mutableStateOf(false) }
+    var createProjectName       by remember { mutableStateOf("") }
+    var createProjectDescription by remember { mutableStateOf("") }
+    var createDestinationUri    by remember { mutableStateOf<String?>(null) }
+    var pendingExportSourceUri  by remember { mutableStateOf<String?>(null) }
+    var pendingDestinationUri   by remember { mutableStateOf<String?>(null) }
+    var pendingDestinationAction by remember { mutableStateOf<ProjectDestinationAction?>(null) }
+    var pendingMoveConfirmation by remember { mutableStateOf<Pair<String, String>?>(null) }
+
+    // ── Open existing project folder ────────────────────────────────────────
+    val openProjectLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocumentTree()
+    ) { uri ->
+        if (uri != null) {
+            context.contentResolver.takePersistableUriPermission(
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+            )
+            ideViewModel.openProject(uri.toString())
+        }
+    }
+
+    val createProjectDestinationLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocumentTree()
+    ) { uri ->
+        if (uri != null) {
+            context.contentResolver.takePersistableUriPermission(
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+            )
+            createDestinationUri = uri.toString()
+        }
+    }
+
+    val exportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/zip")
+    ) { uri ->
+        val sourceUri = pendingExportSourceUri
+        pendingExportSourceUri = null
+        if (uri != null && sourceUri != null) {
+            ideViewModel.exportProject(sourceUri, uri.toString())
+        }
+    }
+
+    val projectDestinationLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocumentTree()
+    ) { uri ->
+        val sourceUri = pendingDestinationUri
+        val action = pendingDestinationAction
+        pendingDestinationUri = null
+        pendingDestinationAction = null
+        if (uri != null && sourceUri != null && action != null) {
+            context.contentResolver.takePersistableUriPermission(
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+            )
+            when (action) {
+                ProjectDestinationAction.DUPLICATE ->
+                    ideViewModel.duplicateProject(sourceUri, uri.toString())
+                ProjectDestinationAction.MOVE ->
+                    pendingMoveConfirmation = sourceUri to uri.toString()
+            }
+        }
+    }
+
+    fun launchExport(sourceUri: String, name: String) {
+        pendingExportSourceUri = sourceUri
+        exportLauncher.launch("$name.zip")
+    }
+
+    fun launchProjectDestination(sourceUri: String, action: ProjectDestinationAction) {
+        pendingDestinationUri = sourceUri
+        pendingDestinationAction = action
+        projectDestinationLauncher.launch(null)
+    }
+
+    // The old ActivityResultContracts.CreateDocument launcher placed files outside
+    // the project tree. The new dialog resolves a relative path within the project.
+
+    // ── Import multiple files into the tree ─────────────────────────────────
+    val importFilesLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenMultipleDocuments()
+    ) { uris ->
+        if (uris.isNotEmpty() && importTargetDirUri.isNotEmpty()) {
+            uris.forEach { uri ->
+                context.contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                )
+            }
+            ideViewModel.importFiles(importTargetDirUri, uris.map { it.toString() })
+        }
+        importTargetDirUri = ""
+    }
+
+    // ── Global font scale — applied to ALL Compose text ────────────────────
+    // uiFontScale multiplies LocalDensity.fontScale so that every Text in the
+    // entire composition is scaled: file tree rows, menu items, settings labels,
+    // dialogs, toolbar labels, and status bar text.
+    val baseDensity  = LocalDensity.current
+    val uiFontScale  = uiState.editorSettings.uiFontScale
+
+    AndroidIDETheme(appTheme = uiState.appTheme) {
+        CompositionLocalProvider(
+            LocalDensity provides Density(
+                density   = baseDensity.density,
+                fontScale = uiFontScale,
+            ),
+        ) {
+            Box(modifier = Modifier.fillMaxSize().systemBarsPadding()) {
+                // IdeScreen is always the root — sidebar handles all navigation.
+                IdeScreen(
+                    ideViewModel        = ideViewModel,
+                    uiState             = uiState,
+                    onOpenProjectFolder = { openProjectLauncher.launch(null) },
+                    onCreateBlankProject = { suggestedName ->
+                        createProjectName       = suggestedName?.takeIf { it.isNotBlank() } ?: "MyProject"
+                        createProjectDescription = ""
+                        createDestinationUri   = null
+                        showCreateProjectDialog = true
+                    },
+                    onExportProject      = { uri ->
+                        val name = uiState.recentProjects.firstOrNull { it.uri == uri }?.name
+                            ?: "project"
+                        launchExport(uri, name)
+                    },
+                    onDuplicateProject   = { uri ->
+                        launchProjectDestination(uri, ProjectDestinationAction.DUPLICATE)
+                    },
+                    onMoveProject        = { uri ->
+                        launchProjectDestination(uri, ProjectDestinationAction.MOVE)
+                    },
+                    onExportDirectory    = { node ->
+                        launchExport(node.documentUri, node.displayName)
+                    },
+                    onSaveAs            = { ideViewModel.showSaveAsDialog() },
+                    onImportFilesAt     = { node ->
+                        importTargetDirUri = node.documentUri
+                        importFilesLauncher.launch(arrayOf("*/*"))
+                    },
+                    onImportFilesAtRoot = {
+                        importTargetDirUri = uiState.projectRootUri ?: ""
+                        if (importTargetDirUri.isNotEmpty()) importFilesLauncher.launch(arrayOf("*/*"))
+                    },
+                )
+                SnackbarHost(
+                    hostState = snackbarHostState,
+                    modifier = Modifier.align(Alignment.BottomCenter).padding(12.dp),
+                )
+            }
+        }
+    }
+
+    // ── Create Blank Project dialog ─────────────────────────────────────────
+    if (showCreateProjectDialog) {
+        AlertDialog(
+            onDismissRequest = { showCreateProjectDialog = false },
+            title   = { Text("New Project") },
+            text    = {
+                Column {
+                    OutlinedTextField(
+                        value         = createProjectName,
+                        onValueChange = { createProjectName = it },
+                        label         = { Text("Project name") },
+                        singleLine    = true,
+                        placeholder   = { Text("MyProject") },
+                    )
+                    OutlinedTextField(
+                        value         = createProjectDescription,
+                        onValueChange = { createProjectDescription = it },
+                        label         = { Text("Description") },
+                        modifier      = androidx.compose.ui.Modifier.padding(top = 8.dp),
+                        minLines      = 2,
+                    )
+                    Text(
+                        text = createDestinationUri?.let { "Destination selected. The project folder will be created there." }
+                            ?: "Press Create to choose where the project will be created.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = androidx.compose.ui.Modifier.padding(top = 8.dp),
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        if (createProjectName.isNotBlank()) {
+                            if (createDestinationUri == null) {
+                                createProjectDestinationLauncher.launch(null)
+                            } else {
+                                showCreateProjectDialog = false
+                                ideViewModel.createBlankProject(
+                                    createProjectName.trim(),
+                                    createProjectDescription.trim(),
+                                    createDestinationUri!!,
+                                )
+                            }
+                        }
+                    },
+                    enabled = createProjectName.isNotBlank(),
+                ) { Text("Create") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showCreateProjectDialog = false }) { Text("Cancel") }
+            },
+        )
+    }
+
+    pendingMoveConfirmation?.let { (sourceUri, destinationUri) ->
+        AlertDialog(
+            onDismissRequest = { pendingMoveConfirmation = null },
+            title = { Text("Move project storage?") },
+            text = {
+                Text(
+                    "The project will be copied to the selected folder first. " +
+                        "After a successful copy, the original project folder will be removed.",
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        pendingMoveConfirmation = null
+                        ideViewModel.moveProjectStorage(sourceUri, destinationUri)
+                    },
+                    colors = ButtonDefaults.textButtonColors(
+                        contentColor = MaterialTheme.colorScheme.error,
+                    ),
+                ) { Text("Move") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingMoveConfirmation = null }) { Text("Cancel") }
+            },
+        )
+    }
+
+    // ── Remove Project confirmation dialog ──────────────────────────────────
+    val removeUri = uiState.confirmRemoveProjectUri
+    if (removeUri != null) {
+        AlertDialog(
+            onDismissRequest = { ideViewModel.cancelRemoveProject() },
+            title   = { Text("Remove Project") },
+            text    = {
+                Text("Remove this project from the list? The files on disk will NOT be deleted.")
+            },
+            confirmButton = {
+                TextButton(onClick = { ideViewModel.confirmRemoveProject() }) { Text("Remove") }
+            },
+            dismissButton = {
+                TextButton(onClick = { ideViewModel.cancelRemoveProject() }) { Text("Cancel") }
+            },
+        )
+    }
+
+    val deleteUri = uiState.confirmDeleteProjectUri
+    if (deleteUri != null) {
+        var enteredDeleteCode by remember(deleteUri) { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { ideViewModel.cancelDeleteProject() },
+            title = { Text("Permanently Delete Project") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("This permanently deletes the project and all files from its storage provider. This cannot be undone.")
+                    Text("Type this 3-digit code to continue: ${uiState.confirmDeleteProjectCode}", style = MaterialTheme.typography.titleMedium)
+                    OutlinedTextField(
+                        value = enteredDeleteCode,
+                        onValueChange = { enteredDeleteCode = it.filter(Char::isDigit).take(3) },
+                        label = { Text("Confirmation code") },
+                        singleLine = true,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = { ideViewModel.confirmDeleteProject(enteredDeleteCode) },
+                    enabled = enteredDeleteCode.length == 3,
+                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                ) { Text("Delete everything") }
+            },
+            dismissButton = { TextButton(onClick = { ideViewModel.cancelDeleteProject() }) { Text("Cancel") } },
+        )
+    }
+}
