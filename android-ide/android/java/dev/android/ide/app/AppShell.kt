@@ -28,6 +28,7 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.unit.dp
 import dev.android.ide.contracts.ProjectIdentity
 import dev.android.ide.contracts.Surface as AppSurface
+import androidx.compose.runtime.saveable.rememberSaveable
 
 @Composable
 fun AppShell(viewModel: AppShellViewModel, onExit: () -> Unit) {
