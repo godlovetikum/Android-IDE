@@ -76,6 +76,7 @@ import dev.android.ide.viewmodel.model.IdeUiState
 import dev.android.ide.viewmodel.model.findNode
 import dev.android.ide.viewmodel.model.pathTo
 import kotlinx.coroutines.launch
+import androidx.compose.runtime.saveable.rememberSaveable
 
 private fun formatRelativeDate(timestampMs: Long): String {
     val elapsedMs = (System.currentTimeMillis() - timestampMs).coerceAtLeast(0L)
