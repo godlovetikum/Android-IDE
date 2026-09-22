@@ -633,7 +633,7 @@ These files are project-local and travel with the project. Global application pr
         viewModelScope.launch {
             _uiState.update { it.copy(projectMetadataLoading = true) }
             val projects = projectRepository.getAll()
-            _uiState.update { it.copy(projectDetailsByUri = emptyMap() } }
+            _uiState.update { it.copy(projectDetailsByUri = emptyMap() ) }
             val verifiedProjects = projects.map { project ->
                 val capabilities = safRepository.inspectProjectCapabilities(
                     ProjectLocation(
