@@ -686,19 +686,30 @@ class SafRepository(private val context: Context) {
             try {
                 val sourceBuffer = ByteArray(DEFAULT_BUFFER_SIZE)
                 val targetBuffer = ByteArray(DEFAULT_BUFFER_SIZE)
-                openInputStream(sourceUriString)?.use { source ->
-                    openInputStream(targetUriString)?.use { target ->
+                val sourceStream = openInputStream(sourceUriString) ?: return@withContext false
+                val targetStream = openInputStream(targetUriString) ?: run {
+                    // A stream that was opened successfully must still be closed when the
+                    // second side cannot be opened; otherwise the descriptor leaks.
+                    sourceStream.use { }
+                    return@withContext false
+                }
+                sourceStream.use { source ->
+                    targetStream.use { target ->
                         while (true) {
                             val sourceCount = source.read(sourceBuffer)
                             val targetCount = target.read(targetBuffer)
+                            // Unequal read counts (including early EOF on one side) end the
+                            // comparison as a mismatch instead of a verified copy.
                             if (sourceCount != targetCount) return@withContext false
-                            if (sourceCount == -1) return@withContext true
+                            if (sourceCount == -1) break
                             for (index in 0 until sourceCount) {
                                 if (sourceBuffer[index] != targetBuffer[index]) return@withContext false
                             }
                         }
-                    } ?: return@withContext false
-                } ?: return@withContext false
+                        // Both streams reached EOF with identical length and content.
+                        true
+                    }
+                }
             } catch (e: Exception) {
                 Log.e(TAG, "contentEquals failed: $sourceUriString ↔ $targetUriString", e)
                 false

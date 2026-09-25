@@ -9,6 +9,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -255,6 +256,10 @@ fun AppShell(viewModel: AppShellViewModel, onExit: () -> Unit) {
                 relocateName = ""
                 relocateDestinationUri = null
                 relocateDialogVisible = true
+            },
+            onRequestRename = { currentName ->
+                renameName = currentName
+                renameDialogVisible = true
             },
             selectedProjectIds = selectedProjectIds,
             onToggleProjectSelection = { projectId ->
@@ -626,6 +631,7 @@ private fun AppContent(
     onCopySelectedPaths: () -> Unit,
     onDuplicateProject: () -> Unit,
     onRelocateProject: () -> Unit,
+    onRequestRename: (String) -> Unit,
     selectedProjectIds: Set<String>,
     onToggleProjectSelection: (String) -> Unit,
     onClearProjectSelection: () -> Unit,
@@ -715,10 +721,7 @@ private fun AppContent(
                     enabled = !state.detailsLoading,
                 ) { Text("Refresh details") }
                 Button(
-                    onClick = {
-                        renameName = selected?.name.orEmpty()
-                        renameDialogVisible = true
-                    },
+                    onClick = { onRequestRename(selected?.name.orEmpty()) },
                     enabled = !state.operationInProgress && selected != null,
                 ) { Text("Rename project") }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -798,6 +801,9 @@ private fun AppContent(
     }
 }
 
+// combinedClickable is still experimental in Compose Foundation; long-press project
+// selection requires this explicit opt-in.
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ProjectRow(
     project: ProjectIdentity,

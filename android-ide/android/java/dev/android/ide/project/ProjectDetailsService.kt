@@ -5,6 +5,7 @@ package dev.android.ide.project
 
 import dev.android.ide.contracts.CapabilityState
 import dev.android.ide.contracts.ProjectIdentity
+import dev.android.ide.contracts.ProjectRegistryAdapter
 import dev.android.ide.data.model.Project
 import dev.android.ide.data.model.ProjectDetails
 

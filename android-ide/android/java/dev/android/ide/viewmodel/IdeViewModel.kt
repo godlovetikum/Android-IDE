@@ -912,7 +912,7 @@ build/
 
     fun showProjectDetails(uri: String) {
         val project = projectRepository.getAll().firstOrNull { it.uri == uri }
-            ?: Project(extractProjectName(uri), uri)
+            ?: Project(name = extractProjectName(uri), uri = uri)
         _uiState.update {
             it.copy(
                 projectDetails = null,
