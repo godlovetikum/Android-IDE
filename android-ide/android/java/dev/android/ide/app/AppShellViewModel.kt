@@ -13,6 +13,11 @@ import dev.android.ide.contracts.Surface
 import dev.android.ide.lifecycle.LifecycleCoordinatorImpl
 import dev.android.ide.project.ProjectStateService
 import dev.android.ide.project.ProjectRestoreResult
+import dev.android.ide.project.ProjectAcquisitionService
+import dev.android.ide.project.ProjectDetailsResult
+import dev.android.ide.project.ProjectDetailsService
+import dev.android.ide.data.model.ProjectDetails
+import dev.android.ide.project.ProjectOperationsService
 import dev.android.ide.saf.SafRepository
 import dev.android.ide.runtime.RuntimeStateStore
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -28,6 +33,9 @@ data class AppShellState(
     val previousSurface: Surface? = null,
     val statusMessage: String? = null,
     val restoring: Boolean = false,
+    val operationInProgress: Boolean = false,
+    val projectDetails: ProjectDetails? = null,
+    val detailsLoading: Boolean = false,
 )
 
 class AppShellViewModel(application: Application) : AndroidViewModel(application) {
@@ -36,6 +44,9 @@ class AppShellViewModel(application: Application) : AndroidViewModel(application
     private val storage = ProjectStorageAdapterImpl(saf)
     private val metadata = ProjectMetadataAdapterImpl(saf)
     private val projects = ProjectStateService(registry, storage, metadata)
+    private val acquisition = ProjectAcquisitionService(registry, storage, metadata)
+    private val detailsService = ProjectDetailsService(registry, storage)
+    private val operations = ProjectOperationsService(registry, storage, metadata)
     private val lifecycle = LifecycleCoordinatorImpl(application)
     private val applicationState = ApplicationStateStore(application)
     private val runtimeState = RuntimeStateStore(application)
@@ -58,6 +69,18 @@ class AppShellViewModel(application: Application) : AndroidViewModel(application
 
     fun background() {
         viewModelScope.launch { lifecycle.onBackground() }
+    }
+
+    fun reportStatus(message: String) {
+        _state.update { it.copy(statusMessage = message) }
+    }
+
+    fun refreshProjectList() {
+        viewModelScope.launch {
+            _state.update { it.copy(operationInProgress = true, statusMessage = null) }
+            refreshProjects()
+            _state.update { it.copy(operationInProgress = false) }
+        }
     }
 
     fun navigate(surface: Surface) {
@@ -93,7 +116,14 @@ class AppShellViewModel(application: Application) : AndroidViewModel(application
 
     fun openProject(projectId: String) {
         viewModelScope.launch {
-            _state.update { it.copy(restoring = true, selectedProjectId = projectId) }
+            _state.update {
+                it.copy(
+                    restoring = true,
+                    detailsLoading = true,
+                    projectDetails = null,
+                    selectedProjectId = projectId,
+                )
+            }
             val result = projects.restore(projectId)
             when (result) {
                 is ProjectRestoreResult.Restored -> _state.update {
@@ -106,13 +136,205 @@ class AppShellViewModel(application: Application) : AndroidViewModel(application
                     )
                 }
                 is ProjectRestoreResult.Unavailable -> _state.update {
-                    it.copy(restoring = false, statusMessage = result.reason)
+                    it.copy(
+                        restoring = false,
+                        detailsLoading = false,
+                        projectDetails = null,
+                        statusMessage = result.reason,
+                    )
                 }
             }
             if (result is ProjectRestoreResult.Restored) {
                 applicationState.recordProject(result.identity.id)
+                when (val details = detailsService.load(result.identity.id)) {
+                    is ProjectDetailsResult.Loaded -> _state.update {
+                        it.copy(projectDetails = details.details, detailsLoading = false)
+                    }
+                    is ProjectDetailsResult.Unavailable -> _state.update {
+                        it.copy(
+                            detailsLoading = false,
+                            projectDetails = null,
+                            statusMessage = details.reason,
+                        )
+                    }
+                }
+            } else {
+                _state.update { it.copy(detailsLoading = false, projectDetails = null) }
             }
             refreshProjects()
+        }
+    }
+
+    fun refreshSelectedProjectDetails() {
+        val projectId = _state.value.selectedProjectId ?: return
+        viewModelScope.launch {
+            _state.update { it.copy(detailsLoading = true, statusMessage = null) }
+            when (val details = detailsService.load(projectId)) {
+                is ProjectDetailsResult.Loaded -> _state.update {
+                    it.copy(projectDetails = details.details, detailsLoading = false)
+                }
+                is ProjectDetailsResult.Unavailable -> _state.update {
+                    it.copy(
+                        detailsLoading = false,
+                        projectDetails = null,
+                        statusMessage = details.reason,
+                    )
+                }
+            }
+        }
+    }
+
+    fun createBlankProject(destinationParentUri: String, name: String, description: String) {
+        viewModelScope.launch {
+            _state.update { it.copy(operationInProgress = true, statusMessage = null) }
+            val report = acquisition.createBlankProject(destinationParentUri, name, description)
+            _state.update { it.copy(operationInProgress = false, statusMessage = report.message) }
+            refreshProjects()
+        }
+    }
+
+    fun importExistingFolder(projectRootUri: String) {
+        viewModelScope.launch {
+            _state.update { it.copy(operationInProgress = true, statusMessage = null) }
+            val report = acquisition.importExistingFolder(projectRootUri, null, null)
+            _state.update { it.copy(operationInProgress = false, statusMessage = report.message) }
+            refreshProjects()
+        }
+    }
+
+    fun importZip(
+        archiveUri: String,
+        destinationParentUri: String,
+        name: String,
+        description: String,
+    ) {
+        viewModelScope.launch {
+            _state.update { it.copy(operationInProgress = true, statusMessage = null) }
+            val report = acquisition.importZip(archiveUri, destinationParentUri, name, description)
+            _state.update { it.copy(operationInProgress = false, statusMessage = report.message) }
+            refreshProjects()
+        }
+    }
+
+    fun removeSelectedProject() {
+        val projectId = _state.value.selectedProjectId ?: return
+        viewModelScope.launch {
+            _state.update { it.copy(operationInProgress = true, statusMessage = null) }
+            val report = operations.removeFromRegistry(projectId)
+            _state.update {
+                it.copy(
+                    operationInProgress = false,
+                    statusMessage = report.message,
+                    projectDetails = null,
+                    selectedProjectId = null,
+                    surface = Surface.PROJECTS,
+                )
+            }
+            refreshProjects()
+        }
+    }
+
+    fun permanentlyDeleteSelectedProject() {
+        val projectId = _state.value.selectedProjectId ?: return
+        viewModelScope.launch {
+            _state.update { it.copy(operationInProgress = true, statusMessage = null) }
+            val report = operations.permanentlyDelete(projectId)
+            _state.update {
+                it.copy(
+                    operationInProgress = false,
+                    statusMessage = report.message,
+                    projectDetails = null,
+                    selectedProjectId = null,
+                    surface = if (report.outcome == dev.android.ide.contracts.OperationOutcome.COMPLETE) {
+                        Surface.PROJECTS
+                    } else it.surface,
+                )
+            }
+            refreshProjects()
+        }
+    }
+
+    fun exportSelectedProject(
+        destinationFileUri: String,
+        onComplete: (Boolean) -> Unit = {},
+    ) {
+        val projectId = _state.value.selectedProjectId ?: return
+        viewModelScope.launch {
+            _state.update { it.copy(operationInProgress = true, statusMessage = null) }
+            val report = operations.exportProject(projectId, destinationFileUri)
+            _state.update { it.copy(operationInProgress = false, statusMessage = report.message) }
+            refreshProjects()
+            onComplete(report.outcome == dev.android.ide.contracts.OperationOutcome.COMPLETE)
+        }
+    }
+
+    fun duplicateSelectedProject(destinationParentUri: String, name: String) {
+        val projectId = _state.value.selectedProjectId ?: return
+        runProjectOperation { operations.duplicateProject(projectId, destinationParentUri, name) }
+    }
+
+    fun relocateSelectedProject(destinationParentUri: String, name: String) {
+        val projectId = _state.value.selectedProjectId ?: return
+        runProjectOperation(replaceSelection = true) {
+            operations.relocateProject(projectId, destinationParentUri, name)
+        }
+    }
+
+    fun renameSelectedProject(name: String) {
+        val projectId = _state.value.selectedProjectId ?: return
+        runProjectOperation(replaceSelection = true) {
+            operations.renameProject(projectId, name)
+        }
+    }
+
+    fun removeProjectsFromRegistry(projectIds: List<String>) {
+        viewModelScope.launch {
+            _state.update { it.copy(operationInProgress = true, statusMessage = null) }
+            val report = operations.batchRemoveFromRegistry(projectIds)
+            _state.update { it.copy(operationInProgress = false, statusMessage = report.message) }
+            refreshProjects()
+        }
+    }
+
+    fun exportProjects(projectIds: List<String>, destinationParentUri: String) {
+        viewModelScope.launch {
+            _state.update { it.copy(operationInProgress = true, statusMessage = null) }
+            val report = operations.exportProjects(projectIds, destinationParentUri)
+            _state.update { it.copy(operationInProgress = false, statusMessage = report.message) }
+            refreshProjects()
+        }
+    }
+
+    fun permanentlyDeleteProjects(projectIds: List<String>) {
+        viewModelScope.launch {
+            _state.update { it.copy(operationInProgress = true, statusMessage = null) }
+            val report = operations.batchPermanentlyDelete(projectIds)
+            _state.update { it.copy(operationInProgress = false, statusMessage = report.message) }
+            refreshProjects()
+        }
+    }
+
+    private fun runProjectOperation(
+        replaceSelection: Boolean = false,
+        operation: suspend () -> dev.android.ide.contracts.OperationReport,
+    ) {
+        viewModelScope.launch {
+            _state.update { it.copy(operationInProgress = true, statusMessage = null) }
+            val report = operation()
+            _state.update {
+                it.copy(
+                    operationInProgress = false,
+                    statusMessage = report.message,
+                    selectedProjectId = if (
+                        replaceSelection &&
+                        report.outcome == dev.android.ide.contracts.OperationOutcome.COMPLETE
+                    ) report.affectedIds.firstOrNull() ?: it.selectedProjectId else it.selectedProjectId,
+                )
+            }
+            refreshProjects()
+            if (report.outcome == dev.android.ide.contracts.OperationOutcome.COMPLETE) {
+                refreshSelectedProjectDetails()
+            }
         }
     }
 

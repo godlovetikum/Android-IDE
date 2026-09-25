@@ -55,8 +55,11 @@ Terminal runtime, browser, Git, language intelligence, credentials, extensions, 
 ## Domain status
 
 ### Project and workspace management
+The Phase 2 implementation is now present on `dev`: blank project creation, existing-folder import, validated ZIP import, provider-backed project details, exact-name file/folder mutations, export, duplication, copy-verify-delete relocation, registry removal, permanent deletion, batch actions, and explicit private-workspace copy/move boundaries. All destructive paths inspect destinations, reject nested registered-project locations, verify copies before deleting sources, and return complete, partial, blocked, or failed operation reports. ZIP import rejects traversal, absolute paths, duplicate paths, unsafe entries, oversized archives, and extraction conflicts before or during exact extraction, then cleans up failed imports. Project details compute current file count, folder count, total size, timestamps, location, capability state, language totals, and Git branch, failing closed when the provider cannot be fully inspected. GitHub Actions and phone acceptance remain required before declaring the Phase 2 gate passed.
 
-The product behavior is defined. Implementation remains future work and must follow Phase 2 of the approved roadmap. Required acceptance coverage includes acquisition, conflict preflight, metadata initialization, project registry, file and folder mutations, project location classes, export, duplication, relocation, removal, deletion, and permission loss.
+The project list now supports long-press multi-selection, selected-row feedback, reversible batch removal from the registry, verified batch permanent deletion, cancellation, and selection cleanup when navigating away. Permanent deletion is explicitly confirmed and refuses to remove a registered parent while child projects remain.
+
+The remaining project-management actions are now wired: project rename, export/share as ZIP, copy storage path, copy Git remote URLs, batch ZIP export, batch path copy, verified batch permanent deletion, and precise unavailable-versus-permission-lost registry state. Acquisition and transfer reject both directions of project containment. Provider mutations preserve tri-state deletion uncertainty, normalize document URIs, use bounded streaming copies, verify copied contents, report unrecoverable move cleanup as partial, and preserve metadata-migration conflicts. ZIP export stages archives before destination write. Private-workspace transfer is explicitly unavailable until its runtime adapter is initialized rather than reporting false success. Archive-name collisions and provider failures produce partial or blocked reports instead of overwriting or silently succeeding. GitHub Actions and device/provider acceptance remain the gate.
 
 ### Code editing
 
@@ -89,3 +92,9 @@ Extensions remain an explicit placeholder. Packaging, permissions, sandboxing, l
 ## Repository discipline
 
 The working tree contains pre-existing implementation changes and untracked documentation from earlier work. No existing change is accepted solely because it is present in source. Do not commit or push without explicit instruction. Keep validation targeted and avoid heavy Android builds or background processes unless explicitly authorized.
+
+## Phase 0/1 hardening completed before Phase 2
+
+The `dev` branch received the following pre-Phase-2 corrections on 2026-09-24. SAF mutation URI normalization now preserves child document IDs instead of converting them to the selected tree root. Copy-then-delete move fallbacks verify the copied destination before source deletion and clean up the copy when source removal fails. The foundation shell no longer renders redundant application branding above navigation, and selected navigation items use layout-stable styling rather than a variable-width bullet prefix.
+
+These corrections are source-level hardening only. Android build, lint, device, and provider-matrix acceptance remain assigned to GitHub Actions and device testing. No Phase 2 feature implementation has been started in this session.

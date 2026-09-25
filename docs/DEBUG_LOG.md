@@ -396,3 +396,125 @@ The original design used Rust + Slint UI with a JNI bridge and `NativeActivity` 
 ---
 
 Last updated: 2026-06-13
+
+### BUG-027 — Child SAF mutations could target the project root
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-09-24 |
+| **Subsystem** | filesystem |
+| **Issue** | Deleting or moving a child document could address the selected project root instead of the requested child. |
+| **Root Cause** | `mutationDocumentUri()` used `DocumentsContract.getTreeDocumentId()` for every tree-backed URI. A child document URI contains both `/tree/` and `/document/`; the tree ID is the root ID, not the selected child ID. |
+| **Solution** | Preserve non-tree URIs. For tree-backed child URIs, use `getDocumentId()`; use `getTreeDocumentId()` only for the picker-selected root, then build the mutation document URI from that exact ID. Copy-then-delete move fallbacks now verify the destination before deleting the source and clean up the copy when source deletion fails. |
+| **Prevention** | Keep root-tree and child-document URI handling separate in every SAF mutation path. Never delete a source after an unverified copy. |
+
+### BUG-028 — App shell navigation labels shifted and redundant branding occupied the top area
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-09-24 |
+| **Subsystem** | ui |
+| **Issue** | The active foundation shell showed unnecessary application branding above navigation, and the selected bullet prefix changed label alignment. |
+| **Root Cause** | `AppSidebar` rendered a fixed `Android IDE`/`Application shell` header and prepended `• ` only to the selected item. |
+| **Solution** | Removed the redundant header. Selected navigation entries now use a stable background and text color while every label keeps the same horizontal padding and width. |
+| **Prevention** | Use layout-stable selection styling rather than variable-width text prefixes. Keep application identity in the launcher/manifest, not as an obstructive screen title. |
+
+### PHASE2-001 — Verified blank creation and existing-folder import
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-09-24 |
+| **Subsystem** | project |
+| **Scope** | First production Phase 2 acquisition slice on `dev`. |
+| **Implementation** | Added `ProjectAcquisitionService` for blank project creation and existing-folder import. The service validates names, checks location capabilities, rejects destinations inside or containing registered projects, initializes and writes portable metadata, verifies the selected location, and registers only verified projects. |
+| **Storage boundary** | The selected user-visible SAF location remains authoritative. No app-private project copy or starter/template content is created. |
+| **Registry correction** | Project descriptions are now persisted in the app-private registry and restored through the project adapter. |
+| **UI** | The active foundation shell now exposes production create-project and import-folder actions using persisted SAF permissions and explicit operation feedback. |
+| **Deferred** | ZIP import, metrics, export, duplication, relocation, removal, permanent deletion, batch actions, and provider/device acceptance remain future Phase 2 work. |
+
+### PHASE2-002 — Validated ZIP project import
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-09-24 |
+| **Subsystem** | project |
+| **Scope** | Production ZIP import added to the Phase 2 acquisition service. |
+| **Validation** | Archives are bounded by compressed size, uncompressed size, entry count, and safe relative paths. Absolute paths, drive-qualified paths, traversal components, control characters, duplicate paths, and unsafe empty paths are rejected before destination creation. |
+| **Extraction** | The destination is created with exact-name conflict protection. Directory and file entries are created without replacement or silent renaming. Every extracted file is read back and compared byte-for-byte before the import proceeds. |
+| **Recovery** | Any extraction, metadata, or verification failure removes created entries and the project root. Cleanup failure is reported as `PARTIAL` with recovery guidance. |
+| **UI** | The active Projects screen now offers ZIP selection followed by an explicit project name, description, and destination review. Persistable SAF permission failures are reported instead of crashing. |
+
+### PHASE2-003 — Provider-backed project metrics and details
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-09-24 |
+| **Subsystem** | project |
+| **Scope** | Connected the existing provider-backed recursive metadata traversal to the active project details surface. |
+| **Metrics** | Details now report file count, folder count, total byte size, creation time, last-modified time, storage provider, storage path, capability state, top language byte totals, and detected Git branch. |
+| **Consistency** | Metrics are computed from the authoritative user-visible project location each time details are opened or refreshed. They are not persisted as registry facts and fail closed when any provider directory cannot be inspected. |
+| **UI** | Project details now include an explicit refresh action and visible loading/error feedback instead of placeholder-only content. |
+
+### PHASE2-004 — Project lifecycle, mutation, export, batch, and workspace operations
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-09-24 |
+| **Subsystem** | project |
+| **Scope** | Added `ProjectOperationsService` for the remaining Phase 2 operation families. |
+| **Lifecycle** | Remove from registry, permanent deletion with post-delete verification, duplication, copy-verify-delete relocation, and private-workspace copy/move boundaries are implemented. |
+| **Mutations** | Exact-name file/folder copy, move, rename, and delete operations are exposed through the service. Provider-generated renamed URIs are returned as the authoritative result. |
+| **Export** | Project ZIP export is provider-backed and reports file count and total bytes. |
+| **Batch** | Batch file deletion and registry removal continue after individual failures and return `PARTIAL` reports with affected IDs and recovery guidance. |
+| **Safety** | Destinations are inspected before mutation; nested registered project destinations are rejected; copies are verified before source deletion; registry changes occur after storage success. |
+| **UI** | The active shell now exposes export, duplicate, change-location, registry removal, and confirmed permanent deletion controls. |
+| **Workspace** | Explicit copy and move methods accept a caller-selected private workspace location; no hidden workspace or shadow copy is created by the service. |
+
+### PHASE2-005 — Project-list multi-selection and batch registry actions
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-09-24 |
+| **Subsystem** | project UI |
+| **Interaction** | Project rows now support long-press selection. Once selection mode is active, taps toggle membership instead of opening a project. Selected rows receive a visible secondary-container treatment. |
+| **Batch action** | The contextual selection bar reports the selection count and provides a reversible batch remove-from-registry action plus cancellation. The selected project data remains untouched on removal. |
+| **Feedback** | Batch operations use the existing operation-in-progress and partial-result reporting path; selection is cleared before execution and when leaving the project list. |
+
+### PHASE2-006 — Final project-management operation coverage
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-09-24 |
+| **Scope** | Completed the remaining source-level Phase 2 project-management operations and recovery paths. |
+| **Actions** | Project rename, export/share as ZIP, copy storage path, copy Git remote URLs, batch ZIP export, batch storage-path copy, project-list batch removal, duplication, relocation, registry removal, permanent deletion, and exact file/folder mutations are now wired through production services or the active shell. |
+| **Recovery** | Registry refresh now records the provider’s precise `UNAVAILABLE`, `PERMISSION_LOST`, or other capability state instead of collapsing all failures into unavailable. Recent ordering is preserved while capability state is refreshed. |
+| **Safety** | Batch ZIP export creates exact archive names and reports collisions or provider failures without overwriting. Project rename verifies the provider-returned URI and metadata/registry update before reporting completion. |
+| **Acceptance boundary** | No Android build or device/provider acceptance was run in this environment. GitHub Actions and phone testing remain required for the Phase 2 gate. |
+
+### PHASE2-007 — Ownership invariants and mutation safety remediation
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-09-25 |
+| **Scope** | Phase 2 project ownership, SAF mutation safety, registry state, and batch deletion |
+| **Status** | Implemented at source level; GitHub Actions/device acceptance still pending |
+
+The project-management implementation now enforces containment in both directions. Acquisition and transfer destinations are rejected when they are inside a registered project or would become a parent of an existing registered project. Permanent deletion refuses to remove a registered parent while descendants remain, and batch permanent deletion resolves eligible descendants before parents while reporting blocked and partial outcomes.
+
+SAF document presence now distinguishes existing, absent, and inaccessible locations for destructive verification. Root and child tree URIs are normalized before document-level rename and native move operations. Copy-then-delete fallback failure can return a partial result containing both source and destination identities when cleanup is not confirmed. Copy verification compares file contents, and metadata migration verifies duplicate target contents before deleting legacy metadata.
+
+Capability explanations are preserved through registry state and displayed in the shell. Rename and relocation update the selected project identity after a successful URI-changing operation. Acquisition rollback reports incomplete cleanup instead of silently returning the original failure. No build, device test, Git command, commit, or push was performed in this pass.
+
+The remaining acceptance work is operational: GitHub Actions compilation/lint and the Android 15/16 provider matrix must validate URI behavior, deletion scope, batch ordering, export failure cleanup, and private-workspace capabilities on real providers.
+
+### PHASE2-008 — Final known-issue remediation pass
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-09-25 |
+| **Scope** | ZIP export staging, bounded file transfer, private-workspace gating, and stale detail state |
+| **Status** | Implemented at source level; compilation/device acceptance remains deferred |
+
+ZIP export now builds the archive in an app-private temporary file and copies it to the reviewed destination only after source traversal and archive closure succeed, preventing traversal failures from modifying the destination. General file copies now use bounded stream buffers, and content verification compares streams rather than loading complete files into memory. Private development workspace copy and move operations now return an explicit unavailable-runtime result until the authoritative runtime workspace adapter is initialized; they no longer report success through an incomplete SAF path. Project details are cleared whenever restoration or refresh loses availability, preventing stale details from being displayed for another project.
+
+No build, device test, Git command, commit, or push was performed.

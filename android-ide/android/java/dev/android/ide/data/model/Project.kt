@@ -5,6 +5,7 @@ import dev.android.ide.contracts.ProjectLocationKind
 
 data class Project(
     val name: String,
+    val description: String = "",
     val uri: String,
     val lastOpenedMs: Long = System.currentTimeMillis(),
     val createdMs: Long = lastOpenedMs,

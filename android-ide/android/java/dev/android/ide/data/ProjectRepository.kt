@@ -43,6 +43,7 @@ class ProjectRepository(context: Context) {
         projects.forEach { p ->
             arr.put(JSONObject().apply {
                 put("name",         p.name)
+                put("description",  p.description)
                 put("uri",          p.uri)
                 put("lastOpenedMs", p.lastOpenedMs)
                 put("createdMs",    p.createdMs)
@@ -63,6 +64,7 @@ class ProjectRepository(context: Context) {
             val lastOpenedMs = obj.optLong("lastOpenedMs", System.currentTimeMillis())
             Project(
                 name         = obj.getString("name"),
+                description  = obj.optString("description", ""),
                 uri          = obj.getString("uri"),
                 lastOpenedMs = lastOpenedMs,
                 createdMs    = obj.optLong("createdMs", lastOpenedMs),

@@ -39,6 +39,7 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.IOException
 import java.io.InputStream
+import java.io.OutputStream
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.attribute.BasicFileAttributes
@@ -69,6 +70,12 @@ data class ZipExportResult(
     val fileCount: Int,
     val totalBytes: Long,
 )
+
+enum class DocumentPresence {
+    EXISTS,
+    ABSENT,
+    INACCESSIBLE,
+}
 
 data class ProjectStorageMetadata(
     val description: String,
@@ -484,7 +491,6 @@ class SafRepository(private val context: Context) {
         newName: String? = null,
     ): String? = withContext(Dispatchers.IO) {
         try {
-            val bytes       = readFile(sourceUriString) ?: return@withContext null
             val displayName = newName
                 ?: getDisplayName(sourceUriString)
                 ?: return@withContext null
@@ -495,7 +501,10 @@ class SafRepository(private val context: Context) {
             }
             val newUri = createFile(targetParentUriString, displayName, mimeType)
                 ?: return@withContext null
-            if (writeFile(newUri, bytes)) newUri else null
+            if (copyDocumentContents(sourceUriString, newUri)) newUri else {
+                deleteDocument(newUri)
+                null
+            }
         } catch (e: Exception) {
             Log.e(TAG, "copyDocument failed: $sourceUriString → $targetParentUriString", e)
             null
@@ -517,7 +526,6 @@ class SafRepository(private val context: Context) {
         if (sourceIsDirectory) {
             return@withContext copyDirectoryWithExactName(sourceUriString, targetParentUriString, displayName)
         }
-        val bytes = readFile(sourceUriString) ?: return@withContext SafeMutationResult.Failed
         when (val created = createFileWithExactName(
             targetParentUriString,
             displayName,
@@ -525,7 +533,9 @@ class SafRepository(private val context: Context) {
             else queryStringColumn(sourceUriString, DocumentsContract.Document.COLUMN_MIME_TYPE) ?: "text/plain",
         )) {
             is ExactCreateResult.Created -> {
-                if (writeFile(created.documentUri, bytes) && verifyDocument(sourceUriString, created.documentUri)) {
+                if (copyDocumentContents(sourceUriString, created.documentUri) &&
+                    verifyDocument(sourceUriString, created.documentUri)
+                ) {
                     SafeMutationResult.Created(created.documentUri)
                 } else {
                     deleteDocument(created.documentUri)
@@ -574,8 +584,15 @@ class SafRepository(private val context: Context) {
                     source.mimeType,
                 )
             ) {
-                is ExactCreateResult.Created -> writeFile(destination.documentUri, bytes)
-                ExactCreateResult.Duplicate -> true
+                is ExactCreateResult.Created ->
+                    writeFile(destination.documentUri, bytes) &&
+                        readFile(destination.documentUri)?.contentEquals(bytes) == true
+                ExactCreateResult.Duplicate -> {
+                    val existing = (inspectChildren(targetUri) as? ChildrenInspectionResult.Success)
+                        ?.children
+                        ?.firstOrNull { !it.isDirectory && it.displayName == source.displayName }
+                    existing != null && readFile(existing.documentUri)?.contentEquals(bytes) == true
+                }
                 else -> false
             }
             if (!copied) complete = false
@@ -629,7 +646,66 @@ class SafRepository(private val context: Context) {
         null
     }
 
-    /** Verify a completed copy using provider metadata rather than trusting write success. */
+    private fun openInputStream(documentUriString: String): InputStream? =
+        if (isFileUri(documentUriString)) {
+            fileFromUri(documentUriString)?.inputStream()
+        } else {
+            resolver.openInputStream(Uri.parse(documentUriString))
+        }
+
+    private fun openOutputStream(documentUriString: String): OutputStream? =
+        if (isFileUri(documentUriString)) {
+            fileFromUri(documentUriString)?.outputStream()
+        } else {
+            resolver.openOutputStream(Uri.parse(documentUriString), "w")
+        }
+
+    private suspend fun copyDocumentContents(sourceUriString: String, targetUriString: String): Boolean =
+        withContext(Dispatchers.IO) {
+            try {
+                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                openInputStream(sourceUriString)?.use { input ->
+                    openOutputStream(targetUriString)?.use { output ->
+                        while (true) {
+                            val count = input.read(buffer)
+                            if (count == -1) break
+                            output.write(buffer, 0, count)
+                        }
+                        output.flush()
+                    } ?: return@withContext false
+                } ?: return@withContext false
+                true
+            } catch (e: Exception) {
+                Log.e(TAG, "copyDocumentContents failed: $sourceUriString → $targetUriString", e)
+                false
+            }
+        }
+
+    private suspend fun contentEquals(sourceUriString: String, targetUriString: String): Boolean =
+        withContext(Dispatchers.IO) {
+            try {
+                val sourceBuffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                val targetBuffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                openInputStream(sourceUriString)?.use { source ->
+                    openInputStream(targetUriString)?.use { target ->
+                        while (true) {
+                            val sourceCount = source.read(sourceBuffer)
+                            val targetCount = target.read(targetBuffer)
+                            if (sourceCount != targetCount) return@withContext false
+                            if (sourceCount == -1) return@withContext true
+                            for (index in 0 until sourceCount) {
+                                if (sourceBuffer[index] != targetBuffer[index]) return@withContext false
+                            }
+                        }
+                    } ?: return@withContext false
+                } ?: return@withContext false
+            } catch (e: Exception) {
+                Log.e(TAG, "contentEquals failed: $sourceUriString ↔ $targetUriString", e)
+                false
+            }
+        }
+
+    /** Verify a completed copy using provider content rather than trusting write success. */
     private suspend fun verifyDocument(sourceUriString: String, targetUriString: String): Boolean {
         val sourceMime = if (isFileUri(sourceUriString)) {
             if (fileFromUri(sourceUriString)?.isDirectory == true) MIME_DIR else "application/octet-stream"
@@ -639,11 +715,7 @@ class SafRepository(private val context: Context) {
         } else queryStringColumn(targetUriString, DocumentsContract.Document.COLUMN_MIME_TYPE)
         if ((sourceMime == MIME_DIR) != (targetMime == MIME_DIR)) return false
         if (sourceMime != MIME_DIR) {
-            val sourceSize = if (isFileUri(sourceUriString)) fileFromUri(sourceUriString)?.length()
-                else queryLongColumn(sourceUriString, DocumentsContract.Document.COLUMN_SIZE)
-            val targetSize = if (isFileUri(targetUriString)) fileFromUri(targetUriString)?.length()
-                else queryLongColumn(targetUriString, DocumentsContract.Document.COLUMN_SIZE)
-            return sourceSize != null && targetSize != null && sourceSize == targetSize
+            return contentEquals(sourceUriString, targetUriString)
         }
         val sourceChildren = (inspectChildren(sourceUriString) as? ChildrenInspectionResult.Success)?.children
             ?: return false
@@ -768,7 +840,11 @@ class SafRepository(private val context: Context) {
         fun identity(uriString: String): String? = runCatching {
             val uri = Uri.parse(uriString)
             if (DocumentsContract.isTreeUri(uri)) {
-                DocumentsContract.getTreeDocumentId(uri)
+                if (uri.pathSegments.contains("document")) {
+                    DocumentsContract.getDocumentId(uri)
+                } else {
+                    DocumentsContract.getTreeDocumentId(uri)
+                }
             } else {
                 DocumentsContract.getDocumentId(uri)
             }
@@ -804,16 +880,16 @@ class SafRepository(private val context: Context) {
         sourceUriString: String,
         destinationUriString: String,
     ): ZipExportResult? = withContext(Dispatchers.IO) {
+        val temporaryArchive = try {
+            File.createTempFile("android-ide-export-", ".zip", context.cacheDir)
+        } catch (e: IOException) {
+            Log.e(TAG, "Could not create temporary export archive", e)
+            return@withContext null
+        }
         try {
-            val output = if (isFileUri(destinationUriString)) {
-                fileFromUri(destinationUriString)?.outputStream()
-            } else {
-                resolver.openOutputStream(Uri.parse(destinationUriString), "w")
-            } ?: return@withContext null
-
             var fileCount = 0
             var totalBytes = 0L
-            ZipOutputStream(output).use { zip ->
+            ZipOutputStream(temporaryArchive.outputStream()).use { zip ->
                 suspend fun addDirectory(directoryUri: String, prefix: String): Boolean {
                     val children = when (val inspection = inspectChildren(directoryUri)) {
                         is ChildrenInspectionResult.Success -> inspection.children
@@ -839,10 +915,20 @@ class SafRepository(private val context: Context) {
 
                 if (!addDirectory(sourceUriString, "")) return@withContext null
             }
+            val destination = if (isFileUri(destinationUriString)) {
+                fileFromUri(destinationUriString)?.outputStream()
+            } else {
+                resolver.openOutputStream(Uri.parse(destinationUriString), "w")
+            } ?: return@withContext null
+            destination.use { output ->
+                temporaryArchive.inputStream().use { input -> input.copyTo(output) }
+            }
             ZipExportResult(fileCount, totalBytes)
         } catch (e: Exception) {
             Log.e(TAG, "exportZip failed: $sourceUriString → $destinationUriString", e)
             null
+        } finally {
+            temporaryArchive.delete()
         }
     }
 
@@ -1070,11 +1156,19 @@ class SafRepository(private val context: Context) {
                 name,
             )) {
                 is SafeMutationResult.Created -> {
-                    if (deleteDocument(sourceUriString) && !documentExistsIn(sourceParentUriString, sourceUriString)) {
+                    if (deleteDocument(sourceUriString) &&
+                        documentPresence(sourceUriString) == DocumentPresence.ABSENT &&
+                        !documentExistsIn(sourceParentUriString, sourceUriString)
+                    ) {
                         copied
                     } else {
-                        deleteDocument(copied.documentUri)
-                        SafeMutationResult.Failed
+                        val cleaned = deleteDocument(copied.documentUri) &&
+                            documentPresence(copied.documentUri) == DocumentPresence.ABSENT
+                        if (cleaned) SafeMutationResult.Failed else SafeMutationResult.Partial(
+                            sourceUriString,
+                            copied.documentUri,
+                            "Verify both locations before retrying the move",
+                        )
                     }
                 }
                 else -> copied
@@ -1087,11 +1181,19 @@ class SafRepository(private val context: Context) {
                 name,
             )) {
                 is SafeMutationResult.Created -> {
-                    if (deleteDocument(sourceUriString) && !documentExistsIn(sourceParentUriString, sourceUriString)) {
+                    if (deleteDocument(sourceUriString) &&
+                        documentPresence(sourceUriString) == DocumentPresence.ABSENT &&
+                        !documentExistsIn(sourceParentUriString, sourceUriString)
+                    ) {
                         copied
                     } else {
-                        deleteDocument(copied.documentUri)
-                        SafeMutationResult.Failed
+                        val cleaned = deleteDocument(copied.documentUri) &&
+                            documentPresence(copied.documentUri) == DocumentPresence.ABSENT
+                        if (cleaned) SafeMutationResult.Failed else SafeMutationResult.Partial(
+                            sourceUriString,
+                            copied.documentUri,
+                            "Verify both locations before retrying the move",
+                        )
                     }
                 }
                 else -> copied
@@ -1173,10 +1275,17 @@ class SafRepository(private val context: Context) {
                 val dst = fileFromUri(targetParentUriString)?.let { File(it, src.name) }
                     ?: return@withContext null
                 if (src.renameTo(dst)) return@withContext Uri.fromFile(dst).toString()
-                // Fallback: copy + delete
+                // Fallback: copy, verify, then delete the source.
                 val newUri = copyDocument(sourceUriString, targetParentUriString)
                     ?: return@withContext null
-                deleteDocument(sourceUriString)
+                if (!verifyDocument(sourceUriString, newUri)) {
+                    deleteDocument(newUri)
+                    return@withContext null
+                }
+                if (!deleteDocument(sourceUriString) || documentExists(sourceUriString)) {
+                    deleteDocument(newUri)
+                    return@withContext null
+                }
                 return@withContext newUri
             }
             // SAF path: try native move first (API 24+)
@@ -1184,17 +1293,24 @@ class SafRepository(private val context: Context) {
                 val moved = runCatching {
                     DocumentsContract.moveDocument(
                         resolver,
-                        Uri.parse(sourceUriString),
-                        Uri.parse(sourceParentUriString),
-                        Uri.parse(targetParentUriString),
+                        mutationDocumentUri(sourceUriString),
+                        mutationDocumentUri(sourceParentUriString),
+                        mutationDocumentUri(targetParentUriString),
                     )?.toString()
                 }.getOrNull()
                 if (moved != null) return@withContext moved
             }
-            // Fallback: copy then delete the original
+            // Fallback: copy, verify, then delete the original.
             val newUri = copyDocument(sourceUriString, targetParentUriString)
                 ?: return@withContext null
-            deleteDocument(sourceUriString)
+            if (!verifyDocument(sourceUriString, newUri)) {
+                deleteDocument(newUri)
+                return@withContext null
+            }
+            if (!deleteDocument(sourceUriString) || documentExists(sourceUriString)) {
+                deleteDocument(newUri)
+                return@withContext null
+            }
             newUri
         } catch (e: Exception) {
             Log.e(TAG, "moveDocument failed: $sourceUriString → $targetParentUriString", e)
@@ -1251,7 +1367,7 @@ class SafRepository(private val context: Context) {
                 } else {
                     DocumentsContract.renameDocument(
                         resolver,
-                        Uri.parse(documentUriString),
+                        mutationDocumentUri(documentUriString),
                         newDisplayName,
                     )?.toString()
                 }
@@ -1278,6 +1394,34 @@ class SafRepository(private val context: Context) {
     suspend fun documentExists(documentUriString: String): Boolean =
         getDisplayName(documentUriString) != null
 
+    suspend fun documentPresence(documentUriString: String): DocumentPresence =
+        withContext(Dispatchers.IO) {
+            try {
+                if (isFileUri(documentUriString)) {
+                    val file = fileFromUri(documentUriString)
+                        ?: return@withContext DocumentPresence.INACCESSIBLE
+                    return@withContext if (file.exists()) {
+                        DocumentPresence.EXISTS
+                    } else {
+                        DocumentPresence.ABSENT
+                    }
+                }
+                resolver.query(
+                    mutationDocumentUri(documentUriString),
+                    arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID),
+                    null,
+                    null,
+                    null,
+                )?.use { cursor ->
+                    if (cursor.moveToFirst()) DocumentPresence.EXISTS
+                    else DocumentPresence.ABSENT
+                } ?: DocumentPresence.INACCESSIBLE
+            } catch (e: Exception) {
+                Log.e(TAG, "documentPresence failed for $documentUriString: ${e.message}", e)
+                DocumentPresence.INACCESSIBLE
+            }
+        }
+
     // ── Private helpers ────────────────────────────────────────────────────
 
     private suspend fun queryStringColumn(documentUriString: String, column: String): String? =
@@ -1296,16 +1440,21 @@ class SafRepository(private val context: Context) {
             }
         }
 
+    /**
+     * Return the document URI for a mutation without replacing a child ID
+     * with the tree root ID. Child URIs have both `/tree/` and `/document/`
+     * path segments, so [DocumentsContract.getTreeDocumentId] is only valid
+     * for the picker-selected root URI.
+     */
     private fun mutationDocumentUri(documentUriString: String): Uri {
         val uri = Uri.parse(documentUriString)
-        return if (DocumentsContract.isTreeUri(uri)) {
-            DocumentsContract.buildDocumentUriUsingTree(
-                uri,
-                DocumentsContract.getTreeDocumentId(uri),
-            )
+        if (!DocumentsContract.isTreeUri(uri)) return uri
+        val documentId = if (uri.pathSegments.contains("document")) {
+            DocumentsContract.getDocumentId(uri)
         } else {
-            uri
+            DocumentsContract.getTreeDocumentId(uri)
         }
+        return DocumentsContract.buildDocumentUriUsingTree(uri, documentId)
     }
 
     private fun queryLongColumn(documentUriString: String, column: String): Long? {

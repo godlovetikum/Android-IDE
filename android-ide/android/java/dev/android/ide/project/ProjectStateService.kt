@@ -19,7 +19,27 @@ class ProjectStateService(
     private val storage: ProjectStorageAdapter,
     private val metadata: ProjectMetadataAdapter,
 ) {
-    suspend fun registeredProjects(): List<ProjectIdentity> = registry.listRegistered()
+    suspend fun registeredProjects(): List<ProjectIdentity> = registry.listRegistered().map { existing ->
+        val capabilities = storage.inspectCapabilities(existing.location)
+        val refreshed = existing.copy(
+            location = existing.location.copy(
+                capabilityState = capabilities.state,
+                capabilityExplanation = capabilities.explanation,
+            ),
+        )
+        if (capabilities.state == CapabilityState.SUPPORTED &&
+            existing.location.capabilityState != capabilities.state
+        ) {
+            registry.register(refreshed)
+        } else if (capabilities.state != CapabilityState.SUPPORTED) {
+            registry.markUnavailable(
+                existing.id,
+                capabilities.explanation ?: "Project location is unavailable",
+                capabilities.state,
+            )
+        }
+        refreshed
+    }
 
     suspend fun inspect(location: ProjectLocation): LocationCapabilities = storage.inspectCapabilities(location)
 
@@ -28,7 +48,11 @@ class ProjectStateService(
             ?: return ProjectRestoreResult.Unavailable("Project is not registered")
         val capabilities = storage.inspectCapabilities(existing.location)
         if (capabilities.state != CapabilityState.SUPPORTED) {
-            registry.markUnavailable(projectId, capabilities.explanation ?: "Project location is unavailable")
+            registry.markUnavailable(
+                projectId,
+                capabilities.explanation ?: "Project location is unavailable",
+                capabilities.state,
+            )
             return ProjectRestoreResult.Unavailable(
                 capabilities.explanation ?: "Project location is unavailable",
             )
@@ -39,11 +63,15 @@ class ProjectStateService(
             registry.markUnavailable(projectId, initialized.message)
             return ProjectRestoreResult.Unavailable(initialized.message)
         }
-        registry.register(identity.copy(
-            location = identity.location.copy(capabilityState = capabilities.state),
+        val restoredIdentity = identity.copy(
+            location = identity.location.copy(
+                capabilityState = capabilities.state,
+                capabilityExplanation = capabilities.explanation,
+            ),
             lastOpenedAt = Instant.now(),
-        ))
-        return ProjectRestoreResult.Restored(identity, capabilities)
+        )
+        registry.register(restoredIdentity)
+        return ProjectRestoreResult.Restored(restoredIdentity, capabilities)
     }
 
     suspend fun register(
@@ -62,7 +90,10 @@ class ProjectStateService(
             id = location.stableId,
             name = name,
             description = description,
-            location = location.copy(capabilityState = capabilities.state),
+            location = location.copy(
+                capabilityState = capabilities.state,
+                capabilityExplanation = capabilities.explanation,
+            ),
             registeredAt = Instant.now(),
             lastOpenedAt = Instant.now(),
         )

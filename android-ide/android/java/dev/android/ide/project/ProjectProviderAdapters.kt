@@ -18,6 +18,12 @@ import dev.android.ide.contracts.ProjectRegistryAdapter
 import dev.android.ide.contracts.ProjectRelativePath
 import dev.android.ide.contracts.ProjectStorageAdapter
 import dev.android.ide.saf.SafRepository
+import dev.android.ide.saf.ExactCreateResult
+import dev.android.ide.saf.DocumentPresence
+import dev.android.ide.viewmodel.model.FileNode
+import dev.android.ide.saf.ProjectStorageMetadata
+import dev.android.ide.saf.SafeMutationResult
+import dev.android.ide.saf.ZipExportResult
 import org.json.JSONObject
 import java.time.Instant
 
@@ -31,11 +37,15 @@ class ProjectRegistryStore(
         return complete("Project registered", project.id)
     }
 
-    override suspend fun markUnavailable(projectId: String, reason: String): OperationReport {
+    override suspend fun markUnavailable(
+        projectId: String,
+        reason: String,
+        capabilityState: CapabilityState,
+    ): OperationReport {
         val project = repository.getAll().firstOrNull { it.uri == projectId }
             ?: return blocked("Project is not registered", projectId)
         repository.upsert(project.copy(
-            capabilityState = CapabilityState.UNAVAILABLE,
+            capabilityState = capabilityState,
             capabilityMessage = reason,
         ))
         return complete("Project marked unavailable", projectId)
@@ -49,13 +59,14 @@ class ProjectRegistryStore(
     private fun toIdentity(project: Project) = ProjectIdentity(
         id = project.stableLocationId,
         name = project.name,
-        description = "",
+        description = project.description,
         location = ProjectLocation(
             kind = project.locationKind,
             stableId = project.stableLocationId,
             displayLabel = project.locationLabel,
             userVisiblePath = project.uri,
             capabilityState = project.capabilityState,
+            capabilityExplanation = project.capabilityMessage,
         ),
         registeredAt = Instant.ofEpochMilli(project.createdMs),
         lastOpenedAt = Instant.ofEpochMilli(project.lastOpenedMs),
@@ -63,6 +74,7 @@ class ProjectRegistryStore(
 
     private fun ProjectIdentity.toProject() = Project(
         name = name,
+        description = description,
         uri = location.userVisiblePath ?: location.stableId,
         lastOpenedMs = lastOpenedAt?.toEpochMilli() ?: System.currentTimeMillis(),
         createdMs = registeredAt.toEpochMilli(),
@@ -70,6 +82,7 @@ class ProjectRegistryStore(
         stableLocationId = location.stableId,
         locationLabel = location.displayLabel,
         capabilityState = location.capabilityState,
+        capabilityMessage = location.capabilityExplanation,
     )
 }
 
@@ -137,6 +150,64 @@ class ProjectStorageAdapterImpl(
 ) : ProjectStorageAdapter {
     suspend fun inspect(location: ProjectLocation): LocationCapabilities = saf.inspectProjectCapabilities(location)
 
+    suspend fun createDirectoryWithExactName(parentUri: String, name: String): ExactCreateResult =
+        saf.createFileWithExactName(
+            parentUri,
+            name,
+            "vnd.android.document/directory",
+        )
+
+    suspend fun deleteDocument(uri: String): Boolean = saf.deleteDocument(uri)
+
+    suspend fun getDisplayName(uri: String): String? = saf.getDisplayName(uri)
+
+    suspend fun readDocument(uri: String): ByteArray? = saf.readFile(uri)
+
+    suspend fun writeDocument(uri: String, content: ByteArray): Boolean = saf.writeFile(uri, content)
+
+    suspend fun findChild(parentUri: String, name: String): FileNode? =
+        (saf.inspectChildren(parentUri) as? dev.android.ide.saf.ChildrenInspectionResult.Success)
+            ?.children
+            ?.firstOrNull { it.displayName == name }
+
+    suspend fun createFileWithExactName(
+        parentUri: String,
+        name: String,
+        mimeType: String,
+    ): ExactCreateResult = saf.createFileWithExactName(parentUri, name, mimeType)
+
+    suspend fun isSameOrDescendant(rootUri: String, candidateUri: String): Boolean? =
+        saf.isSameOrDescendant(rootUri, candidateUri)
+
+    suspend fun projectMetadata(location: ProjectLocation): ProjectStorageMetadata? =
+        saf.projectMetadata(location.stableId)
+
+    suspend fun copyExact(sourceUri: String, targetParentUri: String, newName: String? = null): SafeMutationResult =
+        saf.copyDocumentWithExactName(sourceUri, targetParentUri, newName)
+
+    suspend fun moveExact(sourceUri: String, sourceParentUri: String, targetParentUri: String): SafeMutationResult =
+        saf.moveDocumentWithExactName(sourceUri, sourceParentUri, targetParentUri)
+
+    suspend fun moveAndRenameExact(
+        sourceUri: String,
+        sourceParentUri: String,
+        targetParentUri: String,
+        newName: String,
+    ): SafeMutationResult = saf.moveAndRenameDocumentWithExactName(
+        sourceUri,
+        sourceParentUri,
+        targetParentUri,
+        newName,
+    )
+
+    suspend fun renameDocument(uri: String, newName: String): String? = saf.renameDocument(uri, newName)
+
+    suspend fun exportZip(sourceUri: String, destinationUri: String): ZipExportResult? =
+        saf.exportZip(sourceUri, destinationUri)
+
+    suspend fun documentExists(uri: String): Boolean = saf.documentExists(uri)
+    suspend fun documentPresence(uri: String): DocumentPresence = saf.documentPresence(uri)
+
     override suspend fun inspectCapabilities(location: ProjectLocation): LocationCapabilities = inspect(location)
 
     override suspend fun list(path: ProjectRelativePath): List<ProjectRelativePath> =
@@ -160,7 +231,7 @@ class ProjectStorageAdapterImpl(
         )
 
     override suspend fun executeLocationOperation(request: LocationOperationRequest): OperationReport =
-        blocked("Project relocation and transfer execution requires an explicit destination review and belongs to project management", request.projectId)
+        blocked("Location transfers must be executed by the project-management operation service after destination review", request.projectId)
 
     override suspend fun verifyLocationOperation(request: LocationOperationRequest): OperationReport =
         blocked("Project relocation and transfer verification requires the selected provider to report the resulting location and state", request.projectId)

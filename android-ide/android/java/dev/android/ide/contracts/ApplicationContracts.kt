@@ -25,6 +25,7 @@ data class ProjectLocation(
     val displayLabel: String,
     val userVisiblePath: String? = null,
     val capabilityState: CapabilityState = CapabilityState.NOT_YET_CHECKED,
+    val capabilityExplanation: String? = null,
 )
 
 data class LocationCapabilities(
@@ -167,7 +168,11 @@ interface ProjectStorageAdapter {
 interface ProjectRegistryAdapter {
     suspend fun listRegistered(): List<ProjectIdentity>
     suspend fun register(project: ProjectIdentity): OperationReport
-    suspend fun markUnavailable(projectId: String, reason: String): OperationReport
+    suspend fun markUnavailable(
+        projectId: String,
+        reason: String,
+        capabilityState: CapabilityState = CapabilityState.UNAVAILABLE,
+    ): OperationReport
     suspend fun remove(projectId: String): OperationReport
 }
 

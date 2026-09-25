@@ -2217,6 +2217,11 @@ build/
                                     state.copy(fileOpDialog = null, statusMessage = "Renamed to ${resolved.leafName}")
                                 }
                             }
+                            is SafeMutationResult.Partial -> {
+                                _uiState.update {
+                                    it.copy(statusMessage = "Rename partially completed; inspect both source and destination")
+                                }
+                            }
                             SafeMutationResult.Duplicate -> {
                                 safRepository.rollbackCreatedDirectories(resolved.createdIntermediateUris)
                                 _uiState.update { state ->
@@ -2680,6 +2685,7 @@ ul,ol{padding-left:2em}
             SafeMutationResult.Duplicate -> "a project with that name already exists"
             SafeMutationResult.InspectionFailed -> "the destination could not be inspected"
             SafeMutationResult.Failed -> "the storage provider rejected the operation"
+            is SafeMutationResult.Partial -> "source and destination may both remain; inspect both locations"
             is SafeMutationResult.Created -> "unexpected result"
         }
 
