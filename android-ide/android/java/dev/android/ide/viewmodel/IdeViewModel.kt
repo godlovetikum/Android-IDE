@@ -36,6 +36,8 @@ import dev.android.ide.saf.ExactCreateResult
 import dev.android.ide.saf.PathResolutionResult
 import dev.android.ide.saf.SafeMutationResult
 import dev.android.ide.saf.SafRepository
+import dev.android.ide.project.ProjectFileMutationService
+import dev.android.ide.project.ProjectStorageAdapterImpl
 import dev.android.ide.viewmodel.model.AppScreen
 import dev.android.ide.viewmodel.model.EditorTab
 import dev.android.ide.viewmodel.model.FileNode
@@ -74,6 +76,8 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
     private var projectSearchJob: Job? = null
 
     private val safRepository      = SafRepository(application)
+    private val storageAdapter     = ProjectStorageAdapterImpl(safRepository)
+    private val fileMutations      = ProjectFileMutationService(storageAdapter)
     private val projectRepository  = ProjectRepository(application)
     private val sessionRepository  = SessionRepository(application)
     private val themeRepository    = ThemeRepository(application)
@@ -448,7 +452,7 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 return false
             }
-            val ok = safRepository.writeFile(
+            val ok = fileMutations.write(
                 tab.documentUri,
                 content.toByteArray(Charsets.UTF_8),
             )
@@ -617,13 +621,13 @@ This folder is managed by Android IDE and stores project-local workspace state.
 
 These files are project-local and travel with the project. Global application preferences remain outside this folder.
 """
-            val metadataReadmeFile = safRepository.createFileWithExactName(
+            val metadataReadmeFile = fileMutations.createFile(
                 metadataUri,
                 "README.md",
                 EditorLanguageRegistry.mimeTypeForFileName("README.md"),
             ) as? ExactCreateResult.Created
             metadataReadmeFile?.let { created ->
-                safRepository.writeFile(created.documentUri, metadataReadme.toByteArray(Charsets.UTF_8))
+                fileMutations.write(created.documentUri, metadataReadme.toByteArray(Charsets.UTF_8))
             }
         }
         return true
@@ -695,7 +699,7 @@ These files are project-local and travel with the project. Global application pr
                 }
                 return@launch
             }
-            val created = safRepository.createFileWithExactName(
+            val created = fileMutations.createFile(
                 targetParentUri,
                 trimmed,
                 "vnd.android.document/directory",
@@ -754,12 +758,12 @@ build/
 """,
             )
             files.forEach { (fileName, content) ->
-                val fileUri = (safRepository.createFileWithExactName(
+                val fileUri = (fileMutations.createFile(
                     projectUri,
                     fileName,
                     EditorLanguageRegistry.mimeTypeForFileName(fileName),
                 ) as? ExactCreateResult.Created)?.documentUri
-                if (fileUri != null) safRepository.writeFile(fileUri, content.toByteArray(Charsets.UTF_8))
+                if (fileUri != null) fileMutations.write(fileUri, content.toByteArray(Charsets.UTF_8))
             }
             _uiState.update { it.copy(statusMessage = "Project created in the selected location") }
             openProject(projectUri)
@@ -818,7 +822,7 @@ build/
                     _uiState.update { it.copy(statusMessage = "Could not inspect the destination folder") }
                     return@launch
                 }
-            when (val result = safRepository.copyDocumentWithExactName(uri, targetParentUri, targetName)) {
+            when (val result = fileMutations.copy(uri, targetParentUri, targetName)) {
                 is SafeMutationResult.Created -> {
                     projectRepository.upsert(
                         Project(
@@ -866,7 +870,7 @@ build/
             if (uri == _uiState.value.projectRootUri && !saveDirtyTabsForProject()) return@launch
 
             val copied = runCatching {
-                safRepository.copyDocumentWithExactName(uri, targetParentUri, storageName)
+                fileMutations.copy(uri, targetParentUri, storageName)
             }.getOrElse { error ->
                 _uiState.update { state ->
                     state.copy(statusMessage = "Move failed: ${error.message ?: "storage provider error"}")
@@ -875,9 +879,9 @@ build/
             }
             when (copied) {
                 is SafeMutationResult.Created -> {
-                    if (!safRepository.deleteDocument(uri)) {
+                    if (!fileMutations.delete(uri)) {
                         // Keep the original as the source of truth if deletion is denied.
-                        safRepository.deleteDocument(copied.documentUri)
+                        fileMutations.delete(copied.documentUri)
                         _uiState.update {
                             it.copy(statusMessage = "Storage path was not changed — the original could not be removed")
                         }
@@ -1127,7 +1131,7 @@ build/
                         _uiState.update { it.copy(statusMessage = "Move failed: unknown parent for ${source.displayName}") }
                         return@forEach
                     }
-                    val moved = safRepository.moveDocumentWithExactName(source.documentUri, sourceParent, targetDir.documentUri)
+                    val moved = fileMutations.move(source.documentUri, sourceParent, targetDir.documentUri)
                     val newUri = (moved as? SafeMutationResult.Created)?.documentUri ?: run {
                         val reason = when (moved) {
                             SafeMutationResult.Duplicate -> "already exists in the destination"
@@ -1140,7 +1144,7 @@ build/
                     reconcileOpenTabReference(source.documentUri, newUri)
                     successCount++
                 } else {
-                    val copied = safRepository.copyDocumentWithExactName(source.documentUri, targetDir.documentUri)
+                    val copied = fileMutations.copy(source.documentUri, targetDir.documentUri)
                     if (copied !is SafeMutationResult.Created) {
                         val reason = when (copied) {
                             SafeMutationResult.Duplicate -> "already exists in the destination"
@@ -1176,7 +1180,7 @@ build/
             sourceUris.forEach { uri ->
                 val name  = safRepository.getDisplayName(uri)
                     ?: uri.substringAfterLast('/', "imported_file")
-                when (safRepository.copyDocumentWithExactName(uri, targetDirUri, name)) {
+                when (fileMutations.copy(uri, targetDirUri, name)) {
                     is SafeMutationResult.Created -> count++
                     else -> Unit
                 }
@@ -1287,7 +1291,7 @@ build/
             }
         }
 
-        val bytes = safRepository.readFile(documentUri) ?: run {
+        val bytes = fileMutations.read(documentUri) ?: run {
             _uiState.update { it.copy(editorFileLoading = false, statusMessage = "Could not open file") }
             return
         }
@@ -1393,7 +1397,7 @@ build/
         _uiState.update { it.copy(fileOpDialog = null) }
         if (content == null || tab.isBlank) { closeTab(tabId); return }
         viewModelScope.launch {
-            val ok = safRepository.writeFile(tab.documentUri, content.toByteArray(Charsets.UTF_8))
+            val ok = fileMutations.write(tab.documentUri, content.toByteArray(Charsets.UTF_8))
             if (ok) {
                 pendingContent.remove(tabId)
                 _uiState.value.projectRootUri?.let { projectRootUri ->
@@ -1574,7 +1578,7 @@ build/
             })
         }
         viewModelScope.launch {
-            val ok = safRepository.writeFile(documentUri, content.toByteArray(Charsets.UTF_8))
+            val ok = fileMutations.write(documentUri, content.toByteArray(Charsets.UTF_8))
             if (ok) {
                 pendingContent.remove(tab.id)
                 _uiState.value.projectRootUri?.let { projectRootUri ->
@@ -1605,7 +1609,7 @@ build/
         val active  = _uiState.value.openTabs.firstOrNull { it.isActive } ?: return
         val content = pendingContent[active.id] ?: active.content ?: return
         viewModelScope.launch {
-            val ok = safRepository.writeFile(newUri, content.toByteArray(Charsets.UTF_8))
+            val ok = fileMutations.write(newUri, content.toByteArray(Charsets.UTF_8))
             if (!ok) { _uiState.update { it.copy(statusMessage = "Save As failed") }; return@launch }
             val newName = safRepository.getDisplayName(newUri) ?: displayNameFromUri(newUri)
             val newLang = EditorLanguageRegistry.languageForFileName(newName)
@@ -1790,7 +1794,7 @@ build/
                     if (node.isDirectory) {
                         searchDirectory(node.documentUri, nodePath)
                     } else if (node.size <= 5 * 1024 * 1024L) {
-                        val bytes = safRepository.readFile(node.documentUri) ?: return@forEach
+                        val bytes = fileMutations.read(node.documentUri) ?: return@forEach
                         if (bytes.take(8192).any { it == 0.toByte() }) return@forEach
                         val content = bytes.toString(Charsets.UTF_8)
                         val matchingLine = content.lineSequence().firstOrNull { it.contains(query, ignoreCase = true) }
@@ -2085,10 +2089,10 @@ build/
         val uri = _uiState.value.confirmRemoveProjectUri ?: return
         _uiState.update { it.copy(statusMessage = "Removing project metadata…") }
         viewModelScope.launch {
-            val metadataRemoved = safRepository.deleteChildIfPresent(
+            val metadataRemoved = fileMutations.deleteChildIfPresent(
                 uri,
                 ApplicationIdentity.TARGET_METADATA_DIRECTORY,
-            ) && safRepository.deleteChildIfPresent(
+            ) && fileMutations.deleteChildIfPresent(
                 uri,
                 ApplicationIdentity.LEGACY_METADATA_DIRECTORY,
             )
@@ -2139,7 +2143,7 @@ build/
         }
         _uiState.update { it.copy(statusMessage = "Deleting project…") }
         viewModelScope.launch {
-            val deleted = safRepository.deleteDocument(uri) && !safRepository.documentExists(uri)
+            val deleted = fileMutations.delete(uri) && !fileMutations.exists(uri)
             if (!deleted) {
                 _uiState.update { it.copy(statusMessage = "Project deletion failed; files were not confirmed removed") }
                 return@launch
@@ -2203,7 +2207,7 @@ build/
             is NormalizedPathResult.Success -> viewModelScope.launch {
                 when (val resolved = safRepository.resolveOrCreatePathSafely(rootUri, normalized.segments)) {
                     is PathResolutionResult.Resolved -> {
-                        val result = safRepository.moveAndRenameDocumentWithExactName(
+                        val result = fileMutations.moveAndRename(
                             sourceUriString = node.documentUri,
                             sourceParentUriString = sourceParentUri,
                             targetParentUriString = resolved.parentUri,
@@ -2264,8 +2268,8 @@ build/
             var deletedCount = 0
             val deletedUris = mutableSetOf<String>()
             nodes.forEach { selectedNode ->
-                if (safRepository.deleteDocument(selectedNode.documentUri) &&
-                    !safRepository.documentExists(selectedNode.documentUri)
+                if (fileMutations.delete(selectedNode.documentUri) &&
+                    !fileMutations.exists(selectedNode.documentUri)
                 ) {
                     deletedCount++
                     deletedUris += allAffectedUris.intersect(affectedUris(selectedNode))
@@ -2405,7 +2409,7 @@ build/
         }
         if (!submittingAlreadyMarked) markCreateSubmitting(isDirectory)
         viewModelScope.launch {
-            val result = safRepository.createFileWithExactName(
+            val result = fileMutations.createFile(
                 parentUriString = parentUri,
                 displayName = normalizedName,
                 mimeType = if (isDirectory) {
@@ -2432,8 +2436,8 @@ build/
                 }
                 is ExactCreateResult.Created -> {
                     EditorLanguageRegistry.templateForFileName(normalizedName)?.let { template ->
-                        if (!safRepository.writeFile(result.documentUri, template.toByteArray(Charsets.UTF_8))) {
-                            safRepository.deleteDocument(result.documentUri)
+                        if (!fileMutations.write(result.documentUri, template.toByteArray(Charsets.UTF_8))) {
+                            fileMutations.delete(result.documentUri)
                             safRepository.rollbackCreatedDirectories(createdIntermediateUris)
                             setCreateError(isDirectory, "Could not initialize the HTML file")
                             return@launch
@@ -2485,7 +2489,7 @@ build/
             return
         }
         viewModelScope.launch {
-            val newUri = (safRepository.copyDocumentWithExactName(node.documentUri, parentUri, newName) as? SafeMutationResult.Created)?.documentUri ?: run {
+            val newUri = (fileMutations.copy(node.documentUri, parentUri, newName) as? SafeMutationResult.Created)?.documentUri ?: run {
                 _uiState.update { it.copy(fileOpDialog = null, statusMessage = "Duplicate: create error") }
                 return@launch
             }
@@ -2550,7 +2554,7 @@ build/
                 return@launch
             }
             val (targetParentUri, leafName) = path.parentUri to path.leafName
-            val created = safRepository.createFileWithExactName(
+            val created = fileMutations.createFile(
                 targetParentUri,
                 leafName,
                 EditorLanguageRegistry.mimeTypeForFileName(leafName),
@@ -2565,9 +2569,9 @@ build/
                 _uiState.update { it.copy(fileOpDialog = null, statusMessage = message) }
                 return@launch
             }
-            val ok = safRepository.writeFile(newUri, content.toByteArray(Charsets.UTF_8))
+            val ok = fileMutations.write(newUri, content.toByteArray(Charsets.UTF_8))
             if (!ok) {
-                safRepository.deleteDocument(newUri)
+                fileMutations.delete(newUri)
                 safRepository.rollbackCreatedDirectories(path.createdIntermediateUris)
                 _uiState.update { it.copy(fileOpDialog = null, statusMessage = "Save As: write failed") }
                 return@launch

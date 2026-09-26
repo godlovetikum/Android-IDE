@@ -1,13 +1,13 @@
 package dev.android.ide
 
+import android.graphics.Color
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.activity.enableEdgeToEdge
 import androidx.activity.OnBackPressedCallback
 import androidx.lifecycle.ViewModelProvider
-import dev.android.ide.app.AppShell
 import dev.android.ide.app.AppShellViewModel
+import dev.android.ide.ui.AppRoot
 
 class MainActivity : ComponentActivity() {
     val appShellViewModel: AppShellViewModel by lazy {
@@ -16,14 +16,22 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
+        window.statusBarColor = Color.rgb(32, 33, 36)
+        window.navigationBarColor = Color.BLACK
+        androidx.core.view.WindowCompat.setDecorFitsSystemWindows(window, true)
+        androidx.core.view.WindowCompat.getInsetsController(window, window.decorView).apply {
+            isAppearanceLightStatusBars = false
+            isAppearanceLightNavigationBars = false
+        }
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
-                if (!appShellViewModel.back()) finish()
+                if (!appShellViewModel.back()) {
+                    appShellViewModel.requestExitConfirmation()
+                }
             }
         })
         setContent {
-            AppShell(viewModel = appShellViewModel, onExit = ::finish)
+            AppRoot(viewModel = appShellViewModel, onExit = ::finish)
         }
     }
 

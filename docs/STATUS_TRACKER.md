@@ -98,3 +98,17 @@ The working tree contains pre-existing implementation changes and untracked docu
 The `dev` branch received the following pre-Phase-2 corrections on 2026-09-24. SAF mutation URI normalization now preserves child document IDs instead of converting them to the selected tree root. Copy-then-delete move fallbacks verify the copied destination before source deletion and clean up the copy when source removal fails. The foundation shell no longer renders redundant application branding above navigation, and selected navigation items use layout-stable styling rather than a variable-width bullet prefix.
 
 These corrections are source-level hardening only. Android build, lint, device, and provider-matrix acceptance remain assigned to GitHub Actions and device testing. No Phase 2 feature implementation has been started in this session.
+
+## Phase 2 compile-failure remediation (2026-09-25)
+
+The `Debug Build` workflow run for commit `ee5d8b1` ("Implement Phase 2 project management and safety fixes") failed at `:app:compileDebugKotlin` with 22 diagnostics. All four root causes are corrected on `dev` at source level, and each is recorded as `BUG-029`–`BUG-032` in `docs/DEBUG_LOG.md`:
+
+1. The project rename dialog triggered `AppShell`-scoped state from the stateless `AppContent` composable; the trigger now routes through a new `onRequestRename` callback parameter.
+2. `ProjectDetailsService` referenced `ProjectRegistryAdapter` without importing it, which cascaded into 19 downstream diagnostics; the missing import is restored.
+3. `SafRepository.contentEquals` inferred its `try` expression as `Any` instead of `Boolean` and could not report equal files; the helper is restructured so every branch returns an explicit `Boolean`.
+4. A positional `Project(…)` construction in `IdeViewModel` broke when `description` was inserted as the second parameter; the call site now uses named arguments.
+
+This remediation changed no product behavior beyond making the verification helper report equality
+correctly. In accordance with repository discipline, no Gradle task, Git commit, push, or history
+change was performed. Compilation, lint, and the Android 15/16 provider matrix remain the
+outstanding acceptance activities for the Phase 2 gate.

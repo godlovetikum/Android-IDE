@@ -10,6 +10,9 @@ import dev.android.ide.project.ProjectMetadataAdapterImpl
 import dev.android.ide.project.ProjectStorageAdapterImpl
 import dev.android.ide.project.ProjectRegistryStore
 import dev.android.ide.contracts.Surface
+import dev.android.ide.contracts.CapabilityState
+import dev.android.ide.contracts.ProjectLocation
+import dev.android.ide.contracts.ProjectLocationKind
 import dev.android.ide.lifecycle.LifecycleCoordinatorImpl
 import dev.android.ide.project.ProjectStateService
 import dev.android.ide.project.ProjectRestoreResult
@@ -29,19 +32,41 @@ import kotlinx.coroutines.launch
 data class AppShellState(
     val surface: Surface = Surface.HOME,
     val projects: List<dev.android.ide.contracts.ProjectIdentity> = emptyList(),
+    val projectSummaries: Map<String, ProjectSummary> = emptyMap(),
     val selectedProjectId: String? = null,
-    val previousSurface: Surface? = null,
+    val selectedProjectIds: Set<String> = emptySet(),
+    val navigationStack: List<Surface> = listOf(Surface.HOME),
     val statusMessage: String? = null,
     val restoring: Boolean = false,
     val operationInProgress: Boolean = false,
     val projectDetails: ProjectDetails? = null,
+    val folderInspection: FolderInspection? = null,
+    val acquiredProjectId: String? = null,
     val detailsLoading: Boolean = false,
+    val exitConfirmationVisible: Boolean = false,
+)
+
+data class FolderInspection(
+    val path: String,
+    val capabilityState: CapabilityState,
+    val readable: Boolean,
+    val writable: Boolean,
+    val alreadyRegistered: Boolean,
+    val nestedInRegisteredProject: Boolean,
+    val explanation: String?,
+)
+
+data class ProjectSummary(
+    val fileCount: Int? = null,
+    val totalBytes: Long? = null,
+    val hasGit: Boolean = false,
+    val status: String? = null,
 )
 
 class AppShellViewModel(application: Application) : AndroidViewModel(application) {
     private val saf = SafRepository(application)
-    private val registry = ProjectRegistryStore(ProjectRepository(application))
     private val storage = ProjectStorageAdapterImpl(saf)
+    private val registry = ProjectRegistryStore(ProjectRepository(application), storage)
     private val metadata = ProjectMetadataAdapterImpl(saf)
     private val projects = ProjectStateService(registry, storage, metadata)
     private val acquisition = ProjectAcquisitionService(registry, storage, metadata)
@@ -75,6 +100,46 @@ class AppShellViewModel(application: Application) : AndroidViewModel(application
         _state.update { it.copy(statusMessage = message) }
     }
 
+    fun selectProject(projectId: String) {
+        _state.update { it.copy(selectedProjectId = projectId) }
+    }
+
+    fun toggleProjectSelection(projectId: String) {
+        _state.update { current ->
+            val next = current.selectedProjectIds.toMutableSet().apply {
+                if (!add(projectId)) remove(projectId)
+            }
+            current.copy(selectedProjectIds = next, selectedProjectId = projectId)
+        }
+    }
+
+    fun clearProjectSelection() {
+        _state.update { it.copy(selectedProjectIds = emptySet()) }
+    }
+
+    fun inspectExistingFolder(projectRootUri: String) {
+        viewModelScope.launch {
+            val location = ProjectLocation(ProjectLocationKind.USER_VISIBLE_LOCAL, projectRootUri, projectRootUri, projectRootUri)
+            val capabilities = storage.inspect(location)
+            val registered = registry.listRegistered()
+            val alreadyRegistered = registered.any { it.location.stableId == projectRootUri }
+            val nested = registered.any { project ->
+                storage.isSameOrDescendant(project.location.stableId, projectRootUri) == true
+            }
+            _state.update {
+                it.copy(folderInspection = FolderInspection(
+                    path = projectRootUri,
+                    capabilityState = capabilities.state,
+                    readable = capabilities.readable,
+                    writable = capabilities.writable,
+                    alreadyRegistered = alreadyRegistered,
+                    nestedInRegisteredProject = nested,
+                    explanation = capabilities.explanation,
+                ))
+            }
+        }
+    }
+
     fun refreshProjectList() {
         viewModelScope.launch {
             _state.update { it.copy(operationInProgress = true, statusMessage = null) }
@@ -86,9 +151,15 @@ class AppShellViewModel(application: Application) : AndroidViewModel(application
     fun navigate(surface: Surface) {
         _state.update { current ->
             if (current.surface == surface) current
-            else current.copy(
+            else if (surface == Surface.HOME) current.copy(
+                surface = Surface.HOME,
+                navigationStack = listOf(Surface.HOME),
+                selectedProjectIds = emptySet(),
+                statusMessage = null,
+            ) else current.copy(
                 surface = surface,
-                previousSurface = current.surface,
+                navigationStack = current.navigationStack + surface,
+                selectedProjectIds = if (surface == Surface.PROJECTS) current.selectedProjectIds else emptySet(),
                 statusMessage = null,
             )
         }
@@ -97,13 +168,10 @@ class AppShellViewModel(application: Application) : AndroidViewModel(application
 
     fun back(): Boolean {
         val current = _state.value
-        val target = current.previousSurface ?: when (current.surface) {
-            Surface.HOME -> Surface.HOME
-            Surface.PROJECT_DETAILS -> Surface.PROJECTS
-            else -> Surface.HOME
-        }
-        if (target == current.surface) return false
-        navigate(target)
+        if (current.navigationStack.size <= 1) return false
+        val stack = current.navigationStack.dropLast(1)
+        _state.update { it.copy(surface = stack.last(), navigationStack = stack, statusMessage = null) }
+        applicationState.recordSurface(stack.last())
         return true
     }
 
@@ -114,7 +182,23 @@ class AppShellViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
+    fun requestExitConfirmation() {
+        _state.update { it.copy(exitConfirmationVisible = true) }
+    }
+
+    fun dismissExitConfirmation() {
+        _state.update { it.copy(exitConfirmationVisible = false) }
+    }
+
     fun openProject(projectId: String) {
+        restoreProject(projectId, Surface.EDITOR, loadDetails = false)
+    }
+
+    fun showProjectDetails(projectId: String) {
+        restoreProject(projectId, Surface.PROJECT_DETAILS, loadDetails = true)
+    }
+
+    private fun restoreProject(projectId: String, destination: Surface, loadDetails: Boolean) {
         viewModelScope.launch {
             _state.update {
                 it.copy(
@@ -130,8 +214,8 @@ class AppShellViewModel(application: Application) : AndroidViewModel(application
                     it.copy(
                         restoring = false,
                         selectedProjectId = result.identity.id,
-                        surface = Surface.PROJECT_DETAILS,
-                        previousSurface = Surface.PROJECTS,
+                        surface = destination,
+                        navigationStack = it.navigationStack + destination,
                         statusMessage = null,
                     )
                 }
@@ -146,6 +230,8 @@ class AppShellViewModel(application: Application) : AndroidViewModel(application
             }
             if (result is ProjectRestoreResult.Restored) {
                 applicationState.recordProject(result.identity.id)
+            }
+            if (result is ProjectRestoreResult.Restored && loadDetails) {
                 when (val details = detailsService.load(result.identity.id)) {
                     is ProjectDetailsResult.Loaded -> _state.update {
                         it.copy(projectDetails = details.details, detailsLoading = false)
@@ -193,13 +279,17 @@ class AppShellViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    fun importExistingFolder(projectRootUri: String) {
+    fun importExistingFolder(projectRootUri: String, name: String? = null, description: String? = null) {
         viewModelScope.launch {
             _state.update { it.copy(operationInProgress = true, statusMessage = null) }
-            val report = acquisition.importExistingFolder(projectRootUri, null, null)
-            _state.update { it.copy(operationInProgress = false, statusMessage = report.message) }
+            val report = acquisition.importExistingFolder(projectRootUri, name, description)
+            _state.update { it.copy(operationInProgress = false, statusMessage = report.message, acquiredProjectId = report.affectedIds.firstOrNull()) }
             refreshProjects()
         }
+    }
+
+    fun dismissAcquisitionPrompt() {
+        _state.update { it.copy(acquiredProjectId = null) }
     }
 
     fun importZip(
@@ -268,9 +358,9 @@ class AppShellViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    fun duplicateSelectedProject(destinationParentUri: String, name: String) {
+    fun duplicateSelectedProject(destinationParentUri: String, name: String, description: String? = null) {
         val projectId = _state.value.selectedProjectId ?: return
-        runProjectOperation { operations.duplicateProject(projectId, destinationParentUri, name) }
+        runProjectOperation { operations.duplicateProject(projectId, destinationParentUri, name, description) }
     }
 
     fun relocateSelectedProject(destinationParentUri: String, name: String) {
@@ -291,7 +381,7 @@ class AppShellViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch {
             _state.update { it.copy(operationInProgress = true, statusMessage = null) }
             val report = operations.batchRemoveFromRegistry(projectIds)
-            _state.update { it.copy(operationInProgress = false, statusMessage = report.message) }
+            _state.update { it.copy(operationInProgress = false, statusMessage = report.message, selectedProjectIds = emptySet()) }
             refreshProjects()
         }
     }
@@ -309,7 +399,7 @@ class AppShellViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch {
             _state.update { it.copy(operationInProgress = true, statusMessage = null) }
             val report = operations.batchPermanentlyDelete(projectIds)
-            _state.update { it.copy(operationInProgress = false, statusMessage = report.message) }
+            _state.update { it.copy(operationInProgress = false, statusMessage = report.message, selectedProjectIds = emptySet()) }
             refreshProjects()
         }
     }
@@ -339,7 +429,27 @@ class AppShellViewModel(application: Application) : AndroidViewModel(application
     }
 
     private suspend fun refreshProjects() {
-        _state.update { it.copy(projects = projects.registeredProjects()) }
+        val registered = projects.registeredProjects()
+        _state.update { it.copy(projects = registered, projectSummaries = emptyMap()) }
+        viewModelScope.launch {
+            val summaries = registered.associate { project ->
+                project.id to when (val result = detailsService.load(project.id)) {
+                    is ProjectDetailsResult.Loaded -> ProjectSummary(
+                        fileCount = result.details.fileCount,
+                        totalBytes = result.details.totalBytes,
+                        hasGit = result.details.git != null,
+                    )
+                    is ProjectDetailsResult.Unavailable -> ProjectSummary(
+                        status = when (project.location.capabilityState) {
+                            dev.android.ide.contracts.CapabilityState.PERMISSION_LOST -> "Permission needed"
+                            dev.android.ide.contracts.CapabilityState.UNSUPPORTED -> "Not supported"
+                            else -> "Unavailable"
+                        },
+                    )
+                }
+            }
+            _state.update { it.copy(projectSummaries = summaries) }
+        }
     }
 
     private suspend fun restoreLastProject() {

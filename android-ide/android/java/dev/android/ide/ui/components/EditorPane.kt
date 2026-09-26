@@ -334,7 +334,7 @@ fun EditorPane(
     val isLandscape   = configuration.screenWidthDp > configuration.screenHeightDp
 
     // ── Layout ──────────────────────────────────────────────────────────────
-    // The activity uses adjustNothing so the drawer keeps its full height.
+    // The activity uses adjustResize so the editor and its drawer remain visible above the keyboard.
     // Apply IME insets only to the editor surface and its toolbars.
     Column(modifier = modifier.background(colors.background).imePadding()) {
 

@@ -26,15 +26,43 @@ import dev.android.ide.saf.SafeMutationResult
 import dev.android.ide.saf.ZipExportResult
 import org.json.JSONObject
 import java.time.Instant
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 class ProjectRegistryStore(
     private val repository: ProjectRepository,
+    private val storage: ProjectStorageAdapter,
 ) : ProjectRegistryAdapter {
+    private val registrationMutex = Mutex()
+
     override suspend fun listRegistered(): List<ProjectIdentity> = repository.getAll().map(::toIdentity)
 
-    override suspend fun register(project: ProjectIdentity): OperationReport {
+    override suspend fun register(project: ProjectIdentity): OperationReport = registrationMutex.withLock {
+        val existing = repository.getAll().filterNot { it.stableLocationId == project.location.stableId }
+        for (other in existing) {
+            val projectContainsOther = storage.isSameOrDescendant(
+                project.location.stableId,
+                other.stableLocationId,
+            )
+            val otherContainsProject = storage.isSameOrDescendant(
+                other.stableLocationId,
+                project.location.stableId,
+            )
+            if (projectContainsOther == null || otherContainsProject == null) {
+                return blocked(
+                    "The new project cannot be registered until its location is verified against ${other.name}",
+                    project.id,
+                )
+            }
+            if (projectContainsOther || otherContainsProject) {
+                return blocked(
+                    "The project location overlaps the registered project ${other.name}",
+                    project.id,
+                )
+            }
+        }
         repository.upsert(project.toProject())
-        return complete("Project registered", project.id)
+        complete("Project registered", project.id)
     }
 
     override suspend fun markUnavailable(
@@ -170,13 +198,21 @@ class ProjectStorageAdapterImpl(
             ?.children
             ?.firstOrNull { it.displayName == name }
 
+    suspend fun listChildren(parentUri: String): List<FileNode> = saf.listChildren(parentUri)
+
+    suspend fun inspectChildren(parentUri: String): dev.android.ide.saf.ChildrenInspectionResult =
+        saf.inspectChildren(parentUri)
+
+    suspend fun deleteChildIfPresent(parentUri: String, name: String): Boolean =
+        saf.deleteChildIfPresent(parentUri, name)
+
     suspend fun createFileWithExactName(
         parentUri: String,
         name: String,
         mimeType: String,
     ): ExactCreateResult = saf.createFileWithExactName(parentUri, name, mimeType)
 
-    suspend fun isSameOrDescendant(rootUri: String, candidateUri: String): Boolean? =
+    override suspend fun isSameOrDescendant(rootUri: String, candidateUri: String): Boolean? =
         saf.isSameOrDescendant(rootUri, candidateUri)
 
     suspend fun projectMetadata(location: ProjectLocation): ProjectStorageMetadata? =

@@ -111,7 +111,20 @@ class ProjectOperationsService(
             storage.deleteDocument(rootUri)
             return failed("The duplicated project could not be verified", ErrorCategory.PERMISSION_LOST)
         }
-        return registry.register(identity)
+        val registered = registry.register(identity)
+        if (registered.outcome == OperationOutcome.COMPLETE) return registered
+        val cleaned = storage.deleteDocument(rootUri) &&
+            storage.documentPresence(rootUri) == DocumentPresence.ABSENT
+        return if (cleaned) {
+            registered.copy(message = "The duplicate was not registered; copied data was removed: ${registered.message}")
+        } else {
+            OperationReport(
+                outcome = OperationOutcome.PARTIAL,
+                message = "The duplicate could not be registered and cleanup was incomplete",
+                errorCategory = ErrorCategory.MALFORMED_METADATA,
+                recoveryHint = "Inspect and remove the unregistered copied project before retrying",
+            )
+        }
     }
 
     suspend fun renameProject(projectId: String, newName: String): OperationReport {

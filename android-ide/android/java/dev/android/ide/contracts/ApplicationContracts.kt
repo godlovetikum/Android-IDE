@@ -74,6 +74,42 @@ enum class SessionAvailability {
     INVALIDATED,
 }
 
+enum class RuntimeAvailability {
+    NOT_INITIALIZED,
+    INITIALIZING,
+    AVAILABLE,
+    UNAVAILABLE,
+    INVALIDATED,
+}
+
+data class RuntimeCapabilities(
+    val availability: RuntimeAvailability,
+    val architecture: String? = null,
+    val shellAvailable: Boolean = false,
+    val ptyAvailable: Boolean = false,
+    val packageManagerAvailable: Boolean = false,
+    val executableFilesSupported: Boolean = false,
+    val symlinksSupported: Boolean = false,
+    val explanation: String? = null,
+)
+
+data class RuntimePackage(
+    val name: String,
+    val version: String? = null,
+    val installed: Boolean = false,
+)
+
+data class ChildProcessDescriptor(
+    val id: String,
+    val sessionId: String,
+    val command: String,
+    val processId: Long? = null,
+    val workingDirectory: String? = null,
+    val startedAt: Instant,
+    val availability: SessionAvailability,
+    val terminationReason: String? = null,
+)
+
 data class SessionDescriptor(
     val id: String,
     val ownerScope: String,
@@ -155,6 +191,8 @@ typealias ProjectRelativePath = String
 
 interface ProjectStorageAdapter {
     suspend fun inspectCapabilities(location: ProjectLocation): LocationCapabilities
+    /** Returns null when the provider cannot safely inspect either location. */
+    suspend fun isSameOrDescendant(root: ProjectRelativePath, candidate: ProjectRelativePath): Boolean?
     suspend fun list(path: ProjectRelativePath): List<ProjectRelativePath>
     suspend fun read(path: ProjectRelativePath): ByteArray
     suspend fun write(path: ProjectRelativePath, content: ByteArray): OperationReport
@@ -188,12 +226,21 @@ interface RuntimeWorkspaceAdapter {
     suspend fun initialize(): OperationReport
     suspend fun rootIdentity(): ProjectLocation?
     suspend fun workingDirectory(project: ProjectIdentity): String?
+    suspend fun capabilities(): RuntimeCapabilities
+    suspend fun installedPackages(): List<RuntimePackage>
+    suspend fun installPackages(packages: List<String>): OperationReport
 }
 
 interface TerminalRuntimeAdapter {
     suspend fun createSession(workingDirectory: String?): SessionDescriptor
+    suspend fun listSessions(): List<SessionDescriptor>
+    suspend fun capabilities(): RuntimeCapabilities
     suspend fun sendInput(sessionId: String, input: ByteArray): OperationReport
+    suspend fun readOutput(sessionId: String): ByteArray?
     suspend fun resize(sessionId: String, columns: Int, rows: Int): OperationReport
+    suspend fun interrupt(sessionId: String): OperationReport
+    suspend fun listChildProcesses(sessionId: String): List<ChildProcessDescriptor>
+    suspend fun terminateChildProcess(processId: String): OperationReport
     suspend fun closeSession(sessionId: String): OperationReport
     suspend fun closeAllSessions(): OperationReport
 }
@@ -225,6 +272,15 @@ interface LifecycleCoordinator {
     suspend fun onForeground(): OperationReport
     suspend fun onBackground(): OperationReport
     suspend fun onExplicitExit(): OperationReport
+    suspend fun onRuntimeServiceStopped(reason: String): OperationReport = OperationReport(
+        outcome = OperationOutcome.INTERRUPTED,
+        message = "Runtime service stopped: $reason",
+        errorCategory = ErrorCategory.PROCESS_LOSS,
+    )
+    suspend fun onProcessRecreated(): OperationReport = OperationReport(
+        outcome = OperationOutcome.COMPLETE,
+        message = "Application process recreated",
+    )
 }
 
 /** Facts shared across domains. Event payloads must never contain secrets. */
@@ -238,6 +294,20 @@ sealed interface ApplicationEvent {
     data class SessionAvailabilityChanged(
         override val entityId: String,
         val availability: SessionAvailability,
+    ) : ApplicationEvent
+    data class RuntimeAvailabilityChanged(
+        override val entityId: String,
+        val availability: RuntimeAvailability,
+        val explanation: String? = null,
+    ) : ApplicationEvent
+    data class PackageOperationCompleted(
+        override val entityId: String,
+        val packages: List<String>,
+        val outcome: OperationOutcome,
+    ) : ApplicationEvent
+    data class ChildProcessStarted(
+        override val entityId: String,
+        val sessionId: String,
     ) : ApplicationEvent
     data class ChildProcessExited(override val entityId: String, val exitCode: Int?) : ApplicationEvent
     data class BrowserTabUnavailable(override val entityId: String) : ApplicationEvent

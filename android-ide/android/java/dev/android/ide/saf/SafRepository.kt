@@ -1332,28 +1332,64 @@ class SafRepository(private val context: Context) {
     // ── Deletion ───────────────────────────────────────────────────────────
 
     /**
-     * Delete a document (file or directory, recursively for file:// directories).
+     * Delete exactly [documentUriString], never its parent.
      *
-     * @param documentUriString  SAF document URI or file:// URI
-     * @return                   true if deleted, false on failure.
+     * Some document providers reject deleting a non-empty directory even when
+     * the directory itself is writable. In that case we inspect and delete
+     * only the directory's current children, retry the directory delete, and
+     * verify that the selected document is absent. An inspection failure or an
+     * unverifiable result is reported as failure rather than success.
      */
     suspend fun deleteDocument(documentUriString: String): Boolean = withContext(Dispatchers.IO) {
         try {
             if (isFileUri(documentUriString)) {
-                fileFromUri(documentUriString)?.deleteRecursively() ?: false
-            } else {
-                DocumentsContract.deleteDocument(resolver, mutationDocumentUri(documentUriString))
+                val file = fileFromUri(documentUriString) ?: return@withContext false
+                if (!file.deleteRecursively()) return@withContext false
+                return@withContext !file.exists()
             }
+
+            val documentUri = mutationDocumentUri(documentUriString)
+            val directDelete = runCatching {
+                DocumentsContract.deleteDocument(resolver, documentUri)
+            }.getOrDefault(false)
+            when (documentPresence(documentUriString)) {
+                DocumentPresence.ABSENT -> return@withContext true
+                DocumentPresence.INACCESSIBLE -> if (directDelete) return@withContext false
+                DocumentPresence.EXISTS -> Unit
+            }
+
+            if (!deleteChildrenRecursively(documentUriString)) return@withContext false
+            val retried = runCatching {
+                DocumentsContract.deleteDocument(resolver, documentUri)
+            }.getOrDefault(false)
+            retried && documentPresence(documentUriString) == DocumentPresence.ABSENT
         } catch (e: Exception) {
             Log.e(TAG, "deleteDocument failed for $documentUriString: ${e.message}", e)
             false
         }
     }
 
+    /** Deletes descendants only; it never receives or deletes a parent URI. */
+    private suspend fun deleteChildrenRecursively(directoryUriString: String): Boolean {
+        val children = when (val inspection = inspectChildren(directoryUriString)) {
+            is ChildrenInspectionResult.Success -> inspection.children
+            is ChildrenInspectionResult.Failed -> return false
+        }
+        for (child in children) {
+            if (!deleteDocument(child.documentUri)) return false
+        }
+        return (inspectChildren(directoryUriString) as? ChildrenInspectionResult.Success)
+            ?.children
+            ?.isEmpty() == true
+    }
+
     suspend fun deleteChildIfPresent(parentUriString: String, childName: String): Boolean {
-        val child = listChildren(parentUriString).firstOrNull { it.displayName == childName }
-            ?: return true
-        return deleteDocument(child.documentUri) && !documentExists(child.documentUri)
+        val child = when (val inspection = inspectChildren(parentUriString)) {
+            is ChildrenInspectionResult.Success -> inspection.children.firstOrNull { it.displayName == childName }
+            is ChildrenInspectionResult.Failed -> return false
+        } ?: return true
+        return deleteDocument(child.documentUri) &&
+            documentPresence(child.documentUri) == DocumentPresence.ABSENT
     }
 
     // ── Rename ─────────────────────────────────────────────────────────────

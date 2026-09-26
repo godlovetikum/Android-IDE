@@ -36,6 +36,10 @@ Future contributors must be able to understand previous mistakes without redisco
 | BUG-024 | editor | Keyboard toolbar: indent broken without selection; two redundant keyboard toggle buttons |
 | BUG-025 | editor | Editor single-tap did not reliably show the soft keyboard |
 | BUG-026 | editor | Monaco renderWhitespace hardcoded; no Phase-4 placeholders in Settings |
+| BUG-029 | ui | Project rename dialog wrote AppShell state from the stateless `AppContent` body |
+| BUG-030 | project | `ProjectDetailsService` used `ProjectRegistryAdapter` without importing it |
+| BUG-031 | filesystem | `contentEquals` leaked an `Any` type and never verified equal files |
+| BUG-032 | viewmodel | Positional `Project(…)` call broke after the `description` field was inserted |
 | AC-001 | architecture | Tech stack migration: Slint/Rust → Kotlin/Jetpack Compose |
 | AC-002 | architecture | Navigation refactor: bottom NavigationBar removed, sidebar-only |
 
@@ -518,3 +522,64 @@ The remaining acceptance work is operational: GitHub Actions compilation/lint an
 ZIP export now builds the archive in an app-private temporary file and copies it to the reviewed destination only after source traversal and archive closure succeed, preventing traversal failures from modifying the destination. General file copies now use bounded stream buffers, and content verification compares streams rather than loading complete files into memory. Private development workspace copy and move operations now return an explicit unavailable-runtime result until the authoritative runtime workspace adapter is initialized; they no longer report success through an incomplete SAF path. Project details are cleared whenever restoration or refresh loses availability, preventing stale details from being displayed for another project.
 
 No build, device test, Git command, commit, or push was performed.
+
+---
+
+## Compile-blocking defects in the Phase 2 source (2026-09-25)
+
+The `Debug Build` workflow run for commit `ee5d8b1` failed at `:app:compileDebugKotlin` with 22
+diagnostics. All four causes are recorded below. The fixes are source-level only; Android
+compilation, lint, and device/provider acceptance remain assigned to GitHub Actions.
+
+### BUG-029 — Project rename dialog wrote AppShell state from the stateless `AppContent` body
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-09-25 |
+| **Subsystem** | ui |
+| **CI diagnostics** | `AppShell.kt:719:25 Unresolved reference: renameName`, `AppShell.kt:720:25 Unresolved reference: renameDialogVisible` |
+| **Root Cause** | The Phase 2 commit added the rename-dialog trigger inside `AppContent`, which is a *stateless* composable that receives state and callbacks as parameters. The `renameName` / `renameDialogVisible` `rememberSaveable` state is declared in `AppShell`. `AppContent` cannot see those locals, and it has no property of those names of its own, so both references were unresolvable at that call site. (The interleaved `18 actionable tasks` line in the CI log is Gradle progress output and is unrelated to the failure.) |
+| **Solution** | Added an `onRequestRename: (String) -> Unit` parameter to `AppContent` and changed the button to `onClick = { onRequestRename(selected?.name.orEmpty()) }`. `AppShell` supplies the lambda that assigns its own `renameName` and `renameDialogVisible` state, matching the existing `onDuplicateProject` / `onRelocateProject` pattern. |
+| **Prevention** | In a screen/stateless-composable split, a child composable must never assign the parent's `rememberSaveable` state. Add a callback parameter instead; state owners stay in one place. |
+
+### BUG-030 — `ProjectDetailsService` used `ProjectRegistryAdapter` without importing it
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-09-25 |
+| **Subsystem** | project |
+| **CI diagnostics** | 19 diagnostics: `:12:27 Unresolved reference: ProjectRegistryAdapter` plus cascading failures at `:16`, `:18`, `:24`, `:29`–`:36`, `:42`, `:43` |
+| **Root Cause** | The new `ProjectDetailsService` is in package `dev.android.ide.project`; `ProjectRegistryAdapter` is declared in `dev.android.ide.contracts`. The import list carried `CapabilityState` and `ProjectIdentity` from the same package but not `ProjectRegistryAdapter`. The missing import made the constructor parameter type unresolvable, so every subsequent property access on the resulting value failed to infer — producing "Unresolved reference: it / location / name / description / registeredAt" and "Type mismatch: inferred type is Any but String was expected". |
+| **Solution** | Added `import dev.android.ide.contracts.ProjectRegistryAdapter`. All 19 downstream diagnostics disappear with the single import, confirming they shared one root cause. |
+| **Prevention** | When a new class implements the adapter contracts, add every referenced contract type to the import list — unresolved constructor parameter types cascade into misleading member-level errors that hide the real cause. |
+
+### BUG-031 — `contentEquals` leaked an `Any` type and never verified equal files
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-09-25 |
+| **Subsystem** | filesystem |
+| **CI diagnostics** | `SafRepository.kt:686:13 Type mismatch: inferred type is Any but Boolean was expected` |
+| **Root Cause** | The helper ended with `openInputStream(source)?.use { … } ?: return@withContext false`. Neither elvis right-hand side contributes a type (a local return is `Nothing`), so the `try` branch's type came from the outer `use` lambda, whose last expression was the `while (true)` loop. That loop never completes normally — it only exits through the non-local `return@withContext true` — so its type is `Unit`. The `try`/`catch` expression therefore had the branch types `Unit` and `Boolean`, whose common supertype is `Any`, and the `Boolean` return type declared on `contentEquals` was violated. |
+| **Solution** | Restructured the helper so each branch is explicitly `Boolean`: bind both streams to locals, close the already-opened source stream if the target cannot be opened, replace the unconditional `while (true)` with an `if (sourceCount != targetCount) return@withContext false` / `if (sourceCount == -1) break` pair, and close the `use` block with an explicit `true` documented as "both streams reached EOF with identical length and content". |
+| **Prevention** | Never end a `try` block with an elvis expression when the enclosing function returns a concrete type. Give every `try` a final expression of the declared type, and prefer `break` over `return@withContext` clusters inside loops. |
+
+### BUG-032 — Positional `Project(…)` call broke after the `description` field was inserted
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-09-25 |
+| **Subsystem** | viewmodel |
+| **CI diagnostics** | `IdeViewModel.kt:915:49 No value passed for parameter 'uri'` |
+| **Root Cause** | The Phase 2 commit added `description: String = ""` as the **second** parameter of `Project`. The pre-existing call `Project(extractProjectName(uri), uri)` passed the URI positionally into `description` and supplied no `uri`, because the compiler now saw three required parameters and only two positional arguments. |
+| **Solution** | Converted the call to named arguments, `Project(name = extractProjectName(uri), uri = uri)`, so the call site is immune to further parameter insertion. |
+| **Prevention** | Use named arguments for data-class construction when a class has more than two parameters or may grow; inserting a defaulted parameter in the middle is source-incompatible for positional callers. |
+
+### Verification performed
+
+The fixes were validated by source inspection and targeted static checks in this environment, not
+by an Android build: every CI diagnostic line was mapped to a specific code change, the edited
+files' delimiter balance was confirmed unchanged from `HEAD`, the exhaustive `when` blocks over the
+extended `SafeMutationResult` sealed class still cover every case, and `AppContent` was verified to
+hold no remaining references to `AppShell`-scoped state. No Gradle task, `gh` write, commit, or push
+was performed.

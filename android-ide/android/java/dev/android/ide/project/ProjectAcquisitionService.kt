@@ -87,7 +87,7 @@ class ProjectAcquisitionService(
                 blocked("The new project could not be verified after creation", ErrorCategory.PERMISSION_LOST),
             )
         }
-        return registry.register(identity)
+        return registerCreatedProject(identity, rootUri)
     }
 
     suspend fun importExistingFolder(
@@ -241,7 +241,7 @@ class ProjectAcquisitionService(
         if (verified.state != CapabilityState.SUPPORTED) {
             return cleanupFailedImport(rootUri, createdUris, "The extracted project could not be verified")
         }
-        return registry.register(identity)
+        return registerCreatedProject(identity, rootUri)
     }
 
     private fun parseArchive(bytes: ByteArray): List<ArchiveEntry>? {
@@ -331,6 +331,26 @@ class ProjectAcquisitionService(
             message = "${report.message}; cleanup of the unregistered project was incomplete",
             recoveryHint = "Inspect and remove the created project directory before retrying",
         )
+    }
+
+    private suspend fun registerCreatedProject(
+        identity: ProjectIdentity,
+        rootUri: String,
+    ): OperationReport {
+        val registered = registry.register(identity)
+        if (registered.outcome == OperationOutcome.COMPLETE) return registered
+        val cleaned = storage.deleteDocument(rootUri) &&
+            storage.documentPresence(rootUri) == DocumentPresence.ABSENT
+        return if (cleaned) {
+            registered.copy(message = "The project was not registered; created data was removed: ${registered.message}")
+        } else {
+            OperationReport(
+                outcome = OperationOutcome.PARTIAL,
+                message = "The project could not be registered and cleanup was incomplete",
+                errorCategory = ErrorCategory.MALFORMED_METADATA,
+                recoveryHint = "Inspect and remove the unregistered project before retrying",
+            )
+        }
     }
 
     private suspend fun containsRegisteredProject(destinationParentUri: String): Boolean =
