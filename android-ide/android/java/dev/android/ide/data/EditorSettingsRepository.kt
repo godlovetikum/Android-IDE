@@ -23,6 +23,7 @@ class EditorSettingsRepository(context: Context) {
         private const val KEY_VOLUME_MODE          = "volume_key_mode"
         private const val KEY_SHOW_KEYBOARD_BAR    = "show_keyboard_toolbar"
         private const val KEY_SHOW_SYMBOL_BAR      = "show_symbol_bar"
+        private const val KEY_SHOW_STATUS_BAR      = "show_status_bar"
         private const val KEY_HIDE_GIT_FOLDER      = "hide_git_folder"
         private const val KEY_HIDE_METADATA_FOLDER = "hide_project_metadata_folder"
         private const val KEY_CUSTOM_SYMBOLS       = "custom_symbols"
@@ -53,6 +54,7 @@ class EditorSettingsRepository(context: Context) {
         }.getOrElse { PreviewLayout.PREVIEW_ABOVE },
         showKeyboardToolbar  = prefs.getBoolean(KEY_SHOW_KEYBOARD_BAR, true),
         showSymbolBar        = prefs.getBoolean(KEY_SHOW_SYMBOL_BAR, true),
+        showStatusBar        = prefs.getBoolean(KEY_SHOW_STATUS_BAR, true),
         hideGitFolder        = prefs.getBoolean(KEY_HIDE_GIT_FOLDER, true),
         hideProjectMetadataFolder = prefs.getBoolean(KEY_HIDE_METADATA_FOLDER, true),
         customSymbols        = prefs.getString(KEY_CUSTOM_SYMBOLS, null)
@@ -82,6 +84,7 @@ class EditorSettingsRepository(context: Context) {
             .putString (KEY_PREVIEW_LAYOUT,      settings.previewLayout.name)
             .putBoolean(KEY_SHOW_KEYBOARD_BAR,   settings.showKeyboardToolbar)
             .putBoolean(KEY_SHOW_SYMBOL_BAR,     settings.showSymbolBar)
+            .putBoolean(KEY_SHOW_STATUS_BAR,     settings.showStatusBar)
             .putBoolean(KEY_HIDE_GIT_FOLDER,     settings.hideGitFolder)
             .putBoolean(KEY_HIDE_METADATA_FOLDER, settings.hideProjectMetadataFolder)
             .putString (KEY_CUSTOM_SYMBOLS,      settings.customSymbols.joinToString(SYMBOL_SEPARATOR))

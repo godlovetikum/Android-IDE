@@ -1,32 +1,47 @@
 package dev.android.ide.ui
 
+import android.app.Activity
+import android.graphics.Color
 import android.content.Intent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.isSystemInDarkTheme
 import dev.android.ide.app.AppShellViewModel
 import dev.android.ide.ui.shell.AppShell
+import dev.android.ide.ui.screen.humanReadableStorageLocation
 import dev.android.ide.ui.theme.AndroidIDETheme
+import dev.android.ide.viewmodel.IdeViewModel
 
 private enum class ProjectOperationKind { DUPLICATE, RELOCATE }
 
 /** Composition root: owns Android launchers and reviewed acquisition workflow state. */
 @Composable
-fun AppRoot(viewModel: AppShellViewModel, onExit: () -> Unit) {
+fun AppRoot(viewModel: AppShellViewModel, ideViewModel: IdeViewModel, onExit: () -> Unit) {
     val context = LocalContext.current
     val shellState by viewModel.state.collectAsState()
+    val ideState by ideViewModel.uiState.collectAsState()
     var createVisible by remember { mutableStateOf(false) }
     var createReviewVisible by remember { mutableStateOf(false) }
     var createName by remember { mutableStateOf("") }
@@ -109,9 +124,36 @@ fun AppRoot(viewModel: AppShellViewModel, onExit: () -> Unit) {
         pendingBatchExportIds = emptySet()
     }
 
-    AndroidIDETheme {
+    val baseDensity = LocalDensity.current
+    val uiScale = ideState.editorSettings.uiFontScale
+    val systemDark = isSystemInDarkTheme()
+    val resolvedDark = when (ideState.appTheme) {
+        dev.android.ide.data.model.AppTheme.DARK -> true
+        dev.android.ide.data.model.AppTheme.LIGHT -> false
+        dev.android.ide.data.model.AppTheme.SYSTEM -> systemDark
+    }
+    val rootView = LocalView.current
+    SideEffect {
+        val activity = rootView.context as? Activity
+        activity?.window?.let { window ->
+            window.statusBarColor = if (resolvedDark) Color.rgb(30, 30, 30) else Color.WHITE
+            window.navigationBarColor = if (resolvedDark) Color.BLACK else Color.WHITE
+            androidx.core.view.WindowCompat.getInsetsController(window, rootView).apply {
+                isAppearanceLightStatusBars = !resolvedDark
+                isAppearanceLightNavigationBars = !resolvedDark
+            }
+        }
+    }
+    AndroidIDETheme(appTheme = ideState.appTheme) {
+        CompositionLocalProvider(
+            LocalDensity provides androidx.compose.ui.unit.Density(
+                density = baseDensity.density * uiScale,
+                fontScale = baseDensity.fontScale * uiScale,
+            ),
+        ) {
         AppShell(
             viewModel = viewModel,
+            ideViewModel = ideViewModel,
             onExit = onExit,
             onCreateProject = {
                 createName = ""
@@ -151,7 +193,7 @@ fun AppRoot(viewModel: AppShellViewModel, onExit: () -> Unit) {
                     Column {
                         OutlinedTextField(createName, { createName = it }, label = { Text("Project name") }, singleLine = true)
                         OutlinedTextField(createDescription, { createDescription = it }, label = { Text("Description") })
-                        Text(if (createDestination == null) "No destination selected" else "Destination selected")
+                        PickerResult("Destination", createDestination)
                         Button(onClick = { createDestinationPicker.launch(null) }) { Text("Choose destination") }
                     }
                 },
@@ -195,7 +237,7 @@ fun AppRoot(viewModel: AppShellViewModel, onExit: () -> Unit) {
                 title = { Text("Review folder import") },
                 text = {
                     Column {
-                        Text("Selected folder: ${folderUri.orEmpty()}")
+                        PickerResult("Selected folder", folderUri)
                         shellState.folderInspection?.let { inspection ->
                             Text("Access: ${if (inspection.readable && inspection.writable) "Readable and writable" else "Unavailable"}")
                             Text("Registration: ${if (inspection.alreadyRegistered) "Already registered" else "Not registered"}")
@@ -232,10 +274,10 @@ fun AppRoot(viewModel: AppShellViewModel, onExit: () -> Unit) {
                 title = { Text("Review ZIP import") },
                 text = {
                     Column {
-                        Text("Archive: ${zipUri.orEmpty()}")
+                        PickerResult("Archive", zipUri)
                         OutlinedTextField(zipName, { zipName = it }, label = { Text("Project name") }, singleLine = true)
                         OutlinedTextField(zipDescription, { zipDescription = it }, label = { Text("Description") })
-                        Text(if (zipDestination == null) "No extraction destination selected" else "Extraction destination selected")
+                        PickerResult("Extraction destination", zipDestination)
                         Button(onClick = { zipDestinationPicker.launch(null) }) { Text("Choose destination") }
                         Text("The archive and destination will be validated for unsafe paths and conflicts before extraction.")
                     }
@@ -260,7 +302,7 @@ fun AppRoot(viewModel: AppShellViewModel, onExit: () -> Unit) {
                 title = { Text("Export project as ZIP") },
                 text = {
                     Column {
-                        Text("Source: ${project?.location?.userVisiblePath ?: project?.location?.displayLabel ?: "Unavailable"}")
+                        Text("Source: ${humanReadableStorageLocation(project?.location?.userVisiblePath ?: project?.location?.displayLabel)}")
                         Text("Archive name: ${project?.name ?: "project"}.zip")
                         Text("The project is copied without changing the source. Choose a permitted destination in the next step.")
                     }
@@ -281,12 +323,12 @@ fun AppRoot(viewModel: AppShellViewModel, onExit: () -> Unit) {
                 title = { Text(if (kind == ProjectOperationKind.DUPLICATE) "Copy & Duplicate project" else "Change project location") },
                 text = {
                     Column {
-                        Text("Source: ${project?.location?.userVisiblePath ?: project?.location?.displayLabel ?: "Unavailable"}")
+                        Text("Source: ${humanReadableStorageLocation(project?.location?.userVisiblePath ?: project?.location?.displayLabel)}")
                         OutlinedTextField(operationName, { operationName = it }, label = { Text("Project name") }, singleLine = true)
                         if (kind == ProjectOperationKind.DUPLICATE) {
                             OutlinedTextField(operationDescription, { operationDescription = it }, label = { Text("Description") })
                         }
-                        Text(if (operationDestination == null) "No destination parent selected" else "Destination parent selected")
+                        PickerResult("Destination parent", operationDestination)
                         Button(onClick = { operationDestinationPicker.launch(null) }) { Text("Choose destination parent") }
                         Text(if (kind == ProjectOperationKind.DUPLICATE) {
                             "The original remains unchanged. The destination will be checked for conflicts and project containment before copying."
@@ -334,6 +376,7 @@ fun AppRoot(viewModel: AppShellViewModel, onExit: () -> Unit) {
                 confirmButton = { TextButton(onClick = { feedback = null }) { Text("OK") } },
             )
         }
+        }
     }
 }
 
@@ -343,6 +386,25 @@ private fun persistTreePermission(context: android.content.Context, uri: android
             uri,
             Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
         )
+    }
+}
+
+@Composable
+private fun PickerResult(label: String, rawValue: String?) {
+    val colors = androidx.compose.material3.MaterialTheme.colorScheme
+    Surface(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+        shape = RoundedCornerShape(10.dp),
+        color = if (rawValue == null) colors.surfaceVariant else colors.primaryContainer,
+    ) {
+        Column(Modifier.fillMaxWidth().padding(12.dp)) {
+            Text(label.uppercase(), style = androidx.compose.material3.MaterialTheme.typography.labelSmall, color = colors.onSurfaceVariant)
+            Text(
+                text = if (rawValue == null) "Not selected" else humanReadableStorageLocation(rawValue),
+                style = androidx.compose.material3.MaterialTheme.typography.bodyMedium,
+                color = if (rawValue == null) colors.onSurfaceVariant else colors.onPrimaryContainer,
+            )
+        }
     }
 }
 

@@ -140,7 +140,7 @@ data class IdeUiState(
     val fileOpDialog: FileOpDialog? = null,
 
     // ── Theme ──────────────────────────────────────────────────────────────
-    val appTheme: AppTheme = AppTheme.DARK,
+    val appTheme: AppTheme = AppTheme.SYSTEM,
 
     // ── Editor settings ────────────────────────────────────────────────────
     /** Persisted editor display and behaviour settings. */

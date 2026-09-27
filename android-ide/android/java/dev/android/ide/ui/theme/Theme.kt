@@ -63,11 +63,11 @@ private val IdeLightColorScheme = lightColorScheme(
 /**
  * Root theme composable.
  *
- * @param appTheme The user's chosen theme. Defaults to DARK.
+ * @param appTheme The user's chosen theme. Defaults to the device system theme.
  */
 @Composable
 fun AndroidIDETheme(
-    appTheme: AppTheme = AppTheme.DARK,
+    appTheme: AppTheme = AppTheme.SYSTEM,
     content: @Composable () -> Unit,
 ) {
     val isDark = when (appTheme) {

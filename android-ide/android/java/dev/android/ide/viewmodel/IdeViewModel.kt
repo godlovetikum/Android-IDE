@@ -385,6 +385,13 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /** Returns true when the persisted volume-key mode consumes the key for the editor. */
+    fun handleVolumeKey(up: Boolean): Boolean {
+        if (_uiState.value.volumeKeyMode == VolumeKeyMode.DISABLED) return false
+        if (up) onVolumeUp() else onVolumeDown()
+        return true
+    }
+
     fun sendEditorCommand(command: EditorOutbound) {
         _editorCommand.tryEmit(command)
     }

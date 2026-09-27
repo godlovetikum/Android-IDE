@@ -17,8 +17,8 @@ class ThemeRepository(context: Context) {
     private val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
     fun get(): AppTheme = runCatching {
-        AppTheme.valueOf(prefs.getString(KEY, AppTheme.DARK.name) ?: AppTheme.DARK.name)
-    }.getOrElse { AppTheme.DARK }
+        AppTheme.valueOf(prefs.getString(KEY, AppTheme.SYSTEM.name) ?: AppTheme.SYSTEM.name)
+    }.getOrElse { AppTheme.SYSTEM }
 
     fun set(theme: AppTheme) {
         prefs.edit().putString(KEY, theme.name).apply()

@@ -48,11 +48,13 @@ fun SettingsScreen(
     val coroutineScope = rememberCoroutineScope()
     val sectionOffsets = remember { mutableStateMapOf<String, Int>() }
 
-    LaunchedEffect(scrollToSection) {
+    LaunchedEffect(scrollToSection, scrollToSection?.let { sectionOffsets[it] }) {
         if (scrollToSection != null) {
             val offset = sectionOffsets[scrollToSection]
-            if (offset != null) coroutineScope.launch { scrollState.animateScrollTo(offset) }
-            onScrollConsumed()
+            if (offset != null) {
+                coroutineScope.launch { scrollState.animateScrollTo(offset) }
+                onScrollConsumed()
+            }
         }
     }
 
@@ -171,6 +173,16 @@ fun SettingsScreen(
                     EditorThemeOption("Light",  "light",  s.editorTheme, s, ideViewModel)
                     EditorThemeOption("System (follow app theme)", "system", s.editorTheme, s, ideViewModel)
                 }
+            }
+
+            Card(colors = CardDefaults.cardColors(containerColor = colors.surface)) {
+                VisibilitySettingRow(
+                    title = "Document information row",
+                    description = "Show line, column, spacing, language, and encoding below the editor.",
+                    checked = s.showStatusBar,
+                    onCheckedChange = { ideViewModel.setEditorSettings(s.copy(showStatusBar = it)) },
+                    colors = colors,
+                )
             }
 
             // ── Preview Layout ─────────────────────────────────────────────

@@ -9,8 +9,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -76,7 +79,7 @@ fun ProjectDetailsSurface(
                 DropdownMenuItem(text = { Text("Export or Share") }, enabled = !state.operationInProgress, onClick = { menuOpen = false; project?.id?.let(onExportProject) })
                 DropdownMenuItem(text = { Text("Copy Storage Path") }, onClick = {
                     menuOpen = false
-                    val path = project?.location?.userVisiblePath ?: project?.location?.displayLabel
+                    val path = humanReadableStorageLocation(project?.location?.userVisiblePath ?: project?.location?.displayLabel)
                     if (path != null) {
                         val clipboard = context.getSystemService(ClipboardManager::class.java)
                         if (clipboard != null) {
@@ -111,16 +114,17 @@ fun ProjectDetailsSurface(
                 DropdownMenuItem(text = { Text("Open Git") }, onClick = { menuOpen = false; viewModel.navigate(Surface.GIT) })
                 DropdownMenuItem(text = { Text("Open Terminal") }, onClick = { menuOpen = false; viewModel.navigate(Surface.TERMINAL) })
                 DropdownMenuItem(text = { Text("Open Browser or Preview") }, onClick = { menuOpen = false; viewModel.navigate(Surface.BROWSER) })
-                DropdownMenuItem(text = { Text("Remove from Registry") }, enabled = !state.operationInProgress, onClick = { menuOpen = false; confirmRemove = true })
-                DropdownMenuItem(text = { Text("Permanently Delete") }, enabled = !state.operationInProgress, onClick = { menuOpen = false; deleteCode = Random.nextInt(100, 1000).toString(); enteredDeleteCode = ""; confirmDelete = true })
+                HorizontalDivider()
+                DropdownMenuItem(text = { Text("Remove from Registry", color = MaterialTheme.colorScheme.secondary) }, enabled = !state.operationInProgress, onClick = { menuOpen = false; confirmRemove = true })
+                DropdownMenuItem(text = { Text("Permanently Delete", color = MaterialTheme.colorScheme.error) }, enabled = !state.operationInProgress, onClick = { menuOpen = false; deleteCode = Random.nextInt(100, 1000).toString(); enteredDeleteCode = ""; confirmDelete = true })
             }
         }
         if (confirmRemove) {
             AlertDialog(
                 onDismissRequest = { confirmRemove = false },
                 title = { Text("Remove project from registry?") },
-                text = { Text("${project?.name ?: "This project"} will be removed from Android IDE, but its files, Git data, and location will remain unchanged.\n\nLocation: ${project?.location?.userVisiblePath ?: project?.location?.displayLabel ?: "Unavailable"}") },
-                confirmButton = { TextButton(onClick = { confirmRemove = false; viewModel.removeSelectedProject() }) { Text("Remove from Registry") } },
+                text = { Text("${project?.name ?: "This project"} will be removed from Android IDE, but its files, Git data, and location will remain unchanged.\n\nLocation: ${humanReadableStorageLocation(project?.location?.userVisiblePath ?: project?.location?.displayLabel)}") },
+                confirmButton = { Button(onClick = { confirmRemove = false; viewModel.removeSelectedProject() }, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary)) { Text("Remove from Registry") } },
                 dismissButton = { TextButton(onClick = { confirmRemove = false }) { Text("Cancel") } },
             )
         }
@@ -149,19 +153,19 @@ fun ProjectDetailsSurface(
                     Column {
                         Text("This permanently removes the project data from its selected storage location. This action cannot be undone.")
                         Text("Project: ${project?.name ?: "Unavailable"}")
-                        Text("Location: ${project?.location?.userVisiblePath ?: project?.location?.displayLabel ?: "Unavailable"}")
+                        Text("Location: ${humanReadableStorageLocation(project?.location?.userVisiblePath ?: project?.location?.displayLabel)}")
                         Text("Type $deleteCode to confirm")
                         androidx.compose.material3.OutlinedTextField(enteredDeleteCode, { enteredDeleteCode = it }, label = { Text("Confirmation code") }, singleLine = true)
                     }
                 },
                 confirmButton = {
-                    TextButton(onClick = { confirmDelete = false; viewModel.permanentlyDeleteSelectedProject() }, enabled = enteredDeleteCode == deleteCode) { Text("Delete permanently") }
+                    Button(onClick = { confirmDelete = false; viewModel.permanentlyDeleteSelectedProject() }, enabled = enteredDeleteCode == deleteCode, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)) { Text("Delete permanently") }
                 },
                 dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Cancel") } },
             )
         }
         Text(project?.description?.ifBlank { "No description" } ?: "No project selected")
-        Text(project?.location?.userVisiblePath ?: project?.location?.displayLabel ?: "Location unavailable")
+        Text(humanReadableStorageLocation(project?.location?.userVisiblePath ?: project?.location?.displayLabel))
         state.projectDetails?.let { details ->
             DetailLine("Files", details.fileCount.toString())
             DetailLine("Folders", details.folderCount.toString())

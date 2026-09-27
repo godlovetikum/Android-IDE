@@ -49,6 +49,8 @@ data class EditorSettings(
     val showKeyboardToolbar: Boolean = true,
     /** Show the symbol shortcut bar above the keyboard toolbar. */
     val showSymbolBar: Boolean       = true,
+    /** Show the optional document-information row below the editor. */
+    val showStatusBar: Boolean       = true,
     /**
      * Code symbol shortcuts shown in the symbol bar.
      * Each entry is a short string (typically 1–2 chars) inserted on tap.

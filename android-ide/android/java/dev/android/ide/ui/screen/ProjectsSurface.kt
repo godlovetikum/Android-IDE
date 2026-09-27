@@ -13,13 +13,18 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Archive
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -73,7 +78,7 @@ fun ProjectsSurface(
     var sortOpen by remember { mutableStateOf(false) }
     var filterOpen by remember { mutableStateOf(false) }
     var filterMode by rememberSaveable { mutableStateOf(ProjectFilter.ALL) }
-    var addProjectOpen by remember { mutableStateOf(false) }
+    var addActionsExpanded by remember { mutableStateOf(false) }
     var confirmBatchRemove by remember { mutableStateOf(false) }
     var confirmBatchExport by remember { mutableStateOf(false) }
     var confirmBatchDelete by remember { mutableStateOf(false) }
@@ -140,7 +145,7 @@ fun ProjectsSurface(
             ) {
                 Text("${state.selectedProjectIds.size} selected")
                 TextButton(onClick = { confirmBatchRemove = true }) { Text("Remove from Registry") }
-                TextButton(onClick = { batchDeleteCode = Random.nextInt(100, 1000).toString(); enteredBatchDeleteCode = ""; confirmBatchDelete = true }) { Text("Permanently Delete") }
+                TextButton(onClick = { batchDeleteCode = Random.nextInt(100, 1000).toString(); enteredBatchDeleteCode = ""; confirmBatchDelete = true }, colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)) { Text("Permanently Delete") }
                 TextButton(onClick = { confirmBatchExport = true }) { Text("Export or Share") }
                 TextButton(onClick = { copyPaths(state.selectedProjectIds) }) { Text("Copy Storage Path") }
                 TextButton(onClick = viewModel::clearProjectSelection) { Text("Cancel") }
@@ -158,7 +163,7 @@ fun ProjectsSurface(
                         OutlinedTextField(enteredBatchDeleteCode, { enteredBatchDeleteCode = it }, label = { Text("Confirmation code") }, singleLine = true)
                     }
                 },
-                confirmButton = { Button(onClick = { confirmBatchDelete = false; viewModel.permanentlyDeleteProjects(state.selectedProjectIds.toList()) }, enabled = enteredBatchDeleteCode == batchDeleteCode) { Text("Delete permanently") } },
+                confirmButton = { Button(onClick = { confirmBatchDelete = false; viewModel.permanentlyDeleteProjects(state.selectedProjectIds.toList()) }, enabled = enteredBatchDeleteCode == batchDeleteCode, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)) { Text("Delete permanently") } },
                 dismissButton = { TextButton(onClick = { confirmBatchDelete = false }) { Text("Cancel") } },
             )
         }
@@ -212,24 +217,31 @@ fun ProjectsSurface(
         }
     }
     FloatingActionButton(
-        onClick = { addProjectOpen = true },
+        onClick = { addActionsExpanded = !addActionsExpanded },
         modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp),
-    ) { androidx.compose.material3.Icon(Icons.Default.Add, contentDescription = "Add project") }
-    if (addProjectOpen) {
-        AlertDialog(
-            onDismissRequest = { addProjectOpen = false },
-            title = { Text("Add project") },
-            text = {
-                Column {
-                    TextButton(onClick = { addProjectOpen = false; onCreateProject() }, Modifier.fillMaxWidth()) { Text("Create blank project") }
-                    TextButton(onClick = { addProjectOpen = false; onImportFolder() }, Modifier.fillMaxWidth()) { Text("Import existing folder") }
-                    TextButton(onClick = { addProjectOpen = false; onImportZip() }, Modifier.fillMaxWidth()) { Text("Import ZIP archive") }
-                    TextButton(onClick = { addProjectOpen = false; onCloneGit() }, Modifier.fillMaxWidth()) { Text("Clone remote Git repository") }
-                }
-            },
-            confirmButton = { TextButton(onClick = { addProjectOpen = false }) { Text("Cancel") } },
-        )
+    ) { androidx.compose.material3.Icon(Icons.Default.Add, contentDescription = if (addActionsExpanded) "Close project actions" else "Add project") }
+    if (addActionsExpanded) {
+        Column(
+            modifier = Modifier.align(Alignment.BottomEnd).padding(end = 16.dp, bottom = 84.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalAlignment = Alignment.End,
+        ) {
+            ProjectAcquisitionAction(Icons.Default.Code, "Create blank project") { addActionsExpanded = false; onCreateProject() }
+            ProjectAcquisitionAction(Icons.Default.FolderOpen, "Import existing folder") { addActionsExpanded = false; onImportFolder() }
+            ProjectAcquisitionAction(Icons.Default.Archive, "Import ZIP archive") { addActionsExpanded = false; onImportZip() }
+            ProjectAcquisitionAction(Icons.Default.MergeType, "Clone remote Git repository") { addActionsExpanded = false; onCloneGit() }
+        }
     }
+    }
+}
+
+@Composable
+private fun ProjectAcquisitionAction(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, onClick: () -> Unit) {
+    Card(onClick = onClick, colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+        Row(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            androidx.compose.material3.Icon(icon, contentDescription = label, tint = MaterialTheme.colorScheme.primary)
+            Text(label, style = MaterialTheme.typography.labelLarge)
+        }
     }
 }
 
@@ -275,13 +287,16 @@ private fun ProjectCard(
     var enteredDeleteCode by remember { mutableStateOf("") }
     var renameVisible by remember { mutableStateOf(false) }
     var renameValue by remember { mutableStateOf(project.name) }
-    Column(
-        Modifier.fillMaxWidth().combinedClickable(
+    Card(
+        modifier = Modifier.fillMaxWidth().combinedClickable(
             onClick = { if (selected) onToggleSelection(project.id) else onOpen(project.id) },
             onLongClick = { onToggleSelection(project.id) },
-        ).padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
+        ),
+        colors = CardDefaults.cardColors(
+            containerColor = if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surface,
+        ),
     ) {
+        Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Column(Modifier.weight(1f)) {
                 if (selected) Text("Selected", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelSmall)
@@ -304,18 +319,20 @@ private fun ProjectCard(
             DropdownMenuItem(text = { Text("Export or Share") }, onClick = { menuOpen = false; onExport(project.id) })
             DropdownMenuItem(text = { Text("Copy Storage Path") }, onClick = { menuOpen = false; onCopyPath(project.id) })
             DropdownMenuItem(text = { Text("Git Remote Details") }, onClick = { menuOpen = false; onDetails(project.id) })
+            HorizontalDivider()
             DropdownMenuItem(text = { Text("Open in Editor") }, onClick = { menuOpen = false; onOpen(project.id) })
             DropdownMenuItem(text = { Text("Open Git") }, onClick = { menuOpen = false; onFeedback("Open Git") })
             DropdownMenuItem(text = { Text("Open Terminal") }, onClick = { menuOpen = false; onFeedback("Open Terminal") })
             DropdownMenuItem(text = { Text("Open Browser or Preview") }, onClick = { menuOpen = false; onFeedback("Open Browser or Preview") })
-            DropdownMenuItem(text = { Text("Remove from Registry") }, onClick = { menuOpen = false; onSelect(project.id); confirmRemove = true })
-            DropdownMenuItem(text = { Text("Permanently Delete") }, onClick = { menuOpen = false; onSelect(project.id); deleteCode = Random.nextInt(100, 1000).toString(); enteredDeleteCode = ""; confirmDelete = true })
+            HorizontalDivider()
+            DropdownMenuItem(text = { Text("Remove from Registry", color = MaterialTheme.colorScheme.secondary) }, onClick = { menuOpen = false; onSelect(project.id); confirmRemove = true })
+            DropdownMenuItem(text = { Text("Permanently Delete", color = MaterialTheme.colorScheme.error) }, onClick = { menuOpen = false; onSelect(project.id); deleteCode = Random.nextInt(100, 1000).toString(); enteredDeleteCode = ""; confirmDelete = true })
         }
         if (confirmRemove) {
             AlertDialog(
                 onDismissRequest = { confirmRemove = false },
                 title = { Text("Remove project from registry?") },
-                text = { Text("${project.name} will be removed from Android IDE, but its files, Git data, and location will remain unchanged.\n\nLocation: ${project.location.userVisiblePath ?: project.location.displayLabel}") },
+                text = { Text("${project.name} will be removed from Android IDE, but its files, Git data, and location will remain unchanged.\n\nLocation: ${humanReadableStorageLocation(project.location.userVisiblePath ?: project.location.displayLabel)}") },
                 confirmButton = { Button(onClick = { confirmRemove = false; onRemove() }) { Text("Remove from Registry") } },
                 dismissButton = { TextButton(onClick = { confirmRemove = false }) { Text("Cancel") } },
             )
@@ -328,12 +345,12 @@ private fun ProjectCard(
                     Column {
                         Text("This permanently removes the project data from its selected storage location. This action cannot be undone.")
                         Text("Project: ${project.name}")
-                        Text("Location: ${project.location.userVisiblePath ?: project.location.displayLabel}")
+                        Text("Location: ${humanReadableStorageLocation(project.location.userVisiblePath ?: project.location.displayLabel)}")
                         Text("Type $deleteCode to confirm")
                         OutlinedTextField(enteredDeleteCode, { enteredDeleteCode = it }, label = { Text("Confirmation code") }, singleLine = true)
                     }
                 },
-                confirmButton = { Button(onClick = { confirmDelete = false; onDelete() }, enabled = enteredDeleteCode == deleteCode) { Text("Delete permanently") } },
+                confirmButton = { Button(onClick = { confirmDelete = false; onDelete() }, enabled = enteredDeleteCode == deleteCode, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)) { Text("Delete permanently") } },
                 dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Cancel") } },
             )
         }
@@ -347,6 +364,7 @@ private fun ProjectCard(
                 },
                 dismissButton = { TextButton(onClick = { renameVisible = false }) { Text("Cancel") } },
             )
+        }
         }
     }
 }
