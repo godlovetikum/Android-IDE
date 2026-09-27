@@ -354,7 +354,7 @@ private fun EditorWorkspace(
     DropdownMenu(expanded = moreOpen, onDismissRequest = { moreOpen = false }) {
         DropdownMenuItem(text = { Text("Save As") }, onClick = { moreOpen = false; ideViewModel.showSaveAsDialog() })
         DropdownMenuItem(text = { Text("Refresh project files") }, onClick = { moreOpen = false; ideViewModel.refreshProject() })
-        DropdownMenuItem(text = { Text("Close other tabs") }, onClick = { moreOpen = false; activeTab?.let(ideViewModel::closeOtherTabs) })
+        DropdownMenuItem(text = { Text("Close other tabs") }, onClick = { moreOpen = false; activeTab?.let { ideViewModel.closeOtherTabs(it.id) } })
         DropdownMenuItem(text = { Text("Copy file path") }, onClick = { moreOpen = false; activeTab?.let { ideViewModel.copyPathToClipboard(it.documentUri) } })
         DropdownMenuItem(text = { Text("Locate current file") }, onClick = { moreOpen = false; ideViewModel.revealActiveFile() })
         DropdownMenuItem(text = { Text("Editor settings") }, onClick = { moreOpen = false; onOpenSettings() })
