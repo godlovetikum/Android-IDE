@@ -16,7 +16,7 @@ class ProjectDetailsService(
     suspend fun load(projectId: String): ProjectDetailsResult {
         val identity = registry.listRegistered().firstOrNull { it.id == projectId }
             ?: return ProjectDetailsResult.Unavailable("Project is not registered")
-        val capabilities = storage.inspect(identity.location)
+        val capabilities = storage.inspectProjectStorage(identity.location)
         if (capabilities.state != CapabilityState.SUPPORTED) {
             return ProjectDetailsResult.Unavailable(
                 capabilities.explanation ?: "Project location is unavailable",
@@ -32,7 +32,6 @@ class ProjectDetailsService(
             uri = identity.location.userVisiblePath ?: identity.location.stableId,
             lastOpenedMs = identity.lastOpenedAt?.toEpochMilli() ?: identity.registeredAt.toEpochMilli(),
             createdMs = identity.registeredAt.toEpochMilli(),
-            locationKind = identity.location.kind,
             stableLocationId = identity.location.stableId,
             locationLabel = identity.location.displayLabel,
             capabilityState = capabilities.state,
@@ -48,6 +47,7 @@ class ProjectDetailsService(
                 fileCount = metadata.fileCount,
                 folderCount = metadata.folderCount,
                 totalBytes = metadata.totalBytes,
+                storageCapabilities = capabilities,
                 languageBytes = metadata.languageBytes,
                 git = metadata.git,
             ),

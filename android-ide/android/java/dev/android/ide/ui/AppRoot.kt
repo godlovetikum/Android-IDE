@@ -3,9 +3,9 @@ package dev.android.ide.ui
 import android.content.Intent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Column
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.Column
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -122,7 +122,7 @@ fun AppRoot(viewModel: AppShellViewModel, onExit: () -> Unit) {
             },
             onImportFolder = { openFolder.launch(null) },
             onImportZip = { openZip.launch(arrayOf("application/zip", "application/octet-stream")) },
-            onCloneGit = { feedback = "Clone Git repository is scheduled for phase 6." },
+            onCloneGit = { feedback = "Coming soon (phase 6): Git repository cloning is not currently wired." },
             onExportProject = { projectId -> pendingExportProjectId = projectId; exportReviewVisible = true },
             onExportProjects = { projectIds -> pendingBatchExportIds = projectIds; batchExportDestinationPicker.launch(null) },
             onDuplicateProject = { projectId ->
@@ -199,7 +199,11 @@ fun AppRoot(viewModel: AppShellViewModel, onExit: () -> Unit) {
                         shellState.folderInspection?.let { inspection ->
                             Text("Access: ${if (inspection.readable && inspection.writable) "Readable and writable" else "Unavailable"}")
                             Text("Registration: ${if (inspection.alreadyRegistered) "Already registered" else "Not registered"}")
-                            Text("Project containment: ${if (inspection.nestedInRegisteredProject) "Conflicts with a registered project" else "No registered-project conflict detected"}")
+                            Text("Project containment: ${when {
+                                !inspection.containmentVerified -> "Could not verify against every registered project"
+                                inspection.overlapsRegisteredProject -> "Overlaps a registered project"
+                                else -> "Verified clear"
+                            }}")
                             inspection.explanation?.let { Text(it) }
                         }
                         OutlinedTextField(folderName, { folderName = it }, label = { Text("Project name") }, singleLine = true)
@@ -215,7 +219,8 @@ fun AppRoot(viewModel: AppShellViewModel, onExit: () -> Unit) {
                             folderReviewVisible = false
                         }
                     }, enabled = folderName.isNotBlank() && shellState.folderInspection?.let {
-                        it.readable && it.writable && !it.alreadyRegistered && !it.nestedInRegisteredProject
+                        it.readable && it.writable && !it.alreadyRegistered &&
+                            it.containmentVerified && !it.overlapsRegisteredProject
                     } == true) { Text("Import project") }
                 },
                 dismissButton = { TextButton(onClick = { folderReviewVisible = false }) { Text("Cancel") } },

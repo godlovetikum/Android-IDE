@@ -19,6 +19,8 @@ package dev.android.ide.saf
 import android.content.Context
 import android.net.Uri
 import android.os.Build
+import android.os.Environment
+import android.os.FileObserver
 import android.provider.DocumentsContract
 import android.util.Log
 import org.json.JSONObject
@@ -28,9 +30,8 @@ import dev.android.ide.editor.EditorLanguageRegistry
 import dev.android.ide.editor.FileIconKind
 import dev.android.ide.contracts.ApplicationIdentity
 import dev.android.ide.contracts.CapabilityState
-import dev.android.ide.contracts.LocationCapabilities
+import dev.android.ide.contracts.ProjectStorageCapabilities
 import dev.android.ide.contracts.ProjectLocation
-import dev.android.ide.contracts.ProjectLocationKind
 import dev.android.ide.viewmodel.model.FileNode
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -42,13 +43,19 @@ import java.io.InputStream
 import java.io.OutputStream
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
+import java.nio.file.FileVisitResult
+import java.nio.file.LinkOption
+import java.nio.file.SimpleFileVisitor
+import java.nio.file.Path
 import java.nio.file.attribute.BasicFileAttributes
 import java.util.zip.InflaterInputStream
+import java.util.zip.CRC32
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
 sealed class ExactCreateResult {
     data class Created(val documentUri: String) : ExactCreateResult()
+    data class Partial(val documentUri: String, val recoveryHint: String) : ExactCreateResult()
     data object Duplicate : ExactCreateResult()
     data object InspectionFailed : ExactCreateResult()
     data object Failed : ExactCreateResult()
@@ -70,6 +77,12 @@ data class ZipExportResult(
     val fileCount: Int,
     val totalBytes: Long,
 )
+
+sealed interface StagedDocumentResult {
+    data class Staged(val file: File, val sizeBytes: Long) : StagedDocumentResult
+    data object TooLarge : StagedDocumentResult
+    data object Failed : StagedDocumentResult
+}
 
 enum class DocumentPresence {
     EXISTS,
@@ -115,79 +128,238 @@ class SafRepository(private val context: Context) {
         Uri.parse(uriString).path?.let { File(it) }
 
     /**
-     * Inspect the selected location without copying, probing, or modifying it.
-     * Only Android's local external-storage provider is accepted as a live
-     * user-visible project location; cloud providers remain import sources.
+     * Inspect the selected provider for project-file access. Terminal, Git,
+     * language-server, and other domain capabilities are assessed separately.
      */
-    suspend fun inspectProjectCapabilities(location: ProjectLocation): LocationCapabilities =
+    suspend fun inspectProjectStorage(location: ProjectLocation): ProjectStorageCapabilities =
         withContext(Dispatchers.IO) {
-            if (location.kind == ProjectLocationKind.PRIVATE_DEVELOPMENT_WORKSPACE) {
-                return@withContext LocationCapabilities(
-                    state = CapabilityState.UNAVAILABLE,
-                    readable = false,
-                    writable = false,
-                    canCreate = false,
-                    canRename = false,
-                    canDelete = false,
-                    canExecute = false,
-                    canObserveChanges = false,
-                    explanation = "The private development workspace is unavailable until the runtime is initialized",
-                )
-            }
-            if (isFileUri(location.stableId)) {
-                val root = fileFromUri(location.stableId)
-                val usable = root?.let { it.isDirectory && it.canRead() } == true
-                val writable = usable && root?.canWrite() == true
-                return@withContext LocationCapabilities(
-                    state = if (writable) CapabilityState.SUPPORTED else CapabilityState.UNAVAILABLE,
-                    readable = usable,
-                    writable = writable,
-                    canCreate = writable,
-                    canRename = writable,
-                    canDelete = writable,
-                    canExecute = usable,
-                    canObserveChanges = usable,
-                    explanation = if (usable) null else "The selected local project folder is unavailable",
-                )
-            }
+            if (isFileUri(location.stableId)) return@withContext inspectLocalFileCapabilities(location.stableId)
             val uri = Uri.parse(location.stableId)
-            if (uri.authority != "com.android.externalstorage.documents") {
-                return@withContext LocationCapabilities(
+            if (uri.scheme != "content" || uri.authority.isNullOrBlank()) {
+                return@withContext ProjectStorageCapabilities(
                     state = CapabilityState.UNSUPPORTED,
                     readable = false,
                     writable = false,
                     canCreate = false,
                     canRename = false,
                     canDelete = false,
-                    canExecute = false,
                     canObserveChanges = false,
-                    explanation = "Cloud or remote locations must be imported into local storage before editing",
+                    explanation = "The selected location is not a supported file or document-provider URI",
                 )
             }
-            when (inspectChildren(location.stableId)) {
-                is ChildrenInspectionResult.Success -> LocationCapabilities(
-                    state = CapabilityState.SUPPORTED,
-                    readable = true,
-                    writable = true,
-                    canCreate = true,
-                    canRename = true,
-                    canDelete = true,
-                    canExecute = false,
-                    canObserveChanges = false,
-                )
-                is ChildrenInspectionResult.Failed -> LocationCapabilities(
-                    state = CapabilityState.PERMISSION_LOST,
-                    readable = false,
-                    writable = false,
-                    canCreate = false,
-                    canRename = false,
-                    canDelete = false,
-                    canExecute = false,
-                    canObserveChanges = false,
-                    explanation = "Android no longer grants access to the selected project folder",
-                )
+            val rootUri = mutationDocumentUri(location.stableId).toString()
+            val flags = queryLongColumn(rootUri, DocumentsContract.Document.COLUMN_FLAGS)?.toInt()
+                ?: return@withContext permissionLostCapabilities("Android could not inspect the selected project folder")
+            val listing = inspectChildren(location.stableId)
+            if (listing !is ChildrenInspectionResult.Success) {
+                return@withContext permissionLostCapabilities("Android no longer grants access to the selected project folder")
+            }
+            val localObservation = if (uri.authority == "com.android.externalstorage.documents") {
+                localFileForExternalDocument(location.stableId)?.let(::localFileCapabilities)
+            } else {
+                null
+            }
+            val providerWritable = (flags and (
+                DocumentsContract.Document.FLAG_SUPPORTS_WRITE or
+                    DocumentsContract.Document.FLAG_DIR_SUPPORTS_CREATE
+                )) != 0
+            // A successful directory listing proves provider read access. Do not
+            // require a POSIX path mapping here: SAF remains authoritative for
+            // project/editor operations even when a terminal cannot use it.
+            val providerReadable = true
+            val providerReady = providerReadable && providerWritable
+            ProjectStorageCapabilities(
+                state = if (providerReady) CapabilityState.SUPPORTED else CapabilityState.UNSUPPORTED,
+                readable = providerReadable,
+                writable = providerWritable,
+                canCreate = flags and DocumentsContract.Document.FLAG_DIR_SUPPORTS_CREATE != 0,
+                canRename = flags and DocumentsContract.Document.FLAG_SUPPORTS_RENAME != 0,
+                canDelete = flags and DocumentsContract.Document.FLAG_SUPPORTS_DELETE != 0,
+                canObserveChanges = localObservation?.observed == true,
+                explanation = when {
+                    !providerReadable -> "The selected project location cannot currently be read"
+                    !providerWritable -> "The selected project location cannot currently be written"
+                    localObservation?.observed != true -> "Project files are accessible, but automatic change observation is unavailable"
+                    else -> null
+                },
+            )
+        }
+
+    private data class LocalCapabilities(
+        val readable: Boolean,
+        val writable: Boolean,
+        val observed: Boolean,
+    )
+
+    private suspend fun inspectLocalFileCapabilities(uri: String): ProjectStorageCapabilities {
+        val selectedRoot = fileFromUri(uri)
+        if (selectedRoot != null && Files.isSymbolicLink(selectedRoot.toPath())) {
+            return unsupportedCapabilities("A symbolic link cannot be registered as a project root")
+        }
+        val root = selectedRoot?.canonicalFile
+            ?: return permissionLostCapabilities("The selected local project folder is unavailable")
+        val local = localFileCapabilities(root)
+        val providerReady = root.isDirectory && local.readable && local.writable
+        return ProjectStorageCapabilities(
+            state = if (providerReady) CapabilityState.SUPPORTED else CapabilityState.UNSUPPORTED,
+            readable = local.readable,
+            writable = local.writable,
+            canCreate = local.writable,
+            canRename = local.writable,
+            canDelete = local.writable,
+            canObserveChanges = local.observed,
+            explanation = when {
+                !root.isDirectory || !local.readable -> "The selected project folder cannot currently be read"
+                !local.writable -> "The selected project folder cannot currently be written"
+                !local.observed -> "Project files are accessible, but automatic external-change observation is unavailable"
+                else -> null
+            },
+        )
+    }
+
+    private fun localFileCapabilities(root: File): LocalCapabilities {
+        val directory = root.isDirectory
+        val readable = directory && root.canRead()
+        val writable = directory && root.canWrite()
+        val observed = readable && canObserveRecursively(root)
+        return LocalCapabilities(readable, writable, observed)
+    }
+
+    private fun canObserveRecursively(root: File): Boolean {
+        val observation = observeLocalTree(root) {} ?: return false
+        return runCatching { observation.close(); true }.getOrDefault(false)
+    }
+
+    private fun observeLocalTree(root: File, onChanged: (String) -> Unit): AutoCloseable? {
+        val canonicalRoot = runCatching { root.canonicalFile }.getOrNull() ?: return null
+        if (!canonicalRoot.isDirectory || !canonicalRoot.canRead()) return null
+        val watchers = linkedMapOf<String, FileObserver>()
+        val lock = Any()
+        lateinit var addDirectory: (File) -> Unit
+        fun removeTree(directory: File) {
+            val path = runCatching { directory.canonicalPath }.getOrNull() ?: return
+            val removed = synchronized(lock) {
+                watchers.keys.filter { it == path || it.startsWith(path + File.separator) }.mapNotNull { key ->
+                    watchers.remove(key)
+                }
+            }
+            removed.forEach { it.stopWatching() }
+        }
+        addDirectory = { candidate ->
+            val directory = runCatching { candidate.canonicalFile }.getOrNull()
+            if (directory != null && directory.isDirectory && directory.canRead() &&
+                runCatching { directory.toPath().startsWith(canonicalRoot.toPath()) }.getOrDefault(false)
+            ) {
+                val path = directory.path
+                val shouldAdd = synchronized(lock) { path !in watchers }
+                if (shouldAdd) {
+                    val observer = object : FileObserver(
+                        path,
+                        CLOSE_WRITE or CREATE or DELETE or MOVED_FROM or MOVED_TO or MODIFY,
+                    ) {
+                        override fun onEvent(event: Int, eventPath: String?) {
+                            if (eventPath == null) return
+                            val child = File(directory, eventPath)
+                            val childPath = runCatching { child.canonicalPath }.getOrNull() ?: return
+                            if (childPath != canonicalRoot.path && !childPath.startsWith(canonicalRoot.path + File.separator)) return
+                            val relative = childPath.removePrefix(canonicalRoot.path)
+                                .trimStart(File.separatorChar).replace(File.separatorChar, '/')
+                            onChanged(relative)
+                            if (event and (CREATE or MOVED_TO) != 0 && child.isDirectory) addDirectory(child)
+                            if (event and (DELETE or MOVED_FROM) != 0 && watchers.containsKey(childPath)) removeTree(child)
+                        }
+                    }
+                    synchronized(lock) {
+                        if (path !in watchers) {
+                            watchers[path] = observer
+                            observer.startWatching()
+                        } else observer.stopWatching()
+                    }
+                }
+                directory.listFiles()?.filter { it.isDirectory }?.forEach(addDirectory)
             }
         }
+        return try {
+            addDirectory(canonicalRoot)
+            if (synchronized(lock) { watchers.isEmpty() }) return null
+            AutoCloseable {
+                val all = synchronized(lock) { watchers.values.toList().also { watchers.clear() } }
+                all.forEach { it.stopWatching() }
+            }
+        } catch (_: Exception) {
+            val all = synchronized(lock) { watchers.values.toList().also { watchers.clear() } }
+            all.forEach { it.stopWatching() }
+            null
+        }
+    }
+
+    private fun localFileForExternalDocument(uriString: String): File? = runCatching {
+        val documentId = if (DocumentsContract.isTreeUri(Uri.parse(uriString))) {
+            DocumentsContract.getTreeDocumentId(Uri.parse(uriString))
+        } else {
+            DocumentsContract.getDocumentId(Uri.parse(uriString))
+        }
+        val volumeId = documentId.substringBefore(':')
+        val relative = Uri.decode(documentId.substringAfter(':', ""))
+        val volumeRoot = if (volumeId.equals("primary", ignoreCase = true)) {
+            Environment.getExternalStorageDirectory()
+        } else {
+            val marker = "/Android/data/${context.packageName}/files"
+            context.getExternalFilesDirs(null).filterNotNull().firstNotNullOfOrNull { externalFiles ->
+                val path = externalFiles.canonicalPath
+                val index = path.indexOf(marker)
+                if (index < 0) null else File(path.substring(0, index)).takeIf {
+                    it.name.equals(volumeId, ignoreCase = true)
+                }
+            }
+        } ?: return null
+        val canonicalRoot = volumeRoot.canonicalFile
+        val candidate = File(canonicalRoot, relative).canonicalFile
+        candidate.takeIf { it.toPath().startsWith(canonicalRoot.toPath()) }
+    }.getOrNull()
+
+    suspend fun observeProjectChanges(
+        rootUriString: String,
+        listener: (String) -> Unit,
+    ): AutoCloseable? = withContext(Dispatchers.IO) {
+        val root = if (isFileUri(rootUriString)) {
+            fileFromUri(rootUriString)
+        } else if (Uri.parse(rootUriString).authority == "com.android.externalstorage.documents") {
+            localFileForExternalDocument(rootUriString)
+        } else null
+        root?.let { observeLocalTree(it, listener) }
+    }
+
+    fun localFilesystemPath(uriString: String): String? = runCatching {
+        val file = if (isFileUri(uriString)) {
+            fileFromUri(uriString)
+        } else if (Uri.parse(uriString).authority == "com.android.externalstorage.documents") {
+            localFileForExternalDocument(uriString)
+        } else null
+        file?.canonicalPath
+    }.getOrNull()
+
+    private fun unsupportedCapabilities(message: String) = ProjectStorageCapabilities(
+        state = CapabilityState.UNSUPPORTED,
+        readable = false,
+        writable = false,
+        canCreate = false,
+        canRename = false,
+        canDelete = false,
+        canObserveChanges = false,
+        explanation = message,
+    )
+
+    private fun permissionLostCapabilities(message: String) = ProjectStorageCapabilities(
+        state = CapabilityState.PERMISSION_LOST,
+        readable = false,
+        writable = false,
+        canCreate = false,
+        canRename = false,
+        canDelete = false,
+        canObserveChanges = false,
+        explanation = message,
+    )
 
     // ── Directory listing ──────────────────────────────────────────────────
 
@@ -272,8 +444,9 @@ class SafRepository(private val context: Context) {
     private fun listChildrenFile(parentUriString: String): List<FileNode> {
         return try {
             val dir = fileFromUri(parentUriString) ?: return emptyList()
-            if (!dir.isDirectory) return emptyList()
-            (dir.listFiles() ?: return emptyList()).map { file ->
+            if (Files.isSymbolicLink(dir.toPath()) || !dir.isDirectory) return emptyList()
+            (dir.listFiles() ?: return emptyList()).mapNotNull { file ->
+                if (Files.isSymbolicLink(file.toPath())) return@mapNotNull null
                 FileNode(
                     documentUri       = Uri.fromFile(file).toString(),
                     displayName       = file.name,
@@ -295,9 +468,12 @@ class SafRepository(private val context: Context) {
         return try {
             val dir = fileFromUri(parentUriString)
                 ?: return ChildrenInspectionResult.Failed("Invalid file URI")
-            if (!dir.isDirectory) return ChildrenInspectionResult.Failed("Parent is not a directory")
+            if (Files.isSymbolicLink(dir.toPath()) || !dir.isDirectory) {
+                return ChildrenInspectionResult.Failed("Parent is not a safe directory")
+            }
             val files = dir.listFiles() ?: return ChildrenInspectionResult.Failed("Directory listing failed")
-            ChildrenInspectionResult.Success(files.map { file ->
+            ChildrenInspectionResult.Success(files.mapNotNull { file ->
+                if (Files.isSymbolicLink(file.toPath())) return@mapNotNull null
                 FileNode(
                     documentUri = Uri.fromFile(file).toString(),
                     displayName = file.name,
@@ -324,7 +500,9 @@ class SafRepository(private val context: Context) {
     suspend fun readFile(documentUriString: String): ByteArray? = withContext(Dispatchers.IO) {
         try {
             if (isFileUri(documentUriString)) {
-                fileFromUri(documentUriString)?.readBytes()
+                fileFromUri(documentUriString)
+                    ?.takeUnless { Files.isSymbolicLink(it.toPath()) }
+                    ?.readBytes()
             } else {
                 resolver.openInputStream(Uri.parse(documentUriString))?.use { stream ->
                     stream.readAllBytesCompat()
@@ -336,6 +514,91 @@ class SafRepository(private val context: Context) {
         } catch (e: Exception) {
             Log.e(TAG, "readFile failed for $documentUriString: ${e.message}", e)
             null
+        }
+    }
+
+    /** Stage a selected document to app-private cache with a strict byte ceiling. */
+    suspend fun stageDocumentBounded(documentUriString: String, maxBytes: Long): StagedDocumentResult =
+        withContext(Dispatchers.IO) {
+            if (maxBytes < 0L) return@withContext StagedDocumentResult.Failed
+            val staged = runCatching { File.createTempFile("android-ide-import-", ".zip", context.cacheDir) }
+                .getOrNull() ?: return@withContext StagedDocumentResult.Failed
+            try {
+                val input = openInputStream(documentUriString) ?: run {
+                    staged.delete()
+                    return@withContext StagedDocumentResult.Failed
+                }
+                var total = 0L
+                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                input.use { source ->
+                    staged.outputStream().buffered().use { output ->
+                        while (true) {
+                            val count = source.read(buffer)
+                            if (count < 0) break
+                            total += count
+                            if (total > maxBytes) {
+                                output.flush()
+                                staged.delete()
+                                return@withContext StagedDocumentResult.TooLarge
+                            }
+                            output.write(buffer, 0, count)
+                        }
+                        output.flush()
+                    }
+                }
+                StagedDocumentResult.Staged(staged, total)
+            } catch (error: Exception) {
+                staged.delete()
+                Log.e(TAG, "stageDocumentBounded failed: ${error.message}", error)
+                StagedDocumentResult.Failed
+            }
+        }
+
+    /** Stream an entry into a new document, then verify size and CRC from the provider. */
+    suspend fun writeDocumentFromStreamVerified(
+        documentUriString: String,
+        input: InputStream,
+        maxBytes: Long,
+        expectedBytes: Long,
+    ): Boolean = withContext(Dispatchers.IO) {
+        try {
+            var written = 0L
+            val writeCrc = CRC32()
+            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+            val output = if (isFileUri(documentUriString)) {
+                fileFromUri(documentUriString)
+                    ?.takeUnless { Files.isSymbolicLink(it.toPath()) }
+                    ?.outputStream()
+            } else {
+                resolver.openOutputStream(Uri.parse(documentUriString), "wt")
+            } ?: return@withContext false
+            output.use { sink ->
+                while (true) {
+                    val count = input.read(buffer)
+                    if (count < 0) break
+                    written += count
+                    if (written > maxBytes) return@withContext false
+                    writeCrc.update(buffer, 0, count)
+                    sink.write(buffer, 0, count)
+                }
+                sink.flush()
+            }
+            var verifiedBytes = 0L
+            val readCrc = CRC32()
+            val verifyInput = openInputStream(documentUriString) ?: return@withContext false
+            verifyInput.use { source ->
+                while (true) {
+                    val count = source.read(buffer)
+                    if (count < 0) break
+                    verifiedBytes += count
+                    if (verifiedBytes > maxBytes) return@withContext false
+                    readCrc.update(buffer, 0, count)
+                }
+            }
+            written == expectedBytes && written == verifiedBytes && writeCrc.value == readCrc.value
+        } catch (error: Exception) {
+            Log.e(TAG, "writeDocumentFromStreamVerified failed for $documentUriString: ${error.message}", error)
+            false
         }
     }
 
@@ -352,6 +615,7 @@ class SafRepository(private val context: Context) {
         try {
             if (isFileUri(documentUriString)) {
                 val file = fileFromUri(documentUriString) ?: return@withContext false
+                if (Files.isSymbolicLink(file.toPath())) return@withContext false
                 file.parentFile?.mkdirs()
                 file.writeBytes(data)
                 true
@@ -386,14 +650,17 @@ class SafRepository(private val context: Context) {
         displayName: String,
         mimeType: String,
     ): String? = withContext(Dispatchers.IO) {
+        if (!isValidLeafName(displayName)) return@withContext null
         try {
             if (isFileUri(parentUriString)) {
-                val parentDir = fileFromUri(parentUriString) ?: return@withContext null
-                val newFile = File(parentDir, displayName)
+                val parentDir = fileFromUri(parentUriString)?.canonicalFile ?: return@withContext null
+                if (!parentDir.isDirectory) return@withContext null
+                val newFile = File(parentDir, displayName).canonicalFile
+                if (newFile.parentFile != parentDir) return@withContext null
+                if (Files.exists(newFile.toPath(), LinkOption.NOFOLLOW_LINKS)) return@withContext null
                 val success = if (mimeType == MIME_DIR) {
-                    newFile.mkdirs()
+                    newFile.mkdir()
                 } else {
-                    newFile.parentFile?.mkdirs()
                     newFile.createNewFile()
                 }
                 if (success) Uri.fromFile(newFile).toString() else null
@@ -425,6 +692,7 @@ class SafRepository(private val context: Context) {
         displayName: String,
         mimeType: String,
     ): ExactCreateResult = withContext(Dispatchers.IO) {
+        if (!isValidLeafName(displayName)) return@withContext ExactCreateResult.Failed
         val existing = (inspectChildren(parentUriString) as? ChildrenInspectionResult.Success)?.children
             ?: return@withContext ExactCreateResult.InspectionFailed
         if (existing.any { existingNode ->
@@ -437,28 +705,45 @@ class SafRepository(private val context: Context) {
         val createdUri = createFile(parentUriString, displayName, mimeType)
             ?: return@withContext ExactCreateResult.Failed
         val createdName = getDisplayName(createdUri)
-        val siblingsAfterCreate = (inspectChildren(parentUriString) as? ChildrenInspectionResult.Success)?.children
-            ?: run {
-                return@withContext ExactCreateResult.InspectionFailed
-            }
+        val siblingsAfterCreate = when (val inspection = inspectChildren(parentUriString)) {
+            is ChildrenInspectionResult.Success -> inspection.children
+            is ChildrenInspectionResult.Failed -> return@withContext cleanupCreatedEntry(
+                createdUri,
+                ExactCreateResult.InspectionFailed,
+            )
+        }
         val siblingConflict = siblingsAfterCreate.any {
             it.documentUri != createdUri &&
                 namesMatchExactly(it.displayName, displayName) &&
                 conflictsWithRequestedEntry(it, mimeType)
         }
         if (createdName == null) {
-            return@withContext ExactCreateResult.InspectionFailed
+            return@withContext cleanupCreatedEntry(createdUri, ExactCreateResult.InspectionFailed)
         }
         if (createdName != displayName || siblingConflict) {
-            deleteDocument(createdUri)
-            return@withContext ExactCreateResult.Duplicate
+            return@withContext cleanupCreatedEntry(createdUri, ExactCreateResult.Duplicate)
         }
         ExactCreateResult.Created(createdUri)
     }
 
+    private suspend fun cleanupCreatedEntry(uri: String, cleanResult: ExactCreateResult): ExactCreateResult =
+        if (run {
+                deleteDocument(uri)
+                documentPresence(uri) == DocumentPresence.ABSENT
+            }
+        ) cleanResult
+        else ExactCreateResult.Partial(
+            uri,
+            "The provider created an unexpected item that could not be removed; inspect the destination before retrying",
+        )
+
     /** File names are compared as complete names; prefixes such as `.env` and `.env.example` never match. */
     private fun namesMatchExactly(existingName: String, requestedName: String): Boolean =
         existingName.equals(requestedName, ignoreCase = true)
+
+    private fun isValidLeafName(name: String): Boolean =
+        name.isNotBlank() && name != "." && name != ".." &&
+            '/' !in name && '\\' !in name && !name.any(Char::isISOControl)
 
     /**
      * Files and folders share the same provider namespace, but folder creation
@@ -542,6 +827,11 @@ class SafRepository(private val context: Context) {
                     SafeMutationResult.Failed
                 }
             }
+            is ExactCreateResult.Partial -> SafeMutationResult.Partial(
+                sourceUriString,
+                created.documentUri,
+                created.recoveryHint,
+            )
             ExactCreateResult.Duplicate -> SafeMutationResult.Duplicate
             ExactCreateResult.InspectionFailed -> SafeMutationResult.InspectionFailed
             ExactCreateResult.Failed -> SafeMutationResult.Failed
@@ -648,14 +938,18 @@ class SafRepository(private val context: Context) {
 
     private fun openInputStream(documentUriString: String): InputStream? =
         if (isFileUri(documentUriString)) {
-            fileFromUri(documentUriString)?.inputStream()
+            fileFromUri(documentUriString)
+                ?.takeUnless { Files.isSymbolicLink(it.toPath()) }
+                ?.inputStream()
         } else {
             resolver.openInputStream(Uri.parse(documentUriString))
         }
 
     private fun openOutputStream(documentUriString: String): OutputStream? =
         if (isFileUri(documentUriString)) {
-            fileFromUri(documentUriString)?.outputStream()
+            fileFromUri(documentUriString)
+                ?.takeUnless { Files.isSymbolicLink(it.toPath()) }
+                ?.outputStream()
         } else {
             resolver.openOutputStream(Uri.parse(documentUriString), "w")
         }
@@ -842,15 +1136,23 @@ class SafRepository(private val context: Context) {
         rootUriString: String,
         candidateUriString: String,
     ): Boolean? = withContext(Dispatchers.IO) {
-        if (isFileUri(rootUriString) && isFileUri(candidateUriString)) {
-            val root = fileFromUri(rootUriString)?.canonicalFile ?: return@withContext null
-            val candidate = fileFromUri(candidateUriString)?.canonicalFile ?: return@withContext null
+        val rootPath = localFilesystemPath(rootUriString)
+        val candidatePath = localFilesystemPath(candidateUriString)
+        if (rootPath != null && candidatePath != null) {
+            val root = runCatching { File(rootPath).canonicalFile }.getOrNull() ?: return@withContext null
+            val candidate = runCatching { File(candidatePath).canonicalFile }.getOrNull() ?: return@withContext null
             return@withContext candidate == root || candidate.toPath().startsWith(root.toPath())
+        }
+        val rootUri = Uri.parse(rootUriString)
+        val candidateUri = Uri.parse(candidateUriString)
+        if (rootUri.scheme != candidateUri.scheme || rootUri.authority != candidateUri.authority) {
+            return@withContext false
         }
 
         fun identity(uriString: String): String? = runCatching {
             val uri = Uri.parse(uriString)
-            if (DocumentsContract.isTreeUri(uri)) {
+            val authority = uri.authority ?: return@runCatching null
+            val documentId = if (DocumentsContract.isTreeUri(uri)) {
                 if (uri.pathSegments.contains("document")) {
                     DocumentsContract.getDocumentId(uri)
                 } else {
@@ -859,11 +1161,15 @@ class SafRepository(private val context: Context) {
             } else {
                 DocumentsContract.getDocumentId(uri)
             }
+            "$authority:$documentId"
         }.getOrNull()
 
         val candidateIdentity = identity(candidateUriString) ?: return@withContext null
+        val visited = mutableSetOf<String>()
         suspend fun contains(directoryUri: String): Boolean? {
-            if (identity(directoryUri) == candidateIdentity) return true
+            val directoryIdentity = identity(directoryUri) ?: return null
+            if (!visited.add(directoryIdentity)) return false
+            if (directoryIdentity == candidateIdentity) return true
             val children = when (val inspection = inspectChildren(directoryUri)) {
                 is ChildrenInspectionResult.Success -> inspection.children
                 is ChildrenInspectionResult.Failed -> return null
@@ -907,18 +1213,29 @@ class SafRepository(private val context: Context) {
                         is ChildrenInspectionResult.Failed -> return false
                     }
                     for (child in children) {
-                        val entryName = prefix + child.displayName
+                        val name = child.displayName
+                        if (!isValidLeafName(name) ||
+                            (prefix.isEmpty() && Regex("^[A-Za-z]:").containsMatchIn(name))
+                        ) return false
+                        val entryName = prefix + name
                         if (child.isDirectory) {
                             zip.putNextEntry(ZipEntry("$entryName/"))
                             zip.closeEntry()
                             if (!addDirectory(child.documentUri, "$entryName/")) return false
                         } else {
-                            val bytes = readFile(child.documentUri) ?: return false
                             zip.putNextEntry(ZipEntry(entryName))
-                            zip.write(bytes)
+                            val input = openInputStream(child.documentUri) ?: return false
+                            input.buffered().use { source ->
+                                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                                while (true) {
+                                    val count = source.read(buffer)
+                                    if (count < 0) break
+                                    zip.write(buffer, 0, count)
+                                    totalBytes += count.toLong()
+                                }
+                            }
                             zip.closeEntry()
                             fileCount++
-                            totalBytes += bytes.size.toLong()
                         }
                     }
                     return true
@@ -1110,6 +1427,7 @@ class SafRepository(private val context: Context) {
             MIME_DIR,
         )) {
             is ExactCreateResult.Created -> created.documentUri
+            is ExactCreateResult.Partial -> return SafeMutationResult.Partial(sourceUriString, created.documentUri, created.recoveryHint)
             ExactCreateResult.Duplicate -> return SafeMutationResult.Duplicate
             ExactCreateResult.InspectionFailed -> return SafeMutationResult.InspectionFailed
             ExactCreateResult.Failed -> return SafeMutationResult.Failed
@@ -1117,25 +1435,36 @@ class SafRepository(private val context: Context) {
         val children = when (val inspection = inspectChildren(sourceUriString)) {
             is ChildrenInspectionResult.Success -> inspection.children
             is ChildrenInspectionResult.Failed -> {
-                deleteDocument(createdRoot)
-                return SafeMutationResult.InspectionFailed
+                return cleanupCreatedCopy(sourceUriString, createdRoot, SafeMutationResult.InspectionFailed)
             }
         }
         for (child in children) {
             when (copyDocumentWithExactName(child.documentUri, createdRoot)) {
                 is SafeMutationResult.Created -> Unit
                 else -> {
-                    deleteDocument(createdRoot)
-                    return SafeMutationResult.Failed
+                    return cleanupCreatedCopy(sourceUriString, createdRoot, SafeMutationResult.Failed)
                 }
             }
         }
         return if (verifyDocument(sourceUriString, createdRoot)) {
             SafeMutationResult.Created(createdRoot)
         } else {
-            deleteDocument(createdRoot)
-            SafeMutationResult.Failed
+            cleanupCreatedCopy(sourceUriString, createdRoot, SafeMutationResult.Failed)
         }
+    }
+
+    private suspend fun cleanupCreatedCopy(
+        sourceUri: String,
+        destinationUri: String,
+        cleanResult: SafeMutationResult,
+    ): SafeMutationResult {
+        deleteDocument(destinationUri)
+        return if (documentPresence(destinationUri) == DocumentPresence.ABSENT) cleanResult
+        else SafeMutationResult.Partial(
+            sourceUri,
+            destinationUri,
+            "The source remains unchanged; inspect and remove the incomplete destination before retrying",
+        )
     }
 
     suspend fun moveDocumentWithExactName(
@@ -1211,16 +1540,28 @@ class SafRepository(private val context: Context) {
             }
         val movedName = getDisplayName(moved)
         if (movedName != name || documentExistsIn(sourceParentUriString, sourceUriString)) {
-            return@withContext SafeMutationResult.Failed
+            val restored = moveDocument(moved, targetParentUriString, sourceParentUriString)
+            return@withContext if (
+                restored != null && getDisplayName(restored) == name &&
+                documentExistsInVerified(sourceParentUriString, restored) == true &&
+                documentExistsInVerified(targetParentUriString, moved) == false
+            ) SafeMutationResult.Failed else SafeMutationResult.Partial(
+                sourceUriString,
+                moved,
+                "The move result could not be verified or restored; inspect both source and destination folders",
+            )
         }
         SafeMutationResult.Created(moved)
     }
 
     private suspend fun documentExistsIn(parentUriString: String, documentUriString: String): Boolean =
-        (inspectChildren(parentUriString) as? ChildrenInspectionResult.Success)
-            ?.children
-            ?.any { it.documentUri == documentUriString }
-            ?: true
+        documentExistsInVerified(parentUriString, documentUriString) ?: true
+
+    private suspend fun documentExistsInVerified(parentUriString: String, documentUriString: String): Boolean? =
+        when (val inspection = inspectChildren(parentUriString)) {
+            is ChildrenInspectionResult.Success -> inspection.children.any { it.documentUri == documentUriString }
+            is ChildrenInspectionResult.Failed -> null
+        }
 
     suspend fun moveAndRenameDocumentWithExactName(
         sourceUriString: String,
@@ -1244,7 +1585,14 @@ class SafRepository(private val context: Context) {
             return@withContext if (getDisplayName(renamed) == newName) {
                 SafeMutationResult.Created(renamed)
             } else {
-                SafeMutationResult.Failed
+                val restored = renameDocument(renamed, originalName)
+                if (restored != null && getDisplayName(restored) == originalName &&
+                    documentExistsInVerified(sourceParentUriString, restored) == true
+                ) SafeMutationResult.Failed else SafeMutationResult.Partial(
+                    sourceUriString,
+                    renamed,
+                    "The rename result could not be verified or restored; inspect the project folder",
+                )
             }
         }
 
@@ -1252,15 +1600,28 @@ class SafRepository(private val context: Context) {
             ?: return@withContext SafeMutationResult.Failed
         val renamed = renameDocument(moved, newName)
             ?: run {
-                moveDocument(moved, targetParentUriString, sourceParentUriString)
-                return@withContext SafeMutationResult.Failed
+                val restored = moveDocument(moved, targetParentUriString, sourceParentUriString)
+                return@withContext if (restored != null && getDisplayName(restored) == originalName &&
+                    !documentExistsIn(targetParentUriString, moved)
+                ) SafeMutationResult.Failed else SafeMutationResult.Partial(
+                    sourceUriString,
+                    moved,
+                    "The item may remain in the destination under its original name; inspect both folders before retrying",
+                )
             }
-        if (getDisplayName(renamed) == newName) {
+        if (getDisplayName(renamed) == newName && !documentExistsIn(sourceParentUriString, sourceUriString)) {
             SafeMutationResult.Created(renamed)
         } else {
             val restored = renameDocument(renamed, originalName)
-            if (restored != null) moveDocument(restored, targetParentUriString, sourceParentUriString)
-            SafeMutationResult.Failed
+            val returned = restored?.let { moveDocument(it, targetParentUriString, sourceParentUriString) }
+            if (returned != null && getDisplayName(returned) == originalName &&
+                documentExistsInVerified(sourceParentUriString, returned) == true &&
+                documentExistsInVerified(targetParentUriString, renamed) == false
+            ) SafeMutationResult.Failed else SafeMutationResult.Partial(
+                sourceUriString,
+                renamed,
+                "Rename rollback could not be verified; inspect both folders before retrying",
+            )
         }
     }
 
@@ -1344,7 +1705,22 @@ class SafRepository(private val context: Context) {
         try {
             if (isFileUri(documentUriString)) {
                 val file = fileFromUri(documentUriString) ?: return@withContext false
-                if (!file.deleteRecursively()) return@withContext false
+                if (Files.isSymbolicLink(file.toPath())) {
+                    Files.delete(file.toPath())
+                    return@withContext !Files.exists(file.toPath(), LinkOption.NOFOLLOW_LINKS)
+                }
+                Files.walkFileTree(file.toPath(), object : SimpleFileVisitor<Path>() {
+                    override fun visitFile(file: Path, attrs: BasicFileAttributes): FileVisitResult {
+                        Files.delete(file)
+                        return FileVisitResult.CONTINUE
+                    }
+
+                    override fun postVisitDirectory(dir: Path, error: IOException?): FileVisitResult {
+                        if (error != null) throw error
+                        Files.delete(dir)
+                        return FileVisitResult.CONTINUE
+                    }
+                })
                 return@withContext !file.exists()
             }
 
@@ -1406,10 +1782,13 @@ class SafRepository(private val context: Context) {
      */
     suspend fun renameDocument(documentUriString: String, newDisplayName: String): String? =
         withContext(Dispatchers.IO) {
+            if (!isValidLeafName(newDisplayName)) return@withContext null
             try {
                 if (isFileUri(documentUriString)) {
                     val file = fileFromUri(documentUriString) ?: return@withContext null
-                    val newFile = File(file.parent ?: return@withContext null, newDisplayName)
+                    val parent = file.parentFile?.canonicalFile ?: return@withContext null
+                    val newFile = File(parent, newDisplayName).canonicalFile
+                    if (newFile.parentFile != parent) return@withContext null
                     if (file.renameTo(newFile)) Uri.fromFile(newFile).toString() else null
                 } else {
                     DocumentsContract.renameDocument(
@@ -1550,7 +1929,9 @@ class SafRepository(private val context: Context) {
         treeUriString: String,
         segments: List<String>,
     ): PathResolutionResult = withContext(Dispatchers.IO) {
-        if (segments.isEmpty()) return@withContext PathResolutionResult.EmptyPath
+        if (segments.isEmpty() || segments.any { !isValidLeafName(it) }) {
+            return@withContext PathResolutionResult.EmptyPath
+        }
 
         var currentUri = treeUriString
         val created = mutableListOf<String>()
@@ -1565,6 +1946,9 @@ class SafRepository(private val context: Context) {
                 if (!matching.isDirectory) {
                     return@withContext PathResolutionResult.BlockedByFile(created.toList())
                 }
+                if (isSameOrDescendant(treeUriString, matching.documentUri) != true) {
+                    return@withContext PathResolutionResult.BlockedByFile(created.toList())
+                }
                 currentUri = matching.documentUri
                 continue
             }
@@ -1576,14 +1960,22 @@ class SafRepository(private val context: Context) {
                             it.documentUri == result.documentUri
                         }
                         is ChildrenInspectionResult.Failed -> {
-                            return@withContext PathResolutionResult.IntermediateNameMismatch(created.toList())
+                            deleteDocument(result.documentUri)
+                            val absent = documentPresence(result.documentUri) == DocumentPresence.ABSENT
+                            return@withContext PathResolutionResult.IntermediateNameMismatch(
+                                if (absent) created.toList() else created + result.documentUri,
+                            )
                         }
                     }
                     if (createdNode == null || !createdNode.isDirectory ||
-                        !createdNode.displayName.equals(segment, ignoreCase = false)
+                        !createdNode.displayName.equals(segment, ignoreCase = false) ||
+                        isSameOrDescendant(treeUriString, result.documentUri) != true
                     ) {
-                        deleteDocument(result.documentUri)
-                        return@withContext PathResolutionResult.IntermediateNameMismatch(created.toList())
+                        val deleted = deleteDocument(result.documentUri) &&
+                            documentPresence(result.documentUri) == DocumentPresence.ABSENT
+                        return@withContext PathResolutionResult.IntermediateNameMismatch(
+                            if (deleted) created.toList() else created + result.documentUri,
+                        )
                     }
                     created += result.documentUri
                     currentUri = result.documentUri
@@ -1596,6 +1988,9 @@ class SafRepository(private val context: Context) {
                 }
                 ExactCreateResult.Failed -> {
                     return@withContext PathResolutionResult.IntermediateCreationFailed(created.toList())
+                }
+                is ExactCreateResult.Partial -> {
+                    return@withContext PathResolutionResult.IntermediateNameMismatch(created + result.documentUri)
                 }
             }
         }
@@ -1613,7 +2008,12 @@ class SafRepository(private val context: Context) {
                     continue
                 }
             }
-            if (children.isNotEmpty() || !deleteDocument(uri)) allDeleted = false
+            if (children.isNotEmpty()) {
+                allDeleted = false
+                continue
+            }
+            deleteDocument(uri)
+            if (documentPresence(uri) != DocumentPresence.ABSENT) allDeleted = false
         }
         return allDeleted
     }

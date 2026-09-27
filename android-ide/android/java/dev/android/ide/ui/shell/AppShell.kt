@@ -1,5 +1,6 @@
 package dev.android.ide.ui.shell
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -55,9 +56,23 @@ fun AppShell(
     var moreOpen by rememberSaveable { mutableStateOf(false) }
     var phaseFeedback by rememberSaveable { mutableStateOf<String?>(null) }
 
+    BackHandler(
+        enabled = navigationOpen || phaseFeedback != null ||
+            state.exitConfirmationVisible || state.navigationStack.size > 1,
+    ) {
+        when {
+            state.exitConfirmationVisible -> viewModel.dismissExitConfirmation()
+            phaseFeedback != null -> phaseFeedback = null
+            navigationOpen && moreOpen -> moreOpen = false
+            navigationOpen -> { navigationOpen = false; moreOpen = false }
+            !viewModel.back() -> viewModel.requestExitConfirmation()
+        }
+    }
+
     fun navigate(surface: Surface) {
         viewModel.navigate(surface)
         navigationOpen = false
+        moreOpen = false
     }
 
     val navigation: @Composable (Modifier) -> Unit = { modifier ->
@@ -68,9 +83,9 @@ fun AppShell(
             onMore = { moreOpen = !moreOpen },
             onNavigate = ::navigate,
             onOpenProject = { viewModel.openProject(it); navigationOpen = false },
-            onCreateProject = { onCreateProject(); navigationOpen = false },
-            onImportZip = { onImportZip(); navigationOpen = false },
-            onCloneGit = { onCloneGit(); navigationOpen = false },
+            onCreateProject = { onCreateProject(); navigationOpen = false; moreOpen = false },
+            onImportZip = { onImportZip(); navigationOpen = false; moreOpen = false },
+            onCloneGit = { onCloneGit(); navigationOpen = false; moreOpen = false },
             onFeedback = { phaseFeedback = it },
         )
     }
@@ -98,7 +113,10 @@ fun AppShell(
             TopAppBar(
                 title = { Text(surfaceTitle(state.surface)) },
                 navigationIcon = {
-                    IconButton(onClick = { navigationOpen = !navigationOpen }) {
+                        IconButton(onClick = {
+                            navigationOpen = !navigationOpen
+                            if (!navigationOpen) moreOpen = false
+                        }) {
                         Icon(Icons.Default.Menu, contentDescription = "Open navigation")
                     }
                 },
@@ -244,10 +262,10 @@ private fun SurfaceHost(
 @Composable
 private fun DomainPlaceholderSurface(title: String, modifier: Modifier, onFeedback: (String) -> Unit) {
     val actions = when (title) {
-        "Editor" -> listOf("Find", "Replace", "Save", "Save As", "Preview", "More")
-        "Terminal" -> listOf("New session", "Close session", "Close all sessions", "Zoom", "More")
+        "Editor" -> listOf("Find", "Replace", "Save", "Save As", "Preview")
+        "Terminal" -> listOf("New session", "Close session", "Close all sessions", "Zoom")
         "Browser" -> listOf("New tab", "Back", "Forward", "Reload", "Downloads", "Developer tools", "Viewport", "More")
-        "Git" -> listOf("Status", "Changed files", "Stage", "Unstage", "Commit", "History", "Branches", "Fetch", "Pull", "Push", "Global Git Settings", "Manage Credentials", "Provider management", "Credential-store configuration", "SSH and known-host configuration", "Global ignore rules", "More")
+        "Git" -> listOf("Status", "Changed files", "Stage", "Unstage", "Commit", "History", "Branches", "Fetch", "Pull", "Push", "Global Git Settings", "Manage Credentials", "Provider management", "Credential-store configuration", "SSH and known-host configuration", "Global ignore rules")
         "Extensions" -> listOf("Install extension", "Update", "Remove", "Permissions", "More")
         "Settings" -> listOf("Application and display", "Editor", "Terminal and runtime", "Browser", "Credentials and security", "Storage and permissions", "More")
         else -> emptyList()
@@ -268,10 +286,13 @@ private fun DomainPlaceholderSurface(title: String, modifier: Modifier, onFeedba
 }
 
 private fun placeholderPhase(label: String): Int = when (label) {
-    "Editor", "Find", "Replace", "Save", "Save As", "Preview" -> 4
-    "Terminal", "New session", "Close session", "Close all sessions", "Rename session", "Zoom" -> 3
-    "Browser", "New tab", "Back", "Forward", "Reload", "Downloads", "Developer tools", "Viewport" -> 5
-    "Git", "Status", "Changed files", "Stage", "Unstage", "Commit", "History", "Branches", "Fetch", "Pull", "Push", "Global Git Settings", "Manage Credentials", "Provider management", "Credential-store configuration", "SSH and known-host configuration", "Global ignore rules" -> 6
+    "Editor", "Find", "Replace", "Save", "Save As", "Preview", "Project Filename Search",
+    "Project Content Search", "Create file", "Create folder", "Import files", "Locate Current File" -> 4
+    "Terminal", "New session", "Close session", "Close all sessions", "Rename session", "Zoom",
+    "Open Terminal" -> 3
+    "Browser", "New tab", "Back", "Forward", "Reload", "Downloads", "Developer tools", "Viewport",
+    "Open Browser or Preview" -> 5
+    "Git", "Open Git", "Status", "Changed files", "Stage", "Unstage", "Commit", "History", "Branches", "Fetch", "Pull", "Push", "Global Git Settings", "Manage Credentials", "Provider management", "Credential-store configuration", "SSH and known-host configuration", "Global ignore rules" -> 6
     "Extensions", "Install extension", "Update", "Remove", "Permissions", "Extension permissions" -> 8
     else -> 8
 }

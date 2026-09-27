@@ -5,12 +5,6 @@ package dev.android.ide.contracts
 
 import java.time.Instant
 
-/** The two supported authoritative project-location classes. */
-enum class ProjectLocationKind {
-    USER_VISIBLE_LOCAL,
-    PRIVATE_DEVELOPMENT_WORKSPACE,
-}
-
 enum class CapabilityState {
     NOT_YET_CHECKED,
     SUPPORTED,
@@ -20,7 +14,6 @@ enum class CapabilityState {
 }
 
 data class ProjectLocation(
-    val kind: ProjectLocationKind,
     val stableId: String,
     val displayLabel: String,
     val userVisiblePath: String? = null,
@@ -28,14 +21,16 @@ data class ProjectLocation(
     val capabilityExplanation: String? = null,
 )
 
-data class LocationCapabilities(
+/** Capabilities owned by the project-storage provider; terminal/Git access is reported elsewhere.
+ * SUPPORTED means project files are readable and writable. Other mutations are independent flags.
+ */
+data class ProjectStorageCapabilities(
     val state: CapabilityState,
     val readable: Boolean,
     val writable: Boolean,
     val canCreate: Boolean,
     val canRename: Boolean,
     val canDelete: Boolean,
-    val canExecute: Boolean,
     val canObserveChanges: Boolean,
     val explanation: String? = null,
 )
@@ -170,6 +165,15 @@ data class MutationPreflight(
     val errorCategory: ErrorCategory? = null,
 )
 
+enum class ProjectMutationIntent { CREATE, WRITE, DELETE }
+
+data class ProjectMutationRequest(
+    val project: ProjectIdentity,
+    val path: ProjectRelativePath,
+    val intent: ProjectMutationIntent,
+    val directory: Boolean = false,
+)
+
 enum class LocationOperationKind {
     COPY,
     MOVE,
@@ -189,22 +193,30 @@ data class LocationOperationRequest(
 /** Project-relative path used by adapters; provider-specific URIs stay behind them. */
 typealias ProjectRelativePath = String
 
+/** Stable provider location identity used only for same-root/ancestry comparisons. */
+typealias ProjectLocationId = String
+
 interface ProjectStorageAdapter {
-    suspend fun inspectCapabilities(location: ProjectLocation): LocationCapabilities
+    suspend fun inspectProjectStorage(location: ProjectLocation): ProjectStorageCapabilities
     /** Returns null when the provider cannot safely inspect either location. */
-    suspend fun isSameOrDescendant(root: ProjectRelativePath, candidate: ProjectRelativePath): Boolean?
-    suspend fun list(path: ProjectRelativePath): List<ProjectRelativePath>
-    suspend fun read(path: ProjectRelativePath): ByteArray
-    suspend fun write(path: ProjectRelativePath, content: ByteArray): OperationReport
-    suspend fun preflightMutation(path: ProjectRelativePath): MutationPreflight
+    suspend fun isSameOrDescendant(root: ProjectLocationId, candidate: ProjectLocationId): Boolean?
+    /** Null means an inspection/permission failure; an empty list means a verified empty directory. */
+    suspend fun list(project: ProjectIdentity, path: ProjectRelativePath): List<ProjectRelativePath>?
+    /** Null means unavailable/inaccessible; a zero-byte array is a valid empty document. */
+    suspend fun read(project: ProjectIdentity, path: ProjectRelativePath): ByteArray?
+    suspend fun write(project: ProjectIdentity, path: ProjectRelativePath, content: ByteArray): OperationReport
+    suspend fun preflightMutation(request: ProjectMutationRequest): MutationPreflight
     suspend fun preflightLocationOperation(request: LocationOperationRequest): MutationPreflight
     suspend fun executeLocationOperation(request: LocationOperationRequest): OperationReport
     suspend fun verifyLocationOperation(request: LocationOperationRequest): OperationReport
-    suspend fun observeChanges(listener: (ProjectRelativePath) -> Unit)
+    /** Null means observation is unsupported or could not be established. Close to release observers. */
+    suspend fun observeChanges(project: ProjectIdentity, listener: (ProjectRelativePath) -> Unit): AutoCloseable?
 }
 
 interface ProjectRegistryAdapter {
     suspend fun listRegistered(): List<ProjectIdentity>
+    /** Checks project-root containment only; domain-specific runtime access is deliberately excluded. */
+    suspend fun preflightRegistration(project: ProjectIdentity): MutationPreflight
     suspend fun register(project: ProjectIdentity): OperationReport
     suspend fun markUnavailable(
         projectId: String,
@@ -224,14 +236,17 @@ interface ProjectMetadataAdapter {
 
 interface RuntimeWorkspaceAdapter {
     suspend fun initialize(): OperationReport
-    suspend fun rootIdentity(): ProjectLocation?
-    suspend fun workingDirectory(project: ProjectIdentity): String?
+    /** Runtime-owned storage is exposed as an ordinary provider location, not a project class. */
+    suspend fun providerRootLocation(): ProjectLocation?
     suspend fun capabilities(): RuntimeCapabilities
     suspend fun installedPackages(): List<RuntimePackage>
     suspend fun installPackages(packages: List<String>): OperationReport
 }
 
 interface TerminalRuntimeAdapter {
+    /** Per-project terminal suitability; failure never affects project registration or editor access. */
+    suspend fun inspectProjectAccess(project: ProjectIdentity): TerminalProjectAccess
+    suspend fun workingDirectory(project: ProjectIdentity): String?
     suspend fun createSession(workingDirectory: String?): SessionDescriptor
     suspend fun listSessions(): List<SessionDescriptor>
     suspend fun capabilities(): RuntimeCapabilities
@@ -245,6 +260,11 @@ interface TerminalRuntimeAdapter {
     suspend fun closeAllSessions(): OperationReport
 }
 
+data class TerminalProjectAccess(
+    val available: Boolean,
+    val explanation: String? = null,
+)
+
 interface EditorDocumentAdapter {
     suspend fun load(project: ProjectIdentity, path: ProjectRelativePath): ByteArray
     suspend fun save(project: ProjectIdentity, path: ProjectRelativePath, content: ByteArray): OperationReport
@@ -252,9 +272,16 @@ interface EditorDocumentAdapter {
 }
 
 interface GitAdapter {
+    /** Git suitability is checked for the selected project and never gates registration or file editing. */
+    suspend fun inspectProjectAccess(project: ProjectIdentity): GitProjectAccess
     suspend fun status(project: ProjectIdentity): Result<String>
     suspend fun execute(project: ProjectIdentity, arguments: List<String>): OperationReport
 }
+
+data class GitProjectAccess(
+    val available: Boolean,
+    val explanation: String? = null,
+)
 
 interface BrowserPreviewAdapter {
     suspend fun listTabs(): List<BrowserTabIdentity>

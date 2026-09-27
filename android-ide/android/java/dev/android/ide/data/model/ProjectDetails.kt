@@ -6,6 +6,8 @@
 
 package dev.android.ide.data.model
 
+import dev.android.ide.contracts.ProjectStorageCapabilities
+
 data class ProjectDetails(
     val project: Project,
     val description: String,
@@ -16,6 +18,7 @@ data class ProjectDetails(
     val fileCount: Int,
     val folderCount: Int,
     val totalBytes: Long,
+    val storageCapabilities: ProjectStorageCapabilities,
     val languageBytes: Map<String, Long> = emptyMap(),
     val git: GitDetails? = null,
 )

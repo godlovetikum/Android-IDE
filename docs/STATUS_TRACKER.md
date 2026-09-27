@@ -59,7 +59,7 @@ The Phase 2 implementation is now present on `dev`: blank project creation, exis
 
 The project list now supports long-press multi-selection, selected-row feedback, reversible batch removal from the registry, verified batch permanent deletion, cancellation, and selection cleanup when navigating away. Permanent deletion is explicitly confirmed and refuses to remove a registered parent while child projects remain.
 
-The remaining project-management actions are now wired: project rename, export/share as ZIP, copy storage path, copy Git remote URLs, batch ZIP export, batch path copy, verified batch permanent deletion, and precise unavailable-versus-permission-lost registry state. Acquisition and transfer reject both directions of project containment. Provider mutations preserve tri-state deletion uncertainty, normalize document URIs, use bounded streaming copies, verify copied contents, report unrecoverable move cleanup as partial, and preserve metadata-migration conflicts. ZIP export stages archives before destination write. Private-workspace transfer is explicitly unavailable until its runtime adapter is initialized rather than reporting false success. Archive-name collisions and provider failures produce partial or blocked reports instead of overwriting or silently succeeding. GitHub Actions and device/provider acceptance remain the gate.
+The remaining project-management actions are now wired: project rename, export/share as ZIP, copy storage path, copy Git remote URLs, batch ZIP export, batch path copy, verified batch permanent deletion, and precise unavailable-versus-permission-lost registry state. Acquisition and transfer reject both directions of project containment. Provider mutations preserve tri-state deletion uncertainty, normalize document URIs, use bounded streaming copies, verify copied contents, report unrecoverable move cleanup as partial, and preserve metadata-migration conflicts. ZIP export stages archives before destination write. Transfers use provider-neutral destinations and check their own storage operations; no private-workspace project class gates registration. Archive-name collisions and provider failures produce partial or blocked reports instead of overwriting or silently succeeding. GitHub Actions and device/provider acceptance remain the gate.
 
 ### Code editing
 
@@ -67,7 +67,7 @@ The product behavior and Monaco provider direction are defined. Implementation r
 
 ### Terminal, runtime, dependencies, and background processes
 
-The Termux runtime direction and private development workspace model are defined. Implementation remains future work and must follow Phase 3. Required acceptance coverage includes bootstrap initialization, package capability reporting, PTYs, global sessions, project working directories, child-process ownership, foreground lifecycle, process-loss reporting, and explicit close behavior.
+The Termux runtime direction and provider-owned storage-root model are defined. Implementation remains future work and must follow Phase 3. Required acceptance coverage includes bootstrap initialization, package capability reporting, PTYs, global sessions, per-project terminal-access checks and working directories, child-process ownership, foreground lifecycle, process-loss reporting, and explicit close behavior. A terminal access denial must leave project registration and editor/file access unchanged.
 
 ### Browser, previews, and developer tools
 

@@ -9,8 +9,8 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.foundation.lazy.LazyColumn
@@ -29,7 +29,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberScrollState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -70,7 +69,7 @@ fun ProjectsSurface(
         viewModel.reportStatus("Copied ${paths.size} project storage path(s)")
     }
     var searchQuery by rememberSaveable { mutableStateOf("") }
-    var sortMode by rememberSaveable { mutableStateOf(ProjectSort.NAME) }
+    var sortMode by rememberSaveable { mutableStateOf(ProjectsSurfaceSort.NAME) }
     var sortOpen by remember { mutableStateOf(false) }
     var filterOpen by remember { mutableStateOf(false) }
     var filterMode by rememberSaveable { mutableStateOf(ProjectFilter.ALL) }
@@ -93,11 +92,11 @@ fun ProjectsSurface(
         }
         .let { projects ->
             when (sortMode) {
-                ProjectSort.NAME -> projects.sortedBy { it.name.lowercase() }
-                ProjectSort.LAST_OPENED -> projects.sortedByDescending { it.lastOpenedAt ?: Instant.MIN }
-                ProjectSort.REGISTERED -> projects.sortedByDescending { it.registeredAt }
-                ProjectSort.FILE_COUNT -> projects.sortedByDescending { state.projectSummaries[it.id]?.fileCount ?: -1 }
-                ProjectSort.SIZE -> projects.sortedByDescending { state.projectSummaries[it.id]?.totalBytes ?: -1L }
+                ProjectsSurfaceSort.NAME -> projects.sortedBy { it.name.lowercase() }
+                ProjectsSurfaceSort.LAST_OPENED -> projects.sortedByDescending { it.lastOpenedAt ?: Instant.MIN }
+                ProjectsSurfaceSort.REGISTERED -> projects.sortedByDescending { it.registeredAt }
+                ProjectsSurfaceSort.FILE_COUNT -> projects.sortedByDescending { state.projectSummaries[it.id]?.fileCount ?: -1 }
+                ProjectsSurfaceSort.SIZE -> projects.sortedByDescending { state.projectSummaries[it.id]?.totalBytes ?: -1L }
             }
         }
 
@@ -116,7 +115,7 @@ fun ProjectsSurface(
             Text("Sort: ${sortMode.label}")
             TextButton(onClick = { sortOpen = true }) { Text("Change") }
             DropdownMenu(expanded = sortOpen, onDismissRequest = { sortOpen = false }) {
-                ProjectSort.entries.forEach { option ->
+                ProjectsSurfaceSort.entries.forEach { option ->
                     DropdownMenuItem(text = { Text(option.label) }, onClick = { sortMode = option; sortOpen = false })
                 }
             }
@@ -131,6 +130,7 @@ fun ProjectsSurface(
             }
         }
         TextButton(onClick = viewModel::refreshProjectList) { Text("Refresh") }
+        state.registryWarning?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         if (state.operationInProgress) Text("Refreshing projects…")
         state.statusMessage?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         if (state.selectedProjectIds.isNotEmpty()) {
@@ -233,7 +233,7 @@ fun ProjectsSurface(
     }
 }
 
-private enum class ProjectSort(val label: String) {
+private enum class ProjectsSurfaceSort(val label: String) {
     NAME("Name"),
     LAST_OPENED("Last opened"),
     REGISTERED("Registration time"),
@@ -303,7 +303,7 @@ private fun ProjectCard(
             DropdownMenuItem(text = { Text("Copy & Duplicate") }, onClick = { menuOpen = false; onDuplicate(project.id) })
             DropdownMenuItem(text = { Text("Export or Share") }, onClick = { menuOpen = false; onExport(project.id) })
             DropdownMenuItem(text = { Text("Copy Storage Path") }, onClick = { menuOpen = false; onCopyPath(project.id) })
-            DropdownMenuItem(text = { Text("Copy Remote URLs") }, onClick = { menuOpen = false; onFeedback("Copy Remote URLs") })
+            DropdownMenuItem(text = { Text("Git Remote Details") }, onClick = { menuOpen = false; onDetails(project.id) })
             DropdownMenuItem(text = { Text("Open in Editor") }, onClick = { menuOpen = false; onOpen(project.id) })
             DropdownMenuItem(text = { Text("Open Git") }, onClick = { menuOpen = false; onFeedback("Open Git") })
             DropdownMenuItem(text = { Text("Open Terminal") }, onClick = { menuOpen = false; onFeedback("Open Terminal") })

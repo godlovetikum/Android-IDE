@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -25,6 +26,7 @@ import dev.android.ide.app.AppShellState
 import dev.android.ide.app.AppShellViewModel
 import dev.android.ide.contracts.CapabilityState
 import dev.android.ide.contracts.Surface
+import java.net.URI
 import kotlin.random.Random
 
 @Composable
@@ -47,32 +49,70 @@ fun ProjectDetailsSurface(
     var enteredDeleteCode by remember { mutableStateOf("") }
     val context = LocalContext.current
     Column(modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        if (state.operationInProgress) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                CircularProgressIndicator(Modifier.padding(2.dp), strokeWidth = 2.dp)
+                Text("Project operation in progress…")
+            }
+        }
+        if (state.detailsLoading) Text("Refreshing project details…", color = MaterialTheme.colorScheme.secondary)
+        state.operationReport?.let { report ->
+            Text(
+                report.message,
+                color = if (report.outcome == dev.android.ide.contracts.OperationOutcome.COMPLETE) {
+                    MaterialTheme.colorScheme.primary
+                } else MaterialTheme.colorScheme.error,
+            )
+            report.recoveryHint?.let { Text("Recovery: $it", color = MaterialTheme.colorScheme.error) }
+        } ?: state.statusMessage?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text(project?.name ?: "Project Details", style = MaterialTheme.typography.headlineMedium)
             TextButton(onClick = { menuOpen = true }) { Text("More") }
             DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                DropdownMenuItem(text = { Text("Refresh") }, onClick = { menuOpen = false; viewModel.refreshSelectedProjectDetails() })
-                DropdownMenuItem(text = { Text("Rename") }, onClick = { menuOpen = false; renameValue = project?.name.orEmpty(); renameVisible = true })
-                DropdownMenuItem(text = { Text("Change Location") }, onClick = { menuOpen = false; project?.id?.let(onRelocateProject) })
-                DropdownMenuItem(text = { Text("Copy & Duplicate") }, onClick = { menuOpen = false; project?.id?.let(onDuplicateProject) })
-                DropdownMenuItem(text = { Text("Export or Share") }, onClick = { menuOpen = false; project?.id?.let(onExportProject) })
+                DropdownMenuItem(text = { Text("Refresh") }, enabled = !state.operationInProgress && !state.detailsLoading, onClick = { menuOpen = false; viewModel.refreshSelectedProjectDetails() })
+                DropdownMenuItem(text = { Text("Rename") }, enabled = !state.operationInProgress, onClick = { menuOpen = false; renameValue = project?.name.orEmpty(); renameVisible = true })
+                DropdownMenuItem(text = { Text("Change Location") }, enabled = !state.operationInProgress, onClick = { menuOpen = false; project?.id?.let(onRelocateProject) })
+                DropdownMenuItem(text = { Text("Copy & Duplicate") }, enabled = !state.operationInProgress, onClick = { menuOpen = false; project?.id?.let(onDuplicateProject) })
+                DropdownMenuItem(text = { Text("Export or Share") }, enabled = !state.operationInProgress, onClick = { menuOpen = false; project?.id?.let(onExportProject) })
                 DropdownMenuItem(text = { Text("Copy Storage Path") }, onClick = {
                     menuOpen = false
                     val path = project?.location?.userVisiblePath ?: project?.location?.displayLabel
                     if (path != null) {
-                        context.getSystemService(ClipboardManager::class.java)?.setPrimaryClip(ClipData.newPlainText("Project storage path", path))
-                        viewModel.reportStatus("Copied project storage path")
+                        val clipboard = context.getSystemService(ClipboardManager::class.java)
+                        if (clipboard != null) {
+                            clipboard.setPrimaryClip(ClipData.newPlainText("Project storage path", path))
+                            viewModel.reportStatus("Copied project storage path")
+                        } else actionFeedback = "The system clipboard is unavailable."
                     } else {
-                        actionFeedback = "Copy Storage Path"
+                        actionFeedback = "The project storage path is unavailable. Refresh project details and try again."
                     }
                 })
-                DropdownMenuItem(text = { Text("Copy Remote URLs") }, onClick = { menuOpen = false; actionFeedback = "Copy Remote URLs" })
+                DropdownMenuItem(text = { Text("Copy Remote URLs") }, onClick = {
+                    menuOpen = false
+                    val git = state.projectDetails?.git
+                    if (state.detailsLoading) {
+                        actionFeedback = "Git details are still loading. Refresh the project details and try again."
+                    } else if (git == null || git.remotes.isEmpty()) {
+                        actionFeedback = "No Git remote URLs are configured for this project."
+                    } else {
+                        val payload = git.remotes.joinToString("\n") { remote ->
+                            "${remote.name}\t${safeClipboardRemote(remote.url)}"
+                        }
+                        val clipboard = context.getSystemService(ClipboardManager::class.java)
+                        if (clipboard == null) {
+                            actionFeedback = "The system clipboard is unavailable."
+                        } else {
+                            clipboard.setPrimaryClip(ClipData.newPlainText("Git remote URLs", payload))
+                            actionFeedback = "Copied ${git.remotes.size} Git remote URL(s). Embedded URL credentials and query parameters were omitted."
+                        }
+                    }
+                })
                 DropdownMenuItem(text = { Text("Open in Editor") }, onClick = { menuOpen = false; viewModel.navigate(Surface.EDITOR) })
                 DropdownMenuItem(text = { Text("Open Git") }, onClick = { menuOpen = false; viewModel.navigate(Surface.GIT) })
                 DropdownMenuItem(text = { Text("Open Terminal") }, onClick = { menuOpen = false; viewModel.navigate(Surface.TERMINAL) })
                 DropdownMenuItem(text = { Text("Open Browser or Preview") }, onClick = { menuOpen = false; viewModel.navigate(Surface.BROWSER) })
-                DropdownMenuItem(text = { Text("Remove from Registry") }, onClick = { menuOpen = false; confirmRemove = true })
-                DropdownMenuItem(text = { Text("Permanently Delete") }, onClick = { menuOpen = false; deleteCode = Random.nextInt(100, 1000).toString(); enteredDeleteCode = ""; confirmDelete = true })
+                DropdownMenuItem(text = { Text("Remove from Registry") }, enabled = !state.operationInProgress, onClick = { menuOpen = false; confirmRemove = true })
+                DropdownMenuItem(text = { Text("Permanently Delete") }, enabled = !state.operationInProgress, onClick = { menuOpen = false; deleteCode = Random.nextInt(100, 1000).toString(); enteredDeleteCode = ""; confirmDelete = true })
             }
         }
         if (confirmRemove) {
@@ -96,8 +136,8 @@ fun ProjectDetailsSurface(
         actionFeedback?.let { action ->
             AlertDialog(
                 onDismissRequest = { actionFeedback = null },
-                title = { Text(action) },
-                text = { Text("Coming soon (phase 6)") },
+                title = { Text("Project action") },
+                text = { Text(action) },
                 confirmButton = { TextButton(onClick = { actionFeedback = null }) { Text("OK") } },
             )
         }
@@ -127,10 +167,32 @@ fun ProjectDetailsSurface(
             DetailLine("Folders", details.folderCount.toString())
             DetailLine("Size", formatBytes(details.totalBytes))
             DetailLine("Provider", details.storageProvider)
-            DetailLine("Availability", availabilityLabel(details.project.capabilityState))
+            DetailLine("Project storage", availabilityLabel(details.storageCapabilities.state))
+            DetailLine("Read / update", capabilityLabel(details.storageCapabilities.readable && details.storageCapabilities.writable))
+            DetailLine("Create", capabilityLabel(details.storageCapabilities.canCreate))
+            DetailLine("Rename", capabilityLabel(details.storageCapabilities.canRename))
+            DetailLine("Delete", capabilityLabel(details.storageCapabilities.canDelete))
+            DetailLine("Change observation", capabilityLabel(details.storageCapabilities.canObserveChanges))
             details.git?.currentBranch?.let { DetailLine("Git branch", it) }
         } ?: Text("Details are being inspected or are unavailable.")
     }
+}
+
+private fun safeClipboardRemote(rawUrl: String): String {
+    val withoutQueryOrFragment = rawUrl.trim().substringBefore('?').substringBefore('#')
+    val withoutScpPassword = withoutQueryOrFragment.replace(
+        Regex("^([^/@:]+):[^/@]+@"),
+        "\$1@",
+    )
+    val uri = runCatching { URI(withoutScpPassword) }.getOrNull()
+        ?: return withoutScpPassword.replace(Regex("(?<=://)[^/@]+@"), "")
+    if (uri.scheme == null || uri.host == null) {
+        return withoutScpPassword.replace(Regex("(?<=://)[^/@]+@"), "")
+    }
+    val safeUserInfo = uri.userInfo?.takeIf { uri.scheme.equals("ssh", ignoreCase = true) && it == "git" }
+    return runCatching {
+        URI(uri.scheme, safeUserInfo, uri.host, uri.port, uri.path, null, null).toASCIIString()
+    }.getOrDefault(withoutScpPassword.replace(Regex("(?<=://)[^/@]+@"), ""))
 }
 
 @Composable
@@ -142,12 +204,15 @@ private fun DetailLine(label: String, value: String) {
 }
 
 private fun availabilityLabel(state: CapabilityState): String = when (state) {
-    CapabilityState.SUPPORTED -> "Available"
-    CapabilityState.NOT_YET_CHECKED -> "Checking availability"
-    CapabilityState.UNSUPPORTED -> "Not supported"
-    CapabilityState.UNAVAILABLE -> "Unavailable"
+    CapabilityState.SUPPORTED -> "Available through storage provider"
+    CapabilityState.NOT_YET_CHECKED -> "Checking storage access"
+    CapabilityState.UNSUPPORTED -> "Storage provider not supported"
+    CapabilityState.UNAVAILABLE -> "Storage location unavailable"
     CapabilityState.PERMISSION_LOST -> "Permission needed"
 }
+
+private fun capabilityLabel(available: Boolean): String =
+    if (available) "Available" else "Unavailable for this provider"
 
 private fun formatBytes(bytes: Long): String {
     if (bytes < 1024L) return "$bytes B"

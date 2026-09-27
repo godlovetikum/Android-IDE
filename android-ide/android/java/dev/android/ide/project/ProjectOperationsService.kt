@@ -8,7 +8,6 @@ import dev.android.ide.contracts.OperationOutcome
 import dev.android.ide.contracts.OperationReport
 import dev.android.ide.contracts.ProjectIdentity
 import dev.android.ide.contracts.ProjectLocation
-import dev.android.ide.contracts.ProjectLocationKind
 import dev.android.ide.contracts.ProjectRegistryAdapter
 import dev.android.ide.saf.DocumentPresence
 import dev.android.ide.saf.SafeMutationResult
@@ -31,8 +30,16 @@ class ProjectOperationsService(
 
     suspend fun permanentlyDelete(projectId: String): OperationReport {
         val project = registered(projectId) ?: return blocked("Project is not registered")
-        val registeredChildren = registry.listRegistered().filter { it.id != project.id }.filter {
-            storage.isSameOrDescendant(project.location.stableId, it.location.stableId) == true
+        val registeredChildren = mutableListOf<ProjectIdentity>()
+        registry.listRegistered().filter { it.id != project.id }.forEach { candidate ->
+            when (storage.isSameOrDescendant(project.location.stableId, candidate.location.stableId)) {
+                true -> registeredChildren += candidate
+                false -> Unit
+                null -> return blocked(
+                    "The project cannot be safely deleted until containment against ${candidate.name} is verified",
+                    ErrorCategory.PERMISSION_LOST,
+                )
+            }
         }
         if (registeredChildren.isNotEmpty()) {
             return blocked(
@@ -41,7 +48,7 @@ class ProjectOperationsService(
                 ErrorCategory.DESTINATION_CONFLICT,
             )
         }
-        val capabilities = storage.inspect(project.location)
+        val capabilities = storage.inspectProjectStorage(project.location)
         if (!capabilities.canDelete) {
             return blocked(
                 capabilities.explanation ?: "The project location cannot be deleted",
@@ -84,6 +91,10 @@ class ProjectOperationsService(
         description: String? = null,
     ): OperationReport {
         val source = registered(projectId) ?: return blocked("Project is not registered")
+        val sourceCapabilities = storage.inspectProjectStorage(source.location)
+        if (sourceCapabilities.state != dev.android.ide.contracts.CapabilityState.SUPPORTED) {
+            return blocked(sourceCapabilities.explanation ?: "The source project is not available for live operations", ErrorCategory.UNSUPPORTED_PROVIDER_CAPABILITY)
+        }
         val cleanName = validName(newName) ?: return blocked("Project name is invalid")
         val preflight = preflightDestination(destinationParentUri)
         if (!preflight.allowed) return preflight.report
@@ -95,26 +106,48 @@ class ProjectOperationsService(
             SafeMutationResult.Failed -> return failed("The project could not be duplicated", ErrorCategory.PERMISSION_LOST)
             is SafeMutationResult.Partial -> return partialMutationReport(copied)
         }
-        val identity = identity(rootUri, cleanName, description ?: source.description, source.location.kind)
+        val identity = identity(
+            rootUri,
+            cleanName,
+            description ?: source.description,
+        )
+        val containment = registry.preflightRegistration(identity)
+        if (!containment.allowed) {
+            return cleanupUnregisteredDestination(
+                source.location.stableId,
+                rootUri,
+                blocked(containment.message, containment.errorCategory ?: ErrorCategory.DESTINATION_CONFLICT),
+            )
+        }
         val initialized = metadata.ensurePortableState(identity)
         if (initialized.outcome != OperationOutcome.COMPLETE) {
-            storage.deleteDocument(rootUri)
-            return initialized
+            return cleanupUnregisteredDestination(source.location.stableId, rootUri, initialized)
         }
         val written = metadata.writeIdentity(identity)
         if (written.outcome != OperationOutcome.COMPLETE) {
-            storage.deleteDocument(rootUri)
-            return written
+            return cleanupUnregisteredDestination(source.location.stableId, rootUri, written)
         }
-        val verified = storage.inspect(identity.location)
-        if (!verified.readable || !verified.writable) {
-            storage.deleteDocument(rootUri)
-            return failed("The duplicated project could not be verified", ErrorCategory.PERMISSION_LOST)
+        val verified = storage.inspectProjectStorage(identity.location)
+        if (verified.state != dev.android.ide.contracts.CapabilityState.SUPPORTED ||
+            !verified.readable || !verified.writable
+        ) {
+            return cleanupUnregisteredDestination(
+                source.location.stableId,
+                rootUri,
+                failed("The duplicated project files could not be read and written", ErrorCategory.PERMISSION_LOST),
+            )
+        }
+        if (!metadataIdentityMatches(identity)) {
+            return cleanupUnregisteredDestination(
+                source.location.stableId,
+                rootUri,
+                failed("The duplicate identity could not be read back", ErrorCategory.MALFORMED_METADATA),
+            )
         }
         val registered = registry.register(identity)
         if (registered.outcome == OperationOutcome.COMPLETE) return registered
-        val cleaned = storage.deleteDocument(rootUri) &&
-            storage.documentPresence(rootUri) == DocumentPresence.ABSENT
+        storage.deleteDocument(rootUri)
+        val cleaned = storage.documentPresence(rootUri) == DocumentPresence.ABSENT
         return if (cleaned) {
             registered.copy(message = "The duplicate was not registered; copied data was removed: ${registered.message}")
         } else {
@@ -129,13 +162,25 @@ class ProjectOperationsService(
 
     suspend fun renameProject(projectId: String, newName: String): OperationReport {
         val source = registered(projectId) ?: return blocked("Project is not registered")
+        val sourceCapabilities = storage.inspectProjectStorage(source.location)
+        if (sourceCapabilities.state != dev.android.ide.contracts.CapabilityState.SUPPORTED || !sourceCapabilities.canRename) {
+            return blocked(sourceCapabilities.explanation ?: "The project location cannot be renamed", ErrorCategory.UNSUPPORTED_PROVIDER_CAPABILITY)
+        }
         val cleanName = validName(newName) ?: return blocked("Project name is invalid")
         if (cleanName == source.name) return blocked("The project already has that name")
         val renamedUri = storage.renameDocument(source.location.stableId, cleanName)
             ?: return failed("The project could not be renamed", ErrorCategory.PERMISSION_LOST)
         if (storage.getDisplayName(renamedUri) != cleanName) {
-            storage.renameDocument(renamedUri, source.name)
-            return failed("The provider did not confirm the project rename", ErrorCategory.EXTERNAL_FILE_CHANGE)
+            val restored = storage.renameDocument(renamedUri, source.name)
+            return if (restored != null && storage.getDisplayName(restored) == source.name) {
+                failed("The provider did not confirm the project rename; the original name was restored", ErrorCategory.EXTERNAL_FILE_CHANGE)
+            } else OperationReport(
+                outcome = OperationOutcome.PARTIAL,
+                message = "The provider returned an unexpected name and rollback could not be verified",
+                errorCategory = ErrorCategory.EXTERNAL_FILE_CHANGE,
+                affectedIds = listOf(source.location.stableId, renamedUri),
+                recoveryHint = "Inspect the project folder and restore its original name before retrying",
+            )
         }
         val renamedIdentity = source.copy(
             id = renamedUri,
@@ -149,8 +194,35 @@ class ProjectOperationsService(
         )
         val metadataResult = metadata.writeIdentity(renamedIdentity)
         if (metadataResult.outcome != OperationOutcome.COMPLETE) {
-            storage.renameDocument(renamedUri, source.name)
-            return metadataResult
+            val restored = storage.renameDocument(renamedUri, source.name)
+            if (restored == null || storage.getDisplayName(restored) != source.name) {
+                return OperationReport(
+                    outcome = OperationOutcome.PARTIAL,
+                    message = "Project rename metadata failed and the original folder name could not be restored",
+                    errorCategory = metadataResult.errorCategory ?: ErrorCategory.MALFORMED_METADATA,
+                    affectedIds = listOf(source.location.stableId, renamedUri),
+                    recoveryHint = "Inspect the project folder and portable metadata; restore the original name before retrying",
+                )
+            }
+            val restoredMetadata = metadata.writeIdentity(source)
+            return if (restoredMetadata.outcome == OperationOutcome.COMPLETE && metadataIdentityMatches(source)) {
+                metadataResult
+            } else OperationReport(
+                outcome = OperationOutcome.PARTIAL,
+                message = "Project folder name was restored but the previous portable identity could not be verified",
+                errorCategory = ErrorCategory.MALFORMED_METADATA,
+                affectedIds = listOf(source.location.stableId),
+                recoveryHint = "Inspect project.json and restore the registered project identity before continuing",
+            )
+        }
+        if (!metadataIdentityMatches(renamedIdentity)) {
+            return OperationReport(
+                outcome = OperationOutcome.PARTIAL,
+                message = "The project was renamed but its new portable identity could not be verified",
+                errorCategory = ErrorCategory.MALFORMED_METADATA,
+                affectedIds = listOf(source.location.stableId, renamedUri),
+                recoveryHint = "Inspect project.json and the project registry before opening or renaming this project again",
+            )
         }
         val removed = registry.remove(source.id)
         if (removed.outcome != OperationOutcome.COMPLETE) {
@@ -178,12 +250,17 @@ class ProjectOperationsService(
         projectId: String,
         destinationParentUri: String,
         newName: String,
-        destinationKind: ProjectLocationKind = ProjectLocationKind.USER_VISIBLE_LOCAL,
     ): OperationReport {
         val source = registered(projectId) ?: return blocked("Project is not registered")
+        val sourceCapabilities = storage.inspectProjectStorage(source.location)
+        if (sourceCapabilities.state != dev.android.ide.contracts.CapabilityState.SUPPORTED || !sourceCapabilities.canDelete) {
+            return blocked(sourceCapabilities.explanation ?: "The source project cannot be safely removed after relocation", ErrorCategory.UNSUPPORTED_PROVIDER_CAPABILITY)
+        }
         val cleanName = validName(newName) ?: return blocked("Project name is invalid")
-        if (storage.isSameOrDescendant(source.location.stableId, destinationParentUri) == true) {
-            return blocked("A project cannot be relocated inside itself", ErrorCategory.DESTINATION_CONFLICT)
+        when (storage.isSameOrDescendant(source.location.stableId, destinationParentUri)) {
+            true -> return blocked("A project cannot be relocated inside itself", ErrorCategory.DESTINATION_CONFLICT)
+            null -> return blocked("The relocation destination cannot be verified against the source project", ErrorCategory.PERMISSION_LOST)
+            false -> Unit
         }
         val preflight = preflightDestination(destinationParentUri, projectId)
         if (!preflight.allowed) return preflight.report
@@ -195,36 +272,64 @@ class ProjectOperationsService(
             SafeMutationResult.Failed -> return failed("The project could not be copied for relocation", ErrorCategory.PERMISSION_LOST)
             is SafeMutationResult.Partial -> return partialMutationReport(copied)
         }
-        val identity = identity(rootUri, cleanName, source.description, destinationKind)
+        val identity = identity(rootUri, cleanName, source.description)
+        val containment = registry.preflightRegistration(identity)
+        if (!containment.allowed) {
+            return cleanupUnregisteredDestination(
+                source.location.stableId,
+                rootUri,
+                blocked(containment.message, containment.errorCategory ?: ErrorCategory.DESTINATION_CONFLICT),
+            )
+        }
         val initialized = metadata.ensurePortableState(identity)
         if (initialized.outcome != OperationOutcome.COMPLETE) {
-            storage.deleteDocument(rootUri)
-            return initialized
+            return cleanupUnregisteredDestination(source.location.stableId, rootUri, initialized)
         }
         val written = metadata.writeIdentity(identity)
         if (written.outcome != OperationOutcome.COMPLETE) {
-            storage.deleteDocument(rootUri)
-            return written
+            return cleanupUnregisteredDestination(source.location.stableId, rootUri, written)
         }
-        val verified = storage.inspect(identity.location)
-        if (!verified.readable || !verified.writable) {
-            storage.deleteDocument(rootUri)
-            return failed("The relocation destination could not be verified", ErrorCategory.PERMISSION_LOST)
-        }
-        if (!storage.deleteDocument(source.location.stableId) ||
-            storage.documentPresence(source.location.stableId) != DocumentPresence.ABSENT
+        val verified = storage.inspectProjectStorage(identity.location)
+        if (verified.state != dev.android.ide.contracts.CapabilityState.SUPPORTED ||
+            !verified.readable || !verified.writable
         ) {
-            val cleaned = storage.deleteDocument(rootUri) &&
-                storage.documentPresence(rootUri) == DocumentPresence.ABSENT
-            return if (cleaned) {
-                failed("The original project was retained because source deletion failed", ErrorCategory.PERMISSION_LOST)
-            } else {
-                OperationReport(
-                    outcome = OperationOutcome.PARTIAL,
-                    message = "Relocation copied the project but cleanup was incomplete",
-                    errorCategory = ErrorCategory.PERMISSION_LOST,
-                    recoveryHint = "Inspect both locations before retrying relocation",
-                )
+            return cleanupUnregisteredDestination(
+                source.location.stableId,
+                rootUri,
+                failed("The relocation destination files could not be read and written", ErrorCategory.PERMISSION_LOST),
+            )
+        }
+        if (!metadataIdentityMatches(identity)) {
+            return cleanupUnregisteredDestination(
+                source.location.stableId,
+                rootUri,
+                failed("The relocation identity could not be read back", ErrorCategory.MALFORMED_METADATA),
+            )
+        }
+        storage.deleteDocument(source.location.stableId)
+        when (storage.documentPresence(source.location.stableId)) {
+            DocumentPresence.ABSENT -> Unit
+            DocumentPresence.INACCESSIBLE -> return OperationReport(
+                outcome = OperationOutcome.PARTIAL,
+                message = "The source deletion result could not be verified; both source and destination were retained",
+                errorCategory = ErrorCategory.PERMISSION_LOST,
+                affectedIds = listOf(source.location.stableId, rootUri),
+                recoveryHint = "Restore access and inspect both project locations before retrying relocation",
+            )
+            DocumentPresence.EXISTS -> {
+                storage.deleteDocument(rootUri)
+                val destinationAbsent = storage.documentPresence(rootUri) == DocumentPresence.ABSENT
+                return if (destinationAbsent) {
+                    failed("The original project was retained because source deletion failed", ErrorCategory.PERMISSION_LOST)
+                } else {
+                    OperationReport(
+                        outcome = OperationOutcome.PARTIAL,
+                        message = "The original project remains and the copied destination could not be fully removed",
+                        errorCategory = ErrorCategory.PERMISSION_LOST,
+                        affectedIds = listOf(source.location.stableId, rootUri),
+                        recoveryHint = "Inspect both locations before retrying relocation",
+                    )
+                }
             }
         }
         val removed = registry.remove(source.id)
@@ -252,6 +357,7 @@ class ProjectOperationsService(
         if (!preflight.allowed) return preflight.report
         val exported = mutableListOf<String>()
         val failedIds = mutableListOf<String>()
+        val orphanedUris = mutableListOf<String>()
         projectIds.forEach { projectId ->
             val project = registered(projectId)
             if (project == null) {
@@ -266,6 +372,14 @@ class ProjectOperationsService(
                 "application/zip",
             )) {
                 is dev.android.ide.saf.ExactCreateResult.Created -> created.documentUri
+                is dev.android.ide.saf.ExactCreateResult.Partial -> {
+                    storage.deleteDocument(created.documentUri)
+                    if (storage.documentPresence(created.documentUri) != DocumentPresence.ABSENT) {
+                        orphanedUris += created.documentUri
+                    }
+                    failedIds += projectId
+                    return@forEach
+                }
                 else -> {
                     failedIds += projectId
                     return@forEach
@@ -273,6 +387,7 @@ class ProjectOperationsService(
             }
             if (storage.exportZip(project.location.stableId, destination) == null) {
                 storage.deleteDocument(destination)
+                if (storage.documentPresence(destination) != DocumentPresence.ABSENT) orphanedUris += destination
                 failedIds += projectId
             } else {
                 exported += projectId
@@ -288,30 +403,16 @@ class ProjectOperationsService(
             OperationReport(
                 outcome = OperationOutcome.PARTIAL,
                 message = "Exported ${exported.size} project archive(s); ${failedIds.size} failed",
-                errorCategory = ErrorCategory.DESTINATION_CONFLICT,
-                affectedIds = exported,
-                recoveryHint = "Choose an empty destination or resolve the archive-name conflicts before retrying",
+                errorCategory = if (orphanedUris.isEmpty()) ErrorCategory.DESTINATION_CONFLICT else ErrorCategory.PERMISSION_LOST,
+                affectedIds = exported + orphanedUris,
+                recoveryHint = if (orphanedUris.isEmpty()) {
+                    "Choose an empty destination or resolve the archive-name conflicts before retrying"
+                } else {
+                    "Inspect and remove these incomplete export files before retrying: ${orphanedUris.joinToString()}"
+                },
             )
         }
     }
-
-    suspend fun copyProjectToPrivateWorkspace(
-        projectId: String,
-        workspaceParentUri: String,
-        name: String,
-    ): OperationReport = blocked(
-        "The private development workspace is unavailable until the runtime adapter is initialized",
-        ErrorCategory.UNAVAILABLE_RUNTIME,
-    )
-
-    suspend fun moveProjectToPrivateWorkspace(
-        projectId: String,
-        workspaceParentUri: String,
-        name: String,
-    ): OperationReport = blocked(
-        "The private development workspace is unavailable until the runtime adapter is initialized",
-        ErrorCategory.UNAVAILABLE_RUNTIME,
-    )
 
     suspend fun copyEntry(sourceUri: String, targetParentUri: String, newName: String? = null): OperationReport =
         mutationReport(storage.copyExact(sourceUri, targetParentUri, newName), "copied")
@@ -427,17 +528,39 @@ class ProjectOperationsService(
     private suspend fun registered(projectId: String): ProjectIdentity? =
         registry.listRegistered().firstOrNull { it.id == projectId }
 
+    private suspend fun cleanupUnregisteredDestination(
+        sourceUri: String,
+        destinationUri: String,
+        failure: OperationReport,
+    ): OperationReport {
+        storage.deleteDocument(destinationUri)
+        val cleaned = storage.documentPresence(destinationUri) == DocumentPresence.ABSENT
+        return if (cleaned) failure else OperationReport(
+            outcome = OperationOutcome.PARTIAL,
+            message = "The operation failed and cleanup of its unregistered destination could not be verified",
+            errorCategory = failure.errorCategory ?: ErrorCategory.PERMISSION_LOST,
+            affectedIds = listOf(sourceUri, destinationUri),
+            recoveryHint = "Inspect both locations; the source remains authoritative and the copied destination may still exist",
+        )
+    }
+
+    private suspend fun metadataIdentityMatches(expected: ProjectIdentity): Boolean {
+        val actual = metadata.readIdentity(expected.location) ?: return false
+        return actual.id == expected.id && actual.name == expected.name &&
+            actual.description == expected.description &&
+            actual.location.stableId == expected.location.stableId
+    }
+
     private suspend fun preflightDestination(
         destinationUri: String,
         excludedProjectId: String? = null,
     ): DestinationPreflight {
         val location = ProjectLocation(
-            kind = ProjectLocationKind.USER_VISIBLE_LOCAL,
             stableId = destinationUri,
             displayLabel = destinationUri,
             userVisiblePath = destinationUri,
         )
-        val capabilities = storage.inspect(location)
+        val capabilities = storage.inspectProjectStorage(location)
         if (!capabilities.canCreate || !capabilities.writable) {
             return DestinationPreflight(false, blocked(
                 capabilities.explanation ?: "The destination is not writable",
@@ -460,11 +583,11 @@ class ProjectOperationsService(
 
     private data class DestinationPreflight(val allowed: Boolean, val report: OperationReport)
 
-    private fun identity(uri: String, name: String, description: String, kind: ProjectLocationKind) = ProjectIdentity(
+    private fun identity(uri: String, name: String, description: String) = ProjectIdentity(
         id = uri,
         name = name,
         description = description.trim(),
-        location = ProjectLocation(kind, uri, uri, uri),
+        location = ProjectLocation(uri, uri, uri),
         registeredAt = Instant.now(),
         lastOpenedAt = Instant.now(),
     )

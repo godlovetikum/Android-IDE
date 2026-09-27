@@ -12,10 +12,10 @@ Implementation proceeds one domain at a time. A phase is not accepted because co
 
 - The app opens at a Home entry point and uses layered mobile navigation with a contextual sidebar. The sidebar and related surfaces follow the agreed mobile interaction and persistence behavior.
 - Projects are acquired through blank creation, existing-folder import, ZIP import, and Git clone.
-- A project may use either a **user-visible local location** or an explicitly selected **private development workspace** backed by the integrated Termux runtime.
-- The selected location is authoritative. The private workspace is not an automatic hidden duplicate.
-- User-visible locations are accepted only when the editor and runtime can operate on that same location. Unsupported locations are rejected.
-- Cloud-backed projects are imported or downloaded locally before editing. Automatic two-way cloud synchronization is excluded.
+- Each project has an authoritative location owned by a storage provider; the Termux application's storage is one provider option, not a project-location class.
+- Registration requires verified containment and project-storage read/write access. File-operation capabilities are checked per operation.
+- Terminal, Git, and other domains assess access to the selected project independently; their limitations do not gate project registration or editor access.
+- Cloud-backed providers may be live project locations only if they meet project-storage and containment requirements; import/export-only providers are acquired into an explicitly selected destination. Automatic two-way cloud synchronization is excluded.
 - User project files, portable project metadata, project-associated runtime state, and global application data remain separate.
 - The terminal is global. Starting it from a project sets an initial directory but does not permanently restrict the session to that project.
 - Switching screens or applications does not explicitly close terminal sessions. Explicit close actions terminate sessions and their child processes.
@@ -30,7 +30,7 @@ Implementation proceeds one domain at a time. A phase is not accepted because co
 | 0 | Contracts and architecture freeze | State ownership and adapter boundaries are fixed | No unresolved ownership or lifecycle contradiction remains |
 | 1 | App foundation and storage | Shell, navigation, persistence, metadata, and storage layers exist | State restores correctly and storage layers remain separated |
 | 2 | Project and workspace | Registry and non-Git acquisition/management are reliable | Projects can be acquired, inspected, copied, moved, exported, and removed safely |
-| 3 | Termux runtime and terminal | Private development workspace, packages, sessions, and durable processes work | Sessions and child processes behave correctly across navigation and lifecycle events |
+| 3 | Termux runtime and terminal | Runtime storage provider, packages, sessions, and durable processes work | Sessions and child processes behave correctly; per-project runtime access is reported independently |
 | 4 | Code editor | Mobile-first Monaco editor and file operations are usable | Editing, tabs, search, mutation, saving, and recovery are reliable |
 | 5 | Browser and previews | Normal browser, local previews, console, and viewport testing work | Browser state is usable without corrupting project or runtime state |
 | 6 | Git | Repository and global Git workflows are complete | UI and terminal show the same repository state and credentials are secure |
@@ -48,9 +48,9 @@ Turn the product definition into implementation contracts before feature code is
 
 Define application state, project identity, storage ownership, navigation state, surface state, terminal session identity, editor tab identity, browser tab identity, and lifecycle event vocabulary.
 
-Define adapters for project storage, project registry, metadata, runtime workspace, terminal runtime, editor documents, Git, browser/preview, credentials, and lifecycle coordination. Higher-level domains must not depend directly on provider-specific storage or process details.
+Define adapters for project storage, project registry, metadata, runtime storage provider, terminal runtime, editor documents, Git, browser/preview, credentials, and lifecycle coordination. Higher-level domains must not depend directly on provider-specific storage or process details.
 
-Define the two project-location classes. The private development workspace requires Termux runtime initialization and package paths. A user-visible location requires capability validation. Both expose the same logical project operations.
+Define provider-neutral project identity and capabilities. Registration checks readable/writable project storage and containment only. Termux runtime initialization may expose another storage provider, while terminal access to any selected project is checked separately and gates only terminal-dependent operations.
 
 ### Gate
 
@@ -86,11 +86,11 @@ Implement the project list, recent ordering, project details, file count, projec
 
 Implement blank creation with name, description, destination, review, conflict preflight, metadata initialization, and post-operation verification. Implement existing-folder import without replacing the selected folder.
 
-Implement ZIP import with archive validation, safe extraction, reviewed name and destination, conflict detection, progress, partial-failure reporting, and post-extraction verification. Cloud-backed folders and archives are imported into a selected local destination.
+Implement ZIP import with archive validation, safe extraction, reviewed name and destination, conflict detection, progress, partial-failure reporting, and post-extraction verification. A cloud-backed folder may be registered in place when its provider meets live project-storage requirements; explicit folder/archive acquisition uses a user-selected eligible destination.
 
 Implement remove from registry, permanent deletion, export/share as ZIP, copy storage path, copy and duplicate, change location through copy-verify-delete, and batch operations. Reject project destinations nested inside another registered project.
 
-Implement explicit copy/move workflows between user-visible local storage and the private development workspace. The destination must be inspected before copying and verified afterward.
+Implement explicit copy/move workflows between supported storage providers. Each source and destination is preflighted and verified using that provider's capabilities; the project registry stores no private-runtime class flag.
 
 ### Gate
 
@@ -104,13 +104,13 @@ Integrate the complete Termux runtime foundation—not only terminal rendering l
 
 ### Deliverables
 
-Integrate the selected Termux source/libraries, pinned bootstrap, architecture-specific assets, package paths, and initialization. Establish the private development workspace, configure `HOME`, `PREFIX`, `PATH`, library paths, package database, and shell startup.
+Integrate the selected Termux source/libraries, pinned bootstrap, architecture-specific assets, package paths, and initialization. Expose Termux-owned storage through its provider adapter and configure `HOME`, `PREFIX`, `PATH`, library paths, package database, and shell startup independently from project registry state.
 
 Provide runtime capability reporting and an approved baseline package set including shell tools, Git, OpenSSH, certificates, archive tools, process tools, and supported Node.js or Python tooling. Package operations expose progress, result, version, and failure details.
 
 Implement global session creation, naming, switching, explicit close, close-all, availability, and open-from-folder/project. Implement PTY input/output, resizing, zoom, interruption where supported, child-process tracking, local-server tracking, and session records.
 
-Use the lifecycle coordinator and foreground-service mechanisms for visible long-running work. Preserve session records after unavoidable process loss and report availability accurately. A project selected for the private workspace must be directly usable by the shell, Git, language servers, and local servers.
+Use the lifecycle coordinator and foreground-service mechanisms for visible long-running work. Preserve session records after unavoidable process loss and report availability accurately. Before opening a project working directory, check terminal access for that project; if unsupported, explain the terminal limitation while leaving the registered project and editor available.
 
 ### Gate
 
@@ -242,7 +242,7 @@ Contracts
   -> security and customization hardening
 ```
 
-The private development workspace is established in Phase 3, but its storage ownership is defined in Phase 1 and its project selection/copy/move behavior is exposed in Phase 2. This prevents the runtime from becoming an unplanned replacement for project storage.
+The Termux runtime may expose app-owned storage through a storage-provider adapter when Phase 3 is implemented. That provider remains an ordinary authoritative project location; runtime-only capabilities never become project-registry eligibility rules.
 
 Small preparation tasks may proceed in parallel when they do not change these contracts. Full domain implementation must not create competing storage or lifecycle models.
 

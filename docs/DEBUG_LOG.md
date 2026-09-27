@@ -583,3 +583,8 @@ files' delimiter balance was confirmed unchanged from `HEAD`, the exhaustive `wh
 extended `SafeMutationResult` sealed class still cover every case, and `AppContent` was verified to
 hold no remaining references to `AppShell`-scoped state. No Gradle task, `gh` write, commit, or push
 was performed.
+
+
+## 2026-09-27 — Superseding capability-domain clarification
+
+Earlier Phase 2 entries describing a “private development workspace” as a separate project class, or reporting transfers as unavailable solely because the runtime adapter was not initialized, are historical and are superseded. Projects are provider-neutral: the Termux application's own filesystem may be exposed as an ordinary storage provider, but no project-kind flag is persisted. Registration depends on verified project-root containment and project-storage read/write access. Create, rename, delete, and change-observation capabilities are reported by storage and checked by the operations that need them. Terminal/runtime and Git access are assessed separately per project and gate only their own operations; their absence does not block registration or editor/file access.

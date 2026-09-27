@@ -29,9 +29,9 @@ import dev.android.ide.editor.EditorOutbound
 import dev.android.ide.contracts.ApplicationIdentity
 import dev.android.ide.contracts.CapabilityState
 import dev.android.ide.contracts.ProjectLocation
-import dev.android.ide.contracts.ProjectLocationKind
 import dev.android.ide.lifecycle.LifecycleStateStore
 import dev.android.ide.saf.ChildrenInspectionResult
+import dev.android.ide.saf.DocumentPresence
 import dev.android.ide.saf.ExactCreateResult
 import dev.android.ide.saf.PathResolutionResult
 import dev.android.ide.saf.SafeMutationResult
@@ -484,12 +484,11 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
         val displayName = registeredProject?.name ?: name
         val openedAt = System.currentTimeMillis()
         val location = ProjectLocation(
-            kind = ProjectLocationKind.USER_VISIBLE_LOCAL,
             stableId = treeUriString,
             displayLabel = displayName,
             userVisiblePath = treeUriString,
         )
-        val capabilities = safRepository.inspectProjectCapabilities(location)
+        val capabilities = safRepository.inspectProjectStorage(location)
         if (capabilities.state != CapabilityState.SUPPORTED) {
             projectRepository.upsert(
                 Project(
@@ -497,7 +496,6 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
                     uri = treeUriString,
                     lastOpenedMs = registeredProject?.lastOpenedMs ?: openedAt,
                     createdMs = registeredProject?.createdMs ?: openedAt,
-                    locationKind = location.kind,
                     stableLocationId = location.stableId,
                     locationLabel = location.displayLabel,
                     capabilityState = capabilities.state,
@@ -532,7 +530,6 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
                 uri = treeUriString,
                 lastOpenedMs = openedAt,
                 createdMs = registeredProject?.createdMs ?: openedAt,
-                locationKind = location.kind,
                 stableLocationId = location.stableId,
                 locationLabel = location.displayLabel,
                 capabilityState = capabilities.state,
@@ -639,9 +636,8 @@ These files are project-local and travel with the project. Global application pr
             val projects = projectRepository.getAll()
             _uiState.update { it.copy(projectDetailsByUri = emptyMap() ) }
             val verifiedProjects = projects.map { project ->
-                val capabilities = safRepository.inspectProjectCapabilities(
+                val capabilities = safRepository.inspectProjectStorage(
                     ProjectLocation(
-                        kind = project.locationKind,
                         stableId = project.stableLocationId,
                         displayLabel = project.locationLabel,
                         userVisiblePath = project.locationLabel,
@@ -685,9 +681,8 @@ These files are project-local and travel with the project. Global application pr
     fun createBlankProject(name: String, description: String, targetParentUri: String) {
         val trimmed = name.trim().ifEmpty { "Project" }
         viewModelScope.launch {
-            val parentCapabilities = safRepository.inspectProjectCapabilities(
+            val parentCapabilities = safRepository.inspectProjectStorage(
                 ProjectLocation(
-                    kind = ProjectLocationKind.USER_VISIBLE_LOCAL,
                     stableId = targetParentUri,
                     displayLabel = targetParentUri,
                     userVisiblePath = targetParentUri,
@@ -1136,6 +1131,7 @@ build/
                         val reason = when (moved) {
                             SafeMutationResult.Duplicate -> "already exists in the destination"
                             SafeMutationResult.InspectionFailed -> "destination could not be inspected"
+                            is SafeMutationResult.Partial -> "partial move; ${moved.recoveryHint}"
                             else -> "provider rejected the operation"
                         }
                         _uiState.update { it.copy(statusMessage = "Move failed for ${source.displayName}: $reason") }
@@ -1149,6 +1145,7 @@ build/
                         val reason = when (copied) {
                             SafeMutationResult.Duplicate -> "already exists in the destination"
                             SafeMutationResult.InspectionFailed -> "destination could not be inspected"
+                            is SafeMutationResult.Partial -> "partial copy; ${copied.recoveryHint}"
                             else -> "provider rejected the operation"
                         }
                         _uiState.update { it.copy(statusMessage = "Copy failed for ${source.displayName}: $reason") }
@@ -2190,15 +2187,11 @@ build/
         }
         val sourceParentUri = node.parentDocumentUri ?: rootUri
         val input = newName.trim()
-        val baseSegments = if (input.startsWith('/') || input.startsWith('\\')) {
-            emptyList()
-        } else {
-            projectRelativeSegments(sourceParentUri, rootUri) ?: run {
+        val baseSegments = projectRelativeSegments(sourceParentUri, rootUri) ?: run {
                 _uiState.update { it.copy(statusMessage = "Could not determine the current folder") }
                 return
             }
-        }
-        when (val normalized = normalizeProjectPath(input, baseSegments)) {
+        when (val normalized = normalizeUserProjectPath(input, rootUri, baseSegments)) {
             NormalizedPathResult.AboveProjectRoot ->
                 _uiState.update { it.copy(statusMessage = "The path cannot go above the project root") }
             NormalizedPathResult.MissingFinalName,
@@ -2331,16 +2324,12 @@ build/
             setCreateError(isDirectory, "No project is open")
             return
         }
-        val baseSegments = if (rawName.trim().startsWith('/') || rawName.trim().startsWith('\\')) {
-            emptyList()
-        } else {
-            projectRelativeSegments(parentNode.documentUri, rootUri)
-                ?: run {
-                    setCreateError(isDirectory, "Could not determine the selected folder")
-                    return
-                }
-        }
-        when (val normalized = normalizeProjectPath(rawName, baseSegments)) {
+        val baseSegments = projectRelativeSegments(parentNode.documentUri, rootUri)
+            ?: run {
+                setCreateError(isDirectory, "Could not determine the selected folder")
+                return
+            }
+        when (val normalized = normalizeUserProjectPath(rawName, rootUri, baseSegments)) {
             is NormalizedPathResult.Success -> {
                 markCreateSubmitting(isDirectory)
                 viewModelScope.launch {
@@ -2394,6 +2383,30 @@ build/
         return find(_uiState.value.fileTree, emptyList())
     }
 
+    private fun normalizeUserProjectPath(
+        rawPath: String,
+        rootUri: String,
+        relativeBase: List<String>,
+    ): NormalizedPathResult {
+        val input = rawPath.trim()
+        if (Regex("^[A-Za-z]:[/\\\\]").containsMatchIn(input)) return NormalizedPathResult.AboveProjectRoot
+        if (!input.startsWith('/')) return normalizeProjectPath(input, relativeBase)
+
+        val rootPath = safRepository.localFilesystemPath(rootUri)
+            ?: return NormalizedPathResult.InvalidComponent
+        return try {
+            val root = File(rootPath).canonicalFile
+            val candidate = File(input).canonicalFile
+            if (candidate == root) return NormalizedPathResult.MissingFinalName
+            if (!candidate.toPath().startsWith(root.toPath())) return NormalizedPathResult.AboveProjectRoot
+            val relative = root.toPath().relativize(candidate.toPath()).toString()
+                .replace(File.separatorChar, '/')
+            normalizeProjectPath(relative, emptyList())
+        } catch (_: Exception) {
+            NormalizedPathResult.InvalidComponent
+        }
+    }
+
     private fun createEntry(
         parentUri: String,
         name: String,
@@ -2433,6 +2446,16 @@ build/
                 ExactCreateResult.Failed -> {
                     safRepository.rollbackCreatedDirectories(createdIntermediateUris)
                     setCreateError(isDirectory, "Could not create ${if (isDirectory) "folder" else "file"}")
+                }
+                is ExactCreateResult.Partial -> {
+                    safRepository.deleteDocument(result.documentUri)
+                    val itemAbsent = safRepository.documentPresence(result.documentUri) == DocumentPresence.ABSENT
+                    val parentsRemoved = safRepository.rollbackCreatedDirectories(createdIntermediateUris)
+                    val recovery = if (!itemAbsent || !parentsRemoved) " ${result.recoveryHint}" else ""
+                    setCreateError(
+                        isDirectory,
+                        "The provider created an unexpected item; inspect the destination.$recovery",
+                    )
                 }
                 is ExactCreateResult.Created -> {
                     EditorLanguageRegistry.templateForFileName(normalizedName)?.let { template ->
@@ -2489,9 +2512,19 @@ build/
             return
         }
         viewModelScope.launch {
-            val newUri = (fileMutations.copy(node.documentUri, parentUri, newName) as? SafeMutationResult.Created)?.documentUri ?: run {
-                _uiState.update { it.copy(fileOpDialog = null, statusMessage = "Duplicate: create error") }
-                return@launch
+            val copied = fileMutations.copy(node.documentUri, parentUri, newName)
+            val newUri = when (copied) {
+                is SafeMutationResult.Created -> copied.documentUri
+                is SafeMutationResult.Partial -> {
+                    _uiState.update {
+                        it.copy(fileOpDialog = null, statusMessage = "Duplicate partially completed: ${copied.recoveryHint}")
+                    }
+                    return@launch
+                }
+                else -> {
+                    _uiState.update { it.copy(fileOpDialog = null, statusMessage = "Duplicate: create error") }
+                    return@launch
+                }
             }
             refreshProjectNow()
             openFilePermanent(newUri)
@@ -2527,7 +2560,7 @@ build/
         }
         val active  = _uiState.value.openTabs.firstOrNull { it.isActive } ?: return
         val content = pendingContent[active.id] ?: active.content ?: return
-        val normalized = normalizeProjectPath(relativePath, emptyList())
+        val normalized = normalizeUserProjectPath(relativePath, rootUri, emptyList())
         val segments = when (normalized) {
             is NormalizedPathResult.Success -> normalized.segments
             NormalizedPathResult.AboveProjectRoot -> {
@@ -2549,8 +2582,14 @@ build/
                     is PathResolutionResult.IntermediateNameMismatch -> resolved.createdIntermediateUris
                     else -> emptyList()
                 }
-                safRepository.rollbackCreatedDirectories(created)
-                _uiState.update { it.copy(fileOpDialog = null, statusMessage = "Save As: could not resolve path") }
+                val parentsRemoved = safRepository.rollbackCreatedDirectories(created)
+                _uiState.update {
+                    it.copy(
+                        fileOpDialog = null,
+                        statusMessage = if (parentsRemoved) "Save As: could not resolve path"
+                        else "Save As partially completed; inspect newly created parent folders",
+                    )
+                }
                 return@launch
             }
             val (targetParentUri, leafName) = path.parentUri to path.leafName
@@ -2559,21 +2598,49 @@ build/
                 leafName,
                 EditorLanguageRegistry.mimeTypeForFileName(leafName),
             )
-            val newUri = (created as? ExactCreateResult.Created)?.documentUri ?: run {
-                safRepository.rollbackCreatedDirectories(path.createdIntermediateUris)
+            val newUri = when (created) {
+                is ExactCreateResult.Created -> created.documentUri
+                is ExactCreateResult.Partial -> {
+                    safRepository.deleteDocument(created.documentUri)
+                    val absent = safRepository.documentPresence(created.documentUri) == DocumentPresence.ABSENT
+                    val parentsRemoved = safRepository.rollbackCreatedDirectories(path.createdIntermediateUris)
+                    _uiState.update {
+                        it.copy(
+                            fileOpDialog = null,
+                            statusMessage = if (absent && parentsRemoved) "Save As failed; unexpected provider item was removed"
+                            else "Save As may have left ${created.documentUri}: ${created.recoveryHint}",
+                        )
+                    }
+                    return@launch
+                }
+                else -> {
+                    val parentsRemoved = safRepository.rollbackCreatedDirectories(path.createdIntermediateUris)
                 val message = if (created is ExactCreateResult.Duplicate) {
                     "\u201c$leafName\u201d already exists — choose a different name"
                 } else {
                     "Save As: could not inspect or create the target"
                 }
-                _uiState.update { it.copy(fileOpDialog = null, statusMessage = message) }
-                return@launch
+                    _uiState.update {
+                        it.copy(
+                            fileOpDialog = null,
+                            statusMessage = if (parentsRemoved) message else "$message; parent-folder cleanup was incomplete",
+                        )
+                    }
+                    return@launch
+                }
             }
             val ok = fileMutations.write(newUri, content.toByteArray(Charsets.UTF_8))
             if (!ok) {
-                fileMutations.delete(newUri)
-                safRepository.rollbackCreatedDirectories(path.createdIntermediateUris)
-                _uiState.update { it.copy(fileOpDialog = null, statusMessage = "Save As: write failed") }
+                safRepository.deleteDocument(newUri)
+                val itemAbsent = safRepository.documentPresence(newUri) == DocumentPresence.ABSENT
+                val parentsRemoved = safRepository.rollbackCreatedDirectories(path.createdIntermediateUris)
+                _uiState.update {
+                    it.copy(
+                        fileOpDialog = null,
+                        statusMessage = if (itemAbsent && parentsRemoved) "Save As: write failed; created file was removed"
+                        else "Save As partially completed; inspect ${newUri} and any newly created parent folders",
+                    )
+                }
                 return@launch
             }
             val newLang = EditorLanguageRegistry.languageForFileName(leafName)

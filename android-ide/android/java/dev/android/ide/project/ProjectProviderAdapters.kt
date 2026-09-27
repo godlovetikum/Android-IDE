@@ -6,7 +6,7 @@ import dev.android.ide.data.ProjectRepository
 import dev.android.ide.data.model.Project
 import dev.android.ide.contracts.CapabilityState
 import dev.android.ide.contracts.ErrorCategory
-import dev.android.ide.contracts.LocationCapabilities
+import dev.android.ide.contracts.ProjectStorageCapabilities
 import dev.android.ide.contracts.LocationOperationRequest
 import dev.android.ide.contracts.MutationPreflight
 import dev.android.ide.contracts.OperationOutcome
@@ -14,6 +14,8 @@ import dev.android.ide.contracts.OperationReport
 import dev.android.ide.contracts.ProjectIdentity
 import dev.android.ide.contracts.ProjectLocation
 import dev.android.ide.contracts.ProjectMetadataAdapter
+import dev.android.ide.contracts.ProjectMutationIntent
+import dev.android.ide.contracts.ProjectMutationRequest
 import dev.android.ide.contracts.ProjectRegistryAdapter
 import dev.android.ide.contracts.ProjectRelativePath
 import dev.android.ide.contracts.ProjectStorageAdapter
@@ -37,7 +39,26 @@ class ProjectRegistryStore(
 
     override suspend fun listRegistered(): List<ProjectIdentity> = repository.getAll().map(::toIdentity)
 
+    fun warning(): String? = repository.readAll().warning
+
+    override suspend fun preflightRegistration(project: ProjectIdentity): MutationPreflight =
+        registrationMutex.withLock { projectContainmentPreflight(project) }
+
     override suspend fun register(project: ProjectIdentity): OperationReport = registrationMutex.withLock {
+        val capabilities = storage.inspectProjectStorage(project.location)
+        if (capabilities.state != CapabilityState.SUPPORTED || !capabilities.readable || !capabilities.writable) {
+            return@withLock blocked(
+                capabilities.explanation ?: "Project files must be readable and writable to register this location",
+                project.id,
+            )
+        }
+        val preflight = projectContainmentPreflight(project)
+        if (!preflight.allowed) return@withLock blocked(preflight.message, project.id)
+        repository.upsert(project.toProject())
+        complete("Project registered", project.id)
+    }
+
+    private suspend fun projectContainmentPreflight(project: ProjectIdentity): MutationPreflight {
         val existing = repository.getAll().filterNot { it.stableLocationId == project.location.stableId }
         for (other in existing) {
             val projectContainsOther = storage.isSameOrDescendant(
@@ -49,39 +70,40 @@ class ProjectRegistryStore(
                 project.location.stableId,
             )
             if (projectContainsOther == null || otherContainsProject == null) {
-                return blocked(
-                    "The new project cannot be registered until its location is verified against ${other.name}",
-                    project.id,
+                return MutationPreflight(
+                    allowed = false,
+                    message = "The new project cannot be registered until its location is verified against ${other.name}",
+                    errorCategory = ErrorCategory.PERMISSION_LOST,
                 )
             }
             if (projectContainsOther || otherContainsProject) {
-                return blocked(
-                    "The project location overlaps the registered project ${other.name}",
-                    project.id,
+                return MutationPreflight(
+                    allowed = false,
+                    message = "The project location overlaps the registered project ${other.name}",
+                    errorCategory = ErrorCategory.DESTINATION_CONFLICT,
                 )
             }
         }
-        repository.upsert(project.toProject())
-        complete("Project registered", project.id)
+        return MutationPreflight(true, "Project containment checks passed")
     }
 
     override suspend fun markUnavailable(
         projectId: String,
         reason: String,
         capabilityState: CapabilityState,
-    ): OperationReport {
-        val project = repository.getAll().firstOrNull { it.uri == projectId }
-            ?: return blocked("Project is not registered", projectId)
+    ): OperationReport = registrationMutex.withLock {
+        val project = repository.getAll().firstOrNull { it.stableLocationId == projectId }
+            ?: return@withLock blocked("Project is not registered", projectId)
         repository.upsert(project.copy(
             capabilityState = capabilityState,
             capabilityMessage = reason,
         ))
-        return complete("Project marked unavailable", projectId)
+        complete("Project marked unavailable", projectId)
     }
 
-    override suspend fun remove(projectId: String): OperationReport {
-        repository.remove(projectId)
-        return complete("Project removed from registry", projectId)
+    override suspend fun remove(projectId: String): OperationReport = registrationMutex.withLock {
+        if (!repository.remove(projectId)) blocked("Project is not registered", projectId)
+        else complete("Project removed from registry", projectId)
     }
 
     private fun toIdentity(project: Project) = ProjectIdentity(
@@ -89,7 +111,6 @@ class ProjectRegistryStore(
         name = project.name,
         description = project.description,
         location = ProjectLocation(
-            kind = project.locationKind,
             stableId = project.stableLocationId,
             displayLabel = project.locationLabel,
             userVisiblePath = project.uri,
@@ -106,7 +127,6 @@ class ProjectRegistryStore(
         uri = location.userVisiblePath ?: location.stableId,
         lastOpenedMs = lastOpenedAt?.toEpochMilli() ?: System.currentTimeMillis(),
         createdMs = registeredAt.toEpochMilli(),
-        locationKind = location.kind,
         stableLocationId = location.stableId,
         locationLabel = location.displayLabel,
         capabilityState = location.capabilityState,
@@ -176,7 +196,15 @@ class ProjectMetadataAdapterImpl(
 class ProjectStorageAdapterImpl(
     private val saf: SafRepository,
 ) : ProjectStorageAdapter {
-    suspend fun inspect(location: ProjectLocation): LocationCapabilities = saf.inspectProjectCapabilities(location)
+    suspend fun safStageDocument(uri: String, maxBytes: Long): dev.android.ide.saf.StagedDocumentResult =
+        saf.stageDocumentBounded(uri, maxBytes)
+
+    suspend fun safWriteDocumentFromStreamVerified(
+        uri: String,
+        input: java.io.InputStream,
+        maxBytes: Long,
+        expectedBytes: Long,
+    ): Boolean = saf.writeDocumentFromStreamVerified(uri, input, maxBytes, expectedBytes)
 
     suspend fun createDirectoryWithExactName(parentUri: String, name: String): ExactCreateResult =
         saf.createFileWithExactName(
@@ -244,26 +272,117 @@ class ProjectStorageAdapterImpl(
     suspend fun documentExists(uri: String): Boolean = saf.documentExists(uri)
     suspend fun documentPresence(uri: String): DocumentPresence = saf.documentPresence(uri)
 
-    override suspend fun inspectCapabilities(location: ProjectLocation): LocationCapabilities = inspect(location)
+    override suspend fun inspectProjectStorage(location: ProjectLocation): ProjectStorageCapabilities = saf.inspectProjectStorage(location)
 
-    override suspend fun list(path: ProjectRelativePath): List<ProjectRelativePath> =
-        saf.listChildren(path).map { it.documentUri }
+    private fun relativeSegments(path: ProjectRelativePath, allowRoot: Boolean = false): List<String>? {
+        if (path.isEmpty()) return if (allowRoot) emptyList() else null
+        if (path.startsWith('/') || path.startsWith('\\') || Regex("^[A-Za-z]:").containsMatchIn(path)) return null
+        val segments = path.replace('\\', '/').split('/')
+        if (segments.any { it.isEmpty() || it == "." || it == ".." || it.any(Char::isISOControl) }) return null
+        return segments
+    }
 
-    override suspend fun read(path: ProjectRelativePath): ByteArray =
-        saf.readFile(path) ?: ByteArray(0)
+    private suspend fun resolveExisting(project: ProjectIdentity, segments: List<String>): FileNode? {
+        var currentUri = project.location.stableId
+        var node: FileNode? = null
+        for ((index, segment) in segments.withIndex()) {
+            val children = saf.inspectChildren(currentUri) as? dev.android.ide.saf.ChildrenInspectionResult.Success
+                ?: return null
+            node = children.children.firstOrNull { it.displayName == segment } ?: return null
+            if (index < segments.lastIndex && !node.isDirectory) return null
+            if (saf.isSameOrDescendant(project.location.stableId, node.documentUri) != true) return null
+            currentUri = node.documentUri
+        }
+        return node
+    }
 
-    override suspend fun write(path: ProjectRelativePath, content: ByteArray): OperationReport =
-        if (saf.writeFile(path, content)) complete("Project file written", path)
+    private suspend fun resolveParent(project: ProjectIdentity, segments: List<String>): String? {
+        if (segments.size == 1) return project.location.stableId
+        val parent = resolveExisting(project, segments.dropLast(1)) ?: return null
+        return parent.documentUri.takeIf { parent.isDirectory }
+    }
+
+    override suspend fun list(project: ProjectIdentity, path: ProjectRelativePath): List<ProjectRelativePath>? {
+        val segments = relativeSegments(path, allowRoot = true) ?: return null
+        val directoryUri = if (segments.isEmpty()) project.location.stableId
+            else resolveExisting(project, segments)?.takeIf { it.isDirectory }?.documentUri ?: return null
+        val children = saf.inspectChildren(directoryUri) as? dev.android.ide.saf.ChildrenInspectionResult.Success
+            ?: return null
+        return children.children.map { child -> (segments + child.displayName).joinToString("/") }
+    }
+
+    override suspend fun read(project: ProjectIdentity, path: ProjectRelativePath): ByteArray? {
+        val segments = relativeSegments(path) ?: return null
+        val node = resolveExisting(project, segments) ?: return null
+        if (node.isDirectory) return null
+        return saf.readFile(node.documentUri)
+    }
+
+    override suspend fun write(project: ProjectIdentity, path: ProjectRelativePath, content: ByteArray): OperationReport {
+        val preflight = preflightMutation(ProjectMutationRequest(project, path, ProjectMutationIntent.WRITE))
+        if (!preflight.allowed) return OperationReport(OperationOutcome.BLOCKED, preflight.message, preflight.errorCategory)
+        val segments = relativeSegments(path) ?: return failed("The project-relative path is invalid", path, ErrorCategory.DESTINATION_CONFLICT)
+        val node = resolveExisting(project, segments) ?: return failed("The project file is no longer available", path, ErrorCategory.PERMISSION_LOST)
+        return if (!node.isDirectory && saf.writeFile(node.documentUri, content)) complete("Project file written", path)
         else failed("Project file could not be written", path, ErrorCategory.PERMISSION_LOST)
+    }
 
-    override suspend fun preflightMutation(path: ProjectRelativePath): MutationPreflight =
-        MutationPreflight(true, "Provider mutation preflight passed")
+    override suspend fun preflightMutation(request: ProjectMutationRequest): MutationPreflight {
+        val segments = relativeSegments(request.path) ?: return MutationPreflight(
+            false, "The project-relative path is invalid or escapes the project root", ErrorCategory.DESTINATION_CONFLICT,
+        )
+        val capabilities = inspectProjectStorage(request.project.location)
+        if (capabilities.state != CapabilityState.SUPPORTED) return MutationPreflight(
+            false,
+            capabilities.explanation ?: "The project location is unavailable for mutation",
+            ErrorCategory.UNSUPPORTED_PROVIDER_CAPABILITY,
+        )
+        if (request.intent == ProjectMutationIntent.CREATE && !capabilities.canCreate ||
+            request.intent == ProjectMutationIntent.WRITE && !capabilities.writable ||
+            request.intent == ProjectMutationIntent.DELETE && !capabilities.canDelete
+        ) return MutationPreflight(false, "The provider does not support this project mutation", ErrorCategory.UNSUPPORTED_PROVIDER_CAPABILITY)
+        var parentUri = resolveParent(request.project, segments)
+        if (parentUri == null && request.intent == ProjectMutationIntent.CREATE) {
+            var currentUri = request.project.location.stableId
+            for (segment in segments.dropLast(1)) {
+                val children = saf.inspectChildren(currentUri) as? dev.android.ide.saf.ChildrenInspectionResult.Success
+                    ?: return MutationPreflight(false, "The selected project parent could not be inspected", ErrorCategory.PERMISSION_LOST)
+                val existingParent = children.children.firstOrNull { it.displayName == segment }
+                if (existingParent == null) {
+                    return MutationPreflight(
+                        true,
+                        "The destination is contained by the project root; the calling surface may create missing parent folders",
+                    )
+                }
+                if (!existingParent.isDirectory || saf.isSameOrDescendant(request.project.location.stableId, existingParent.documentUri) != true) {
+                    return MutationPreflight(false, "A file or out-of-project item blocks the destination path", ErrorCategory.DESTINATION_CONFLICT)
+                }
+                currentUri = existingParent.documentUri
+            }
+            parentUri = currentUri
+        }
+        parentUri = parentUri ?: return MutationPreflight(
+            false, "The selected project parent is unavailable", ErrorCategory.PERMISSION_LOST,
+        )
+        val leaf = segments.last()
+        val children = saf.inspectChildren(parentUri) as? dev.android.ide.saf.ChildrenInspectionResult.Success
+            ?: return MutationPreflight(false, "The selected project parent could not be inspected", ErrorCategory.PERMISSION_LOST)
+        val existing = children.children.firstOrNull { it.displayName.equals(leaf, ignoreCase = true) }
+        return when (request.intent) {
+            ProjectMutationIntent.CREATE -> if (existing == null) MutationPreflight(true, "The exact project destination is available")
+                else MutationPreflight(false, "An item with that name already exists", ErrorCategory.DESTINATION_CONFLICT)
+            ProjectMutationIntent.WRITE -> if (existing != null && !existing.isDirectory) MutationPreflight(true, "The existing project file is available for writing")
+                else MutationPreflight(false, "The project file does not exist or is not a file", ErrorCategory.DESTINATION_CONFLICT)
+            ProjectMutationIntent.DELETE -> if (existing != null) MutationPreflight(true, "The exact project item is available for deletion")
+                else MutationPreflight(false, "The project item no longer exists", ErrorCategory.EXTERNAL_FILE_CHANGE)
+        }
+    }
 
     override suspend fun preflightLocationOperation(request: LocationOperationRequest): MutationPreflight =
         MutationPreflight(
-            allowed = request.source != null || request.kind.name == "IMPORT",
-            message = "Transfer operation preflight requires an explicit source or import input",
-            errorCategory = ErrorCategory.DESTINATION_CONFLICT.takeIf { request.destination == null },
+            allowed = false,
+            message = "This storage adapter does not execute location transfers; use the project-management service, which performs operation-specific provider and containment checks",
+            errorCategory = ErrorCategory.UNSUPPORTED_PROVIDER_CAPABILITY,
         )
 
     override suspend fun executeLocationOperation(request: LocationOperationRequest): OperationReport =
@@ -272,7 +391,10 @@ class ProjectStorageAdapterImpl(
     override suspend fun verifyLocationOperation(request: LocationOperationRequest): OperationReport =
         blocked("Project relocation and transfer verification requires the selected provider to report the resulting location and state", request.projectId)
 
-    override suspend fun observeChanges(listener: (ProjectRelativePath) -> Unit) = Unit
+    override suspend fun observeChanges(
+        project: ProjectIdentity,
+        listener: (ProjectRelativePath) -> Unit,
+    ): AutoCloseable? = saf.observeProjectChanges(project.location.stableId, listener)
 }
 
 private fun complete(message: String, id: String) = OperationReport(

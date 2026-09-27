@@ -56,31 +56,15 @@ The first implementation should define read and write ownership for each state v
 
 ## 5. Project-location and filesystem contract
 
-Android IDE supports two explicit project-location classes.
+Every project location is provider-owned and identified by a stable provider location. There is no project-location class flag: Android external storage, a supported SAF provider, and the Termux application's own storage can each be authoritative project providers. App-private visibility may affect explicit sharing/export, but it never creates a separate project-registration category.
 
-### 5.1 User-visible local location
+Registration requires verified containment against other registered projects and project-storage read/write access. The storage provider reports create, rename, delete, move, and change-observation capabilities separately; each file or project operation checks the capabilities it actually needs. Terminal, Git, language servers, and other domains perform their own per-project access checks. Their limitations must not block registration or otherwise-supported editor/file operations. The editor and runtime use the selected authoritative location without hidden working copies. Import/export-only providers may be rejected for live editing by their provider policy; automatic two-way synchronization remains outside the current product.
 
-A user-visible local location keeps project files accessible outside Android IDE. It may be device storage, removable storage, or another local provider that satisfies the required operations.
+### 5.1 Phase 0 contract work
 
-The location is eligible only when the editor and integrated runtime can operate on the same location for reading, writing, creating, renaming, deleting, moving, executing supported files, and observing relevant changes. A provider that can be selected but cannot provide the required development behavior is rejected with an actionable explanation.
+Define `ProjectLocation` by provider identity, stable location identifier, display label, project-storage state, and optional user-facing location details. Do not persist a “private runtime” or equivalent location-kind bit, and do not expose provider-specific URI details throughout the application.
 
-### 5.2 Private development workspace
-
-The private development workspace is an explicitly selected project location inside Android IDE’s Termux-based runtime filesystem. It is intended for projects requiring stronger Unix/POSIX behavior, package installation, executable scripts, native binaries, symlinks, language servers, file watching, or local development servers.
-
-It is not a hidden temporary copy. When selected, it is the authoritative project location. The location must appear in project details, project size calculations, and relocation workflows. Android IDE must provide explicit export, sharing, backup, copy, move, and relocation actions because unrelated applications cannot ordinarily browse the private directory by path.
-
-### 5.3 Common authority rule
-
-Monaco, the file tree, the Termux runtime, Git, language servers, and local servers must operate on the selected authoritative project location. The editor’s in-memory model is not a second source of truth. A runtime cache is not a project copy.
-
-Cloud-backed locations are not live editable project locations. They must be downloaded or imported into a selected local location before registration as an Android IDE project. Automatic two-way synchronization is excluded from the current product.
-
-### 5.4 Phase 0 contract work
-
-Define a `ProjectLocation` identity that can represent both location classes without pretending every location is a normal path. It should retain the location kind, stable identifier, display label, capability state, and user-visible location details. Do not expose provider-specific URI details throughout the application.
-
-Define a capability result that distinguishes supported, unsupported, unavailable, permission-lost, and not-yet-checked states. Capability checks must be explicit and must not silently switch location class.
+Define project-storage capabilities explicitly for read, write/update, create, rename, delete, and change observation. Keep terminal/runtime and Git access results in their own domain contracts. A storage-capability failure must be reported to the storage operation that needs it; a terminal/Git failure must not rewrite project-registration or editor availability.
 
 Define copy, move, export, import, and relocation semantics as operations over locations. Every operation must have preflight, execution, verification, partial-failure, interruption, and cleanup outcomes.
 
@@ -210,7 +194,7 @@ Phase 1 may begin only when:
 - the three approved documents are the active references;
 - old planning documents are archived and clearly marked as superseded;
 - storage-layer ownership is recorded;
-- project-location classes and capability rules are recorded;
+- provider identity, registry-containment, and per-domain capability rules are recorded;
 - navigation, Back, Hide, Close, Leave Project, and Exit semantics are recorded;
 - restoration and unavailable-state behavior are recorded;
 - adapter boundaries are recorded;

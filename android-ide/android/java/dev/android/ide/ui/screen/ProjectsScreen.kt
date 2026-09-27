@@ -399,7 +399,7 @@ private fun ProjectItem(
                 project.capabilityState != CapabilityState.SUPPORTED
             ) {
                 Text(
-                    text = project.capabilityMessage ?: project.capabilityState.name.lowercase().replace('_', ' '),
+                    text = "Project file access: ${project.capabilityMessage ?: project.capabilityState.name.lowercase().replace('_', ' ')}",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.error,
                     maxLines = 2,

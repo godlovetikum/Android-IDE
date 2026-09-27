@@ -1330,7 +1330,7 @@ private fun BinaryOpenErrorDialog(fileName: String, onDismiss: () -> Unit) {
 
 // ── Dialog composables ─────────────────────────────────────────────────────────
 
-// The user types a path relative to the project root, e.g. "src/utils/Foo.kt".
+// The user may type a nested project-relative path or an absolute path within the project root.
 // Intermediate directories are created automatically by IdeViewModel.saveAsAtPath.
 @Composable
 private fun SaveAsDialog(
@@ -1345,7 +1345,7 @@ private fun SaveAsDialog(
         text    = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
-                    "Enter a path relative to the project root. Use \"/\" to navigate into sub-folders (e.g. src/utils/Foo.kt). Intermediate directories are created automatically.",
+                    "Enter a path relative to the project root or an absolute path inside it. Use path separators for nested folders; missing intermediate directories are created automatically.",
                     style = MaterialTheme.typography.bodySmall,
                 )
                 OutlinedTextField(
@@ -1380,6 +1380,7 @@ private fun RenameDialog(
         title   = { Text("Rename") },
         text    = {
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("Enter a new name or a nested path. Absolute paths are accepted only within this project; missing parent folders are created.", style = MaterialTheme.typography.bodySmall)
                 OutlinedTextField(
                     value         = name,
                     onValueChange = { name = it },
@@ -1430,6 +1431,7 @@ private fun CreateFileDialog(
         title   = { Text("New File") },
         text    = {
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("Enter a file path relative to this folder, or an absolute path within the project. Missing folders are created automatically.", style = MaterialTheme.typography.bodySmall)
                 OutlinedTextField(
                     value         = name,
                     onValueChange = { name = it },
@@ -1466,6 +1468,7 @@ private fun CreateFolderDialog(
         title   = { Text("New Folder") },
         text    = {
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("Enter a folder path relative to this folder, or an absolute path within the project. Missing folders are created automatically.", style = MaterialTheme.typography.bodySmall)
                 OutlinedTextField(
                     value         = name,
                     onValueChange = { name = it },
