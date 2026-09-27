@@ -664,6 +664,14 @@ These files are project-local and travel with the project. Global application pr
                     fileCount = metadata.fileCount,
                     folderCount = metadata.folderCount,
                     totalBytes = metadata.totalBytes,
+                    storageCapabilities = safRepository.inspectProjectStorage(
+                        ProjectLocation(
+                            stableId = project.stableLocationId,
+                            displayLabel = project.locationLabel,
+                            userVisiblePath = project.locationLabel,
+                            capabilityState = project.capabilityState,
+                        ),
+                    ),
                     languageBytes = metadata.languageBytes,
                     git = metadata.git,
                 )
@@ -930,6 +938,14 @@ build/
                     )
                 }
             } else {
+                val storageCapabilities = safRepository.inspectProjectStorage(
+                    ProjectLocation(
+                        stableId = project.stableLocationId,
+                        displayLabel = project.locationLabel,
+                        userVisiblePath = project.locationLabel,
+                        capabilityState = project.capabilityState,
+                    ),
+                )
                 _uiState.update {
                     it.copy(
                         projectDetails = ProjectDetails(
@@ -942,6 +958,7 @@ build/
                             fileCount = metadata.fileCount,
                             folderCount = metadata.folderCount,
                             totalBytes = metadata.totalBytes,
+                            storageCapabilities = storageCapabilities,
                             languageBytes = metadata.languageBytes,
                             git = metadata.git,
                         ),
@@ -2201,9 +2218,9 @@ build/
                 when (val resolved = safRepository.resolveOrCreatePathSafely(rootUri, normalized.segments)) {
                     is PathResolutionResult.Resolved -> {
                         val result = fileMutations.moveAndRename(
-                            sourceUriString = node.documentUri,
-                            sourceParentUriString = sourceParentUri,
-                            targetParentUriString = resolved.parentUri,
+                            sourceUri = node.documentUri,
+                            sourceParentUri = sourceParentUri,
+                            targetParentUri = resolved.parentUri,
                             newName = resolved.leafName,
                         )
                         when (result) {
@@ -2423,8 +2440,8 @@ build/
         if (!submittingAlreadyMarked) markCreateSubmitting(isDirectory)
         viewModelScope.launch {
             val result = fileMutations.createFile(
-                parentUriString = parentUri,
-                displayName = normalizedName,
+                parentUri = parentUri,
+                name = normalizedName,
                 mimeType = if (isDirectory) {
                     "vnd.android.document/directory"
                 } else {

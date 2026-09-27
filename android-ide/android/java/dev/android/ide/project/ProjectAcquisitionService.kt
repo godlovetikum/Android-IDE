@@ -448,6 +448,13 @@ class ProjectAcquisitionService(
         errorCategory = category,
     )
 
+    private fun failed(message: String, affectedId: String, category: ErrorCategory) = OperationReport(
+        outcome = OperationOutcome.FAILED,
+        message = message,
+        errorCategory = category,
+        affectedIds = listOf(affectedId),
+    )
+
     private suspend fun metadataIdentityMatches(expected: ProjectIdentity): Boolean {
         val actual = metadata.readIdentity(expected.location) ?: return false
         return actual.id == expected.id && actual.name == expected.name &&
