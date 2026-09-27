@@ -3,6 +3,8 @@ package dev.android.ide.ui.shell
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -67,7 +69,7 @@ fun AppShell(
     viewModel: AppShellViewModel,
     ideViewModel: IdeViewModel,
     onExit: () -> Unit,
-    onCreateProject: () -> Unit,
+    onCreateProject: (String?) -> Unit,
     onImportFolder: () -> Unit,
     onImportZip: () -> Unit,
     onCloneGit: () -> Unit,
@@ -128,6 +130,7 @@ fun AppShell(
 
     ModalNavigationDrawer(
         drawerState = drawerState,
+        gesturesEnabled = drawerState.isOpen,
         drawerContent = {
             ModalDrawerSheet {
                 ContextualNavigation(
@@ -138,7 +141,7 @@ fun AppShell(
                     onMore = { moreOpen = !moreOpen },
                     onNavigate = ::navigate,
                     onOpenProject = { viewModel.openProject(it); coroutineScope.launch { drawerState.close() } },
-                    onCreateProject = { onCreateProject(); moreOpen = false; coroutineScope.launch { drawerState.close() } },
+                    onCreateProject = { onCreateProject(null); moreOpen = false; coroutineScope.launch { drawerState.close() } },
                     onImportFolder = { onImportFolder(); moreOpen = false; coroutineScope.launch { drawerState.close() } },
                     onImportZip = { onImportZip(); moreOpen = false; coroutineScope.launch { drawerState.close() } },
                     onCloneGit = { onCloneGit(); moreOpen = false; coroutineScope.launch { drawerState.close() } },
@@ -192,7 +195,7 @@ fun AppShell(
             onDismissRequest = { phaseFeedback = null },
             title = { Text(action) },
             text = {
-                Text("Coming soon (phase ${placeholderPhase(action)})")
+                Text("$action not available. Coming soon (phase ${placeholderPhase(action)})")
             },
             confirmButton = { TextButton(onClick = { phaseFeedback = null }) { Text("OK") } },
         )
@@ -208,7 +211,7 @@ private fun ContextualNavigation(
     onMore: () -> Unit,
     onNavigate: (Surface) -> Unit,
     onOpenProject: (String) -> Unit,
-    onCreateProject: () -> Unit,
+    onCreateProject: (String?) -> Unit,
     onImportFolder: () -> Unit,
     onImportZip: () -> Unit,
     onCloneGit: () -> Unit,
@@ -217,42 +220,31 @@ private fun ContextualNavigation(
     onDismissDrawer: () -> Unit,
     onOpenEditorPanel: () -> Unit,
 ) {
-    val terminalActions = listOf("New session", "Close session", "Close all sessions", "Rename session", "Zoom")
-    val extensionActions = listOf("Install extension", "Update extension", "Remove extension", "Extension permissions")
+    val navigationActive = state.surface in setOf(Surface.HOME, Surface.PROJECTS, Surface.EXTENSIONS, Surface.SETTINGS, Surface.PROJECT_DETAILS)
     LazyColumn(
         modifier = modifier.navigationBarsPadding().padding(horizontal = 12.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(top = 12.dp, bottom = 120.dp),
     ) {
-        item { Text("Quick navigation", style = MaterialTheme.typography.labelLarge) }
-        item { NavigationItem(Icons.Default.Home, "Home", state.surface == Surface.HOME) { onNavigate(Surface.HOME) } }
-        item { NavigationItem(Icons.Default.Code, "Editor", state.surface == Surface.EDITOR) { onNavigate(Surface.EDITOR) } }
-        item { NavigationItem(Icons.Default.Terminal, "Terminal", state.surface == Surface.TERMINAL) { onNavigate(Surface.TERMINAL) } }
-        item { NavigationItem(Icons.Default.Language, "Browser", state.surface == Surface.BROWSER) { onNavigate(Surface.BROWSER) } }
-        item { NavigationItem(Icons.Default.MergeType, "Git", state.surface == Surface.GIT) { onNavigate(Surface.GIT) } }
-        item { NavigationItem(Icons.Default.MoreHoriz, if (moreOpen) "Hide more" else "More", false, onMore) }
-        if (moreOpen) {
-            item { NavigationItem(Icons.Default.FolderOpen, "Projects", state.surface == Surface.PROJECTS) { onNavigate(Surface.PROJECTS) } }
-            item { NavigationItem(Icons.Default.Extension, "Extensions", state.surface == Surface.EXTENSIONS) { onNavigate(Surface.EXTENSIONS) } }
-            item { NavigationItem(Icons.Default.Settings, "Settings", state.surface == Surface.SETTINGS) { onNavigate(Surface.SETTINGS) } }
-            item { NavigationItem(Icons.Default.Settings, "Credentials and security", false) { onFeedback("Credentials and security settings"); onDismissDrawer() } }
-            item { NavigationItem(Icons.Default.Settings, "Display", false) { onSettingsSection("App Theme"); onDismissDrawer() } }
+        item {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                NavigationTopItem(Icons.Default.Home, "Navigation", navigationActive) { onNavigate(Surface.HOME) }
+                NavigationTopItem(Icons.Default.Code, "Editor", state.surface == Surface.EDITOR) { onNavigate(Surface.EDITOR) }
+                NavigationTopItem(Icons.Default.Terminal, "Terminal", state.surface == Surface.TERMINAL) { onNavigate(Surface.TERMINAL) }
+                NavigationTopItem(Icons.Default.Language, "Browser", state.surface == Surface.BROWSER) { onNavigate(Surface.BROWSER) }
+                NavigationTopItem(Icons.Default.MergeType, "Git", state.surface == Surface.GIT) { onNavigate(Surface.GIT) }
+            }
         }
         item { HorizontalDivider(Modifier.padding(vertical = 8.dp)) }
-        when (state.surface) {
-            Surface.PROJECTS -> {
-                item { Text("Project management", style = MaterialTheme.typography.labelLarge) }
-                item { TextButton(onClick = { onNavigate(Surface.PROJECTS) }, Modifier.fillMaxWidth()) { Text("Projects") } }
-                item { NavigationItem(Icons.Default.Add, "Create blank project", false) { onCreateProject() } }
-                item { NavigationItem(Icons.Default.FolderOpen, "Import existing folder", false) { onImportFolder() } }
-                item { NavigationItem(Icons.Default.FolderOpen, "Import ZIP archive", false) { onImportZip() } }
-                item { NavigationItem(Icons.Default.MergeType, "Clone remote Git repository", false) { onCloneGit() } }
-                if (state.projects.isNotEmpty()) {
-                    item { Text("Recent projects", style = MaterialTheme.typography.labelLarge) }
-                    items(state.projects.take(5), key = { it.id }) { project -> ProjectContextItem(project, onOpenProject) }
-                }
+        when {
+            navigationActive -> {
+                item { Text("Navigation", style = MaterialTheme.typography.labelLarge) }
+                item { NavigationItem(Icons.Default.Home, "Home", state.surface == Surface.HOME) { onNavigate(Surface.HOME) } }
+                item { NavigationItem(Icons.Default.FolderOpen, "Projects", state.surface == Surface.PROJECTS) { onNavigate(Surface.PROJECTS) } }
+                item { NavigationItem(Icons.Default.Extension, "Extensions", state.surface == Surface.EXTENSIONS) { onNavigate(Surface.EXTENSIONS) } }
+                item { NavigationItem(Icons.Default.Settings, "Settings", state.surface == Surface.SETTINGS) { onNavigate(Surface.SETTINGS) } }
             }
-            Surface.EDITOR -> {
+            state.surface == Surface.EDITOR -> {
                 item { Text("Editor context", style = MaterialTheme.typography.labelLarge) }
                 item { NavigationItem(Icons.Default.FolderOpen, "Project file tree", true) { onOpenEditorPanel() } }
                 item { NavigationItem(Icons.Default.Search, "Search filenames", false) { ideViewModel.showFileSearch(); onDismissDrawer() } }
@@ -260,19 +252,10 @@ private fun ContextualNavigation(
                 item { NavigationItem(Icons.Default.FolderOpen, "Locate current file", false) { ideViewModel.revealActiveFile(); onDismissDrawer() } }
                 item { NavigationItem(Icons.Default.Settings, "Editor settings", false) { onSettingsSection("Editor"); onDismissDrawer() } }
             }
-            Surface.TERMINAL -> ContextActionItems(terminalActions, onFeedback)
-            Surface.EXTENSIONS -> ContextActionItems(extensionActions, onFeedback)
-            Surface.SETTINGS -> {
-                item { Text("Settings groups", style = MaterialTheme.typography.labelLarge) }
-                item { NavigationItem(Icons.Default.Settings, "App theme", false) { onSettingsSection("App Theme"); onDismissDrawer() } }
-                item { NavigationItem(Icons.Default.Settings, "UI font size", false) { onSettingsSection("UI Font Size"); onDismissDrawer() } }
-                item { NavigationItem(Icons.Default.Code, "Editor", false) { onSettingsSection("Editor"); onDismissDrawer() } }
-                item { NavigationItem(Icons.Default.FolderOpen, "File tree", false) { onSettingsSection("File Tree"); onDismissDrawer() } }
-                item { NavigationItem(Icons.Default.FolderOpen, "Project storage", false) { onSettingsSection("Project Storage"); onDismissDrawer() } }
-                item { NavigationItem(Icons.Default.Terminal, "Terminal and runtime", false) { onFeedback("Terminal and runtime settings") } }
-                item { NavigationItem(Icons.Default.Extension, "Credentials and security", false) { onFeedback("Credentials and security settings") } }
-            }
-            else -> Unit
+            state.surface == Surface.TERMINAL -> item { UnavailableSidebarFeature("Terminal", 3) }
+            state.surface == Surface.BROWSER -> item { UnavailableSidebarFeature("Browser", 5) }
+            state.surface == Surface.GIT -> item { UnavailableSidebarFeature("Git", 6) }
+            else -> item { UnavailableSidebarFeature(surfaceTitle(state.surface), placeholderPhase(surfaceTitle(state.surface))) }
         }
     }
 }
@@ -320,13 +303,33 @@ private fun NavigationItem(icon: androidx.compose.ui.graphics.vector.ImageVector
 }
 
 @Composable
+private fun NavigationTopItem(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, selected: Boolean, onClick: () -> Unit) {
+    TextButton(onClick = onClick, modifier = Modifier.padding(horizontal = 2.dp)) {
+        Column(horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Icon(icon, contentDescription = label, tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(label, style = MaterialTheme.typography.labelSmall, color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+@Composable
+private fun UnavailableSidebarFeature(feature: String, phase: Int) {
+    Card(
+        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+    ) {
+        Text("$feature not available. Coming soon (phase $phase)", Modifier.padding(16.dp), style = MaterialTheme.typography.bodyMedium)
+    }
+}
+
+@Composable
 private fun SurfaceHost(
     modifier: Modifier,
     state: AppShellState,
     viewModel: AppShellViewModel,
     ideViewModel: IdeViewModel,
     onNavigate: (Surface) -> Unit,
-    onCreateProject: () -> Unit,
+    onCreateProject: (String?) -> Unit,
     onImportFolder: () -> Unit,
     onImportZip: () -> Unit,
     onCloneGit: () -> Unit,
@@ -343,7 +346,7 @@ private fun SurfaceHost(
 ) {
     val ideState by ideViewModel.uiState.collectAsState()
     when (state.surface) {
-        Surface.HOME -> HomeSurface(onNavigate = onNavigate, onExit = onRequestExit)
+        Surface.HOME -> HomeSurface(onNavigate = onNavigate, onExit = onRequestExit, onFeedback = onFeedback)
         Surface.PROJECTS -> ProjectsSurface(state, viewModel, onCreateProject, onImportFolder, onImportZip, onCloneGit, onExportProject, onExportProjects, onDuplicateProject, onRelocateProject, onFeedback, modifier)
         Surface.PROJECT_DETAILS -> ProjectDetailsSurface(state, viewModel, onExportProject, onDuplicateProject, onRelocateProject, modifier)
         Surface.EDITOR -> EditorSurface(
@@ -370,26 +373,13 @@ private fun SurfaceHost(
 
 @Composable
 private fun DomainPlaceholderSurface(title: String, modifier: Modifier, onFeedback: (String) -> Unit) {
-    val actions = when (title) {
-        "Editor" -> listOf("Find", "Replace", "Save", "Save As", "Preview")
-        "Terminal" -> listOf("New session", "Close session", "Close all sessions", "Zoom")
-        "Browser" -> listOf("New tab", "Back", "Forward", "Reload", "Downloads", "Developer tools", "Viewport", "More")
-        "Git" -> listOf("Status", "Changed files", "Stage", "Unstage", "Commit", "History", "Branches", "Fetch", "Pull", "Push", "Global Git Settings", "Manage Credentials", "Provider management", "Credential-store configuration", "SSH and known-host configuration", "Global ignore rules")
-        "Extensions" -> listOf("Install extension", "Update", "Remove", "Permissions", "More")
-        "Settings" -> listOf("Application and display", "Editor", "Terminal and runtime", "Browser", "Credentials and security", "Storage and permissions", "More")
-        else -> emptyList()
-    }
     MaterialSurface(
         modifier = modifier.padding(20.dp),
         color = MaterialTheme.colorScheme.surfaceVariant,
         contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
     ) {
         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(title, style = MaterialTheme.typography.headlineMedium)
-            Text("Coming soon (phase ${placeholderPhase(title)})", style = MaterialTheme.typography.titleMedium)
-            actions.forEach { action ->
-                TextButton(onClick = { onFeedback(action) }, Modifier.fillMaxWidth()) { Text(action) }
-            }
+            Text("$title not available. Coming soon (phase ${placeholderPhase(title)})", style = MaterialTheme.typography.titleMedium)
         }
     }
 }

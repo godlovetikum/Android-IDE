@@ -396,7 +396,6 @@ fun IdeScreen(
                             onSave           = ideViewModel::saveActiveFile,
                             onSaveAs         = onSaveAs,
                             onFind           = ideViewModel::showEditorFind,
-                            onReplace        = ideViewModel::showEditorReplace,
                             onTogglePreview  = ideViewModel::requestRun,
                             onOpenFile       = { uri -> ideViewModel.openFile(uri) },
                             onRevealInTree   = { uri ->
@@ -1047,7 +1046,6 @@ private fun IdeTopBar(
     onSave: () -> Unit,
     onSaveAs: () -> Unit,
     onFind: () -> Unit,
-    onReplace: () -> Unit,
     onTogglePreview: () -> Unit,
     onOpenFile: (String) -> Unit,
     onRevealInTree: (String) -> Unit,
@@ -1220,7 +1218,7 @@ private fun IdeTopBar(
                     tint               = if (isPreviewVisible) colors.accent else colors.textSecondary,
                 )
             }
-            // Overflow: less-frequent actions (Find & Replace, Save As)
+            // Overflow: less-frequent actions (Save As)
             Box {
                 IconButton(onClick = { overflowOpen = true }) {
                     Icon(
@@ -1233,11 +1231,6 @@ private fun IdeTopBar(
                     expanded         = overflowOpen,
                     onDismissRequest = { overflowOpen = false },
                 ) {
-                    DropdownMenuItem(
-                        text        = { Text("Find & Replace") },
-                        leadingIcon = { Icon(Icons.Default.FindInPage, contentDescription = null, modifier = Modifier.size(18.dp)) },
-                        onClick     = { overflowOpen = false; onReplace() },
-                    )
                     DropdownMenuItem(
                         text        = { Text("Save As\u2026") },
                         leadingIcon = { Icon(Icons.Default.SaveAs, contentDescription = null, modifier = Modifier.size(18.dp)) },

@@ -111,6 +111,10 @@ class AppShellViewModel(application: Application) : AndroidViewModel(application
         _state.update { it.copy(statusMessage = message, operationReport = null) }
     }
 
+    fun clearOperationFeedback() {
+        _state.update { it.copy(statusMessage = null, operationReport = null, acquiredProjectId = null) }
+    }
+
     fun selectProject(projectId: String) {
         _state.update { it.copy(selectedProjectId = projectId) }
     }

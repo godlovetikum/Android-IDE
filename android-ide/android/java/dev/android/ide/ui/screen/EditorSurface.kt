@@ -202,14 +202,24 @@ private fun EditorSidebar(
     Column(modifier.background(colors.surface)) {
         Row(
             Modifier.fillMaxWidth().height(58.dp).padding(horizontal = 8.dp),
-            horizontalArrangement = Arrangement.SpaceEvenly,
+            horizontalArrangement = Arrangement.Start,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            SidebarIcon(Icons.Default.FolderOpen, "Files", contentPanel == EditorPanel.FILES) { onPanelSelected(EditorPanel.FILES) }
-            SidebarIcon(Icons.Default.Search, "Filename search", contentPanel == EditorPanel.FILENAME_SEARCH) { onPanelSelected(EditorPanel.FILENAME_SEARCH); onSearchFiles() }
-            SidebarIcon(Icons.Default.Source, "Content search", contentPanel == EditorPanel.CONTENT_SEARCH) { onPanelSelected(EditorPanel.CONTENT_SEARCH); onSearchContent() }
-            SidebarIcon(Icons.Default.Terminal, "Terminal (Phase 3)", false) { onFeedback("Open Terminal") }
-            SidebarIcon(Icons.Default.Tune, "Editor settings", false) { onOpenSettings() }
+            Text("Files", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(end = 6.dp))
+            IconButton(onClick = { onPanelSelected(EditorPanel.FILENAME_SEARCH); onSearchFiles() }) { Icon(Icons.Default.Search, "Find files") }
+            IconButton(onClick = onLocate) { Icon(Icons.Default.MyLocation, "Locate current file") }
+            IconButton(onClick = { ideViewModel.showCreateFileDialog(root) }) { Icon(Icons.Default.Description, "New file") }
+            IconButton(onClick = { ideViewModel.showCreateFolderDialog(root) }) { Icon(Icons.Default.CreateNewFolder, "New folder") }
+            var moreOpen by remember { mutableStateOf(false) }
+            Box {
+                IconButton(onClick = { moreOpen = true }) { Icon(Icons.Default.MoreVert, "More file actions") }
+                DropdownMenu(expanded = moreOpen, onDismissRequest = { moreOpen = false }) {
+                    DropdownMenuItem(text = { Text("Refresh files") }, onClick = { moreOpen = false; onRefresh() })
+                    DropdownMenuItem(text = { Text("Import files") }, onClick = { moreOpen = false; onImport(root.documentUri) })
+                    DropdownMenuItem(text = { Text("Export project") }, onClick = { moreOpen = false; onExportProject() })
+                    DropdownMenuItem(text = { Text("Project details") }, onClick = { moreOpen = false; onShowDetails() })
+                }
+            }
         }
         HorizontalDivider(color = colors.separator)
         when (contentPanel) {
@@ -323,7 +333,7 @@ private fun EditorWorkspace(
         EditorTopBar(
             state = state, activeTab = activeTab, fileTree = fileTree,
             onOpenGlobalNavigation = onOpenGlobalNavigation, onTogglePanel = onTogglePanel,
-            onFind = ideViewModel::showEditorFind, onReplace = ideViewModel::showEditorReplace,
+            onFind = ideViewModel::showEditorFind,
             onSave = ideViewModel::saveActiveFile,
             onPreview = { if (state.isPreviewVisible) ideViewModel.togglePreview() else ideViewModel.requestRun() },
             onMore = { moreOpen = true },
@@ -369,7 +379,6 @@ private fun EditorTopBar(
     onOpenGlobalNavigation: () -> Unit,
     onTogglePanel: () -> Unit,
     onFind: () -> Unit,
-    onReplace: () -> Unit,
     onSave: () -> Unit,
     onPreview: () -> Unit,
     onMore: () -> Unit,
@@ -398,7 +407,6 @@ private fun EditorTopBar(
             }
         }
         IconButton(onClick = onFind, enabled = activeTab != null) { Icon(Icons.Default.Search, "Find in document", tint = colors.textSecondary) }
-        IconButton(onClick = onReplace, enabled = activeTab != null) { Icon(Icons.Default.Source, "Find and replace in document", tint = colors.textSecondary) }
         IconButton(onClick = onSave, enabled = activeTab != null && !state.editorSettings.autoSave) { Icon(Icons.Default.Save, "Save active document", tint = colors.textSecondary) }
         IconButton(onClick = onPreview, enabled = canPreview) { Icon(Icons.Default.PlayArrow, "Preview or run", tint = if (canPreview) colors.accent else colors.textDisabled) }
         IconButton(onClick = onMore) { Icon(Icons.Default.MoreVert, "More editor actions", tint = colors.textSecondary) }

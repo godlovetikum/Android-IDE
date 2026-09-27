@@ -121,16 +121,32 @@ fun FileTreePanel(
         isSearchVisible || isContentSearchVisible -> {
             val query = if (isContentSearchVisible) contentSearchQuery else fileSearchQuery
             val results = if (isContentSearchVisible) contentSearchResults else fileSearchResults
+            var replaceOpen by rememberSaveable(isContentSearchVisible) { mutableStateOf(false) }
+            var replaceQuery by rememberSaveable { mutableStateOf("") }
             Column(modifier = modifier) {
-                OutlinedTextField(
-                    value         = query,
-                    onValueChange = if (isContentSearchVisible) onContentSearchQueryChange else onSearchQueryChange,
-                    modifier      = Modifier.fillMaxWidth().padding(8.dp),
-                    placeholder   = { Text(if (isContentSearchVisible) "Search project contents…" else "Search filenames…", style = MaterialTheme.typography.bodyMedium) },
-                    singleLine    = true,
-                    leadingIcon   = { Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(18.dp)) },
-                    textStyle     = MaterialTheme.typography.bodyMedium,
-                )
+                Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedTextField(
+                        value         = query,
+                        onValueChange = if (isContentSearchVisible) onContentSearchQueryChange else onSearchQueryChange,
+                        modifier      = Modifier.weight(1f),
+                        placeholder   = { Text(if (isContentSearchVisible) "Find in project…" else "Find filenames…", style = MaterialTheme.typography.bodyMedium) },
+                        singleLine    = true,
+                        leadingIcon   = { Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                        textStyle     = MaterialTheme.typography.bodyMedium,
+                    )
+                    if (isContentSearchVisible) {
+                        TextButton(onClick = { replaceOpen = !replaceOpen }) { Text(if (replaceOpen) "Find" else "Replace") }
+                    }
+                }
+                if (replaceOpen && isContentSearchVisible) {
+                    OutlinedTextField(
+                        value = replaceQuery,
+                        onValueChange = { replaceQuery = it },
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+                        placeholder = { Text("Replace with…") },
+                        singleLine = true,
+                    )
+                }
                 if (results.isEmpty() && query.isNotEmpty()) {
                     Box(modifier = Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.TopCenter) {
                         Text(

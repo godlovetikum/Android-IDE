@@ -8,13 +8,18 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
@@ -36,6 +41,61 @@ import dev.android.ide.ui.theme.AndroidIDETheme
 import dev.android.ide.viewmodel.IdeViewModel
 
 private enum class ProjectOperationKind { DUPLICATE, RELOCATE }
+
+private enum class AcquisitionVerdict { INPUT_REQUIRED, READY, CHECKING, BLOCKED, COMPLETE }
+
+private fun reportVerdict(report: dev.android.ide.contracts.OperationReport?): AcquisitionVerdict? = report?.let {
+    when (it.outcome) {
+        dev.android.ide.contracts.OperationOutcome.COMPLETE -> AcquisitionVerdict.COMPLETE
+        dev.android.ide.contracts.OperationOutcome.BLOCKED,
+        dev.android.ide.contracts.OperationOutcome.FAILED,
+        dev.android.ide.contracts.OperationOutcome.PARTIAL,
+        dev.android.ide.contracts.OperationOutcome.INTERRUPTED -> AcquisitionVerdict.BLOCKED
+        else -> AcquisitionVerdict.INPUT_REQUIRED
+    }
+}
+
+@Composable
+private fun AcquisitionInputs(content: @Composable () -> Unit) {
+    Column(verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp)) {
+        Text("Your input", style = MaterialTheme.typography.titleSmall)
+        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+            Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp)) {
+                content()
+            }
+        }
+    }
+}
+
+@Composable
+private fun AcquisitionFeedback(verdict: AcquisitionVerdict, message: String, busy: Boolean = false) {
+    val colors = MaterialTheme.colorScheme
+    val (container, content) = when (verdict) {
+        AcquisitionVerdict.BLOCKED -> colors.errorContainer to colors.onErrorContainer
+        AcquisitionVerdict.COMPLETE -> colors.primaryContainer to colors.onPrimaryContainer
+        else -> colors.secondaryContainer to colors.onSecondaryContainer
+    }
+    Card(colors = CardDefaults.cardColors(containerColor = container)) {
+        Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(4.dp)) {
+            Text("Android IDE", style = MaterialTheme.typography.labelSmall, color = content)
+            RowWithProgress(busy, content)
+            Text(message, style = MaterialTheme.typography.bodyMedium, color = content)
+        }
+    }
+}
+
+@Composable
+private fun RowWithProgress(busy: Boolean, color: androidx.compose.ui.graphics.Color) {
+    androidx.compose.foundation.layout.Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+        if (busy) {
+            CircularProgressIndicator(Modifier.padding(end = 8.dp), strokeWidth = 2.dp, color = color)
+        }
+        Text("Status", style = MaterialTheme.typography.labelMedium, color = color)
+    }
+}
+
+private fun projectNameIsValid(name: String): Boolean =
+    name.isNotBlank() && !name.contains('/') && !name.contains('\\') && name != "." && name != ".."
 
 /** Composition root: owns Android launchers and reviewed acquisition workflow state. */
 @Composable
@@ -71,6 +131,7 @@ fun AppRoot(viewModel: AppShellViewModel, ideViewModel: IdeViewModel, onExit: ()
 
     val openFolder = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) {
+            viewModel.clearOperationFeedback()
             persistTreePermission(context, uri)
             folderUri = uri.toString()
             folderName = uri.lastPathSegment?.substringAfterLast(':')?.substringAfterLast('/') ?: ""
@@ -83,6 +144,7 @@ fun AppRoot(viewModel: AppShellViewModel, ideViewModel: IdeViewModel, onExit: ()
         ActivityResultContracts.OpenDocument(),
     ) { uri ->
         if (uri != null) {
+            viewModel.clearOperationFeedback()
             persistDocumentPermission(context, uri)
             zipUri = uri.toString()
             zipName = uri.lastPathSegment?.substringAfterLast('/')?.removeSuffix(".zip") ?: "Imported project"
@@ -156,8 +218,9 @@ fun AppRoot(viewModel: AppShellViewModel, ideViewModel: IdeViewModel, onExit: ()
             viewModel = viewModel,
             ideViewModel = ideViewModel,
             onExit = onExit,
-            onCreateProject = {
-                createName = ""
+            onCreateProject = { initialName ->
+                viewModel.clearOperationFeedback()
+                createName = initialName.orEmpty()
                 createDescription = ""
                 createDestination = null
                 createReviewVisible = false
@@ -192,31 +255,47 @@ fun AppRoot(viewModel: AppShellViewModel, ideViewModel: IdeViewModel, onExit: ()
                 title = { Text("Create blank project") },
                 text = {
                     Column {
-                        OutlinedTextField(createName, { createName = it }, label = { Text("Project name") }, singleLine = true)
-                        OutlinedTextField(createDescription, { createDescription = it }, label = { Text("Description") })
-                        PickerResult("Destination", createDestination)
-                        Button(onClick = { createDestinationPicker.launch(null) }) { Text("Choose destination") }
+                        AcquisitionInputs {
+                            OutlinedTextField(createName, { createName = it }, label = { Text("Project name") }, supportingText = { Text("Use one folder name") }, isError = createName.isNotBlank() && !projectNameIsValid(createName), enabled = !shellState.operationInProgress, singleLine = true)
+                            OutlinedTextField(createDescription, { createDescription = it }, label = { Text("Description (optional)") }, enabled = !shellState.operationInProgress)
+                            PickerResult("Storage location", createDestination)
+                            Button(onClick = { createDestinationPicker.launch(null) }, enabled = !shellState.operationInProgress) { Text("Choose storage location") }
+                        }
+                        Spacer(Modifier.padding(2.dp))
+                        AcquisitionFeedback(
+                            if (shellState.operationInProgress) AcquisitionVerdict.CHECKING else if (createName.isBlank() || createDestination == null) AcquisitionVerdict.INPUT_REQUIRED else if (!projectNameIsValid(createName)) AcquisitionVerdict.BLOCKED else AcquisitionVerdict.READY,
+                            when {
+                                shellState.operationInProgress -> "Creating the project…"
+                                createName.isBlank() -> "Enter a project name to continue"
+                                !projectNameIsValid(createName) -> "Use a single valid folder name"
+                                createDestination == null -> "Choose a storage location to continue"
+                                else -> "Ready to review the project destination"
+                            },
+                            shellState.operationInProgress,
+                        )
                     }
                 },
                 confirmButton = {
                     Button(
-                        onClick = { createReviewVisible = true },
-                        enabled = createName.isNotBlank() && createDestination != null,
+                        onClick = { createVisible = false; createReviewVisible = true },
+                        enabled = !shellState.operationInProgress && projectNameIsValid(createName) && createDestination != null,
                     ) { Text("Review") }
                 },
-                dismissButton = { TextButton(onClick = { createVisible = false }) { Text("Cancel") } },
+                dismissButton = { TextButton(onClick = { createVisible = false }, enabled = !shellState.operationInProgress) { Text("Cancel") } },
             )
         }
         if (createReviewVisible) {
             AlertDialog(
-                onDismissRequest = { createReviewVisible = false },
+                onDismissRequest = { if (!shellState.operationInProgress) createReviewVisible = false },
                 title = { Text("Review project") },
                 text = {
                     Column {
-                        Text("Name: $createName")
-                        Text("Description: ${createDescription.ifBlank { "No description" }}")
-                        Text("Target: ${createDestination.orEmpty()}")
-                        Text("The destination will be checked for conflicts before anything is created.")
+                        AcquisitionInputs {
+                            Text("Project name: $createName")
+                            Text("Description: ${createDescription.ifBlank { "Not provided" }}")
+                            PickerResult("Target storage location", createDestination)
+                        }
+                        AcquisitionFeedback(reportVerdict(shellState.operationReport) ?: AcquisitionVerdict.READY, shellState.operationReport?.message ?: "Ready to create after the destination conflict check", shellState.operationInProgress)
                     }
                 },
                 confirmButton = {
@@ -224,34 +303,41 @@ fun AppRoot(viewModel: AppShellViewModel, ideViewModel: IdeViewModel, onExit: ()
                         val destination = createDestination
                         if (destination != null) {
                             viewModel.createBlankProject(destination, createName, createDescription)
-                            createReviewVisible = false
-                            createVisible = false
                         }
-                    }) { Text("Create project") }
+                    }, enabled = shellState.operationReport == null && !shellState.operationInProgress && projectNameIsValid(createName) && createDestination != null) { Text("Create project") }
                 },
-                dismissButton = { TextButton(onClick = { createReviewVisible = false }) { Text("Back") } },
+                dismissButton = { TextButton(onClick = { createReviewVisible = false; createVisible = true }, enabled = !shellState.operationInProgress) { Text("Back") } },
             )
         }
         if (folderReviewVisible) {
             AlertDialog(
-                onDismissRequest = { folderReviewVisible = false },
+                onDismissRequest = { if (!shellState.operationInProgress) folderReviewVisible = false },
                 title = { Text("Review folder import") },
                 text = {
                     Column {
-                        PickerResult("Selected folder", folderUri)
-                        shellState.folderInspection?.let { inspection ->
-                            Text("Access: ${if (inspection.readable && inspection.writable) "Readable and writable" else "Unavailable"}")
-                            Text("Registration: ${if (inspection.alreadyRegistered) "Already registered" else "Not registered"}")
-                            Text("Project containment: ${when {
-                                !inspection.containmentVerified -> "Could not verify against every registered project"
-                                inspection.overlapsRegisteredProject -> "Overlaps a registered project"
-                                else -> "Verified clear"
-                            }}")
-                            inspection.explanation?.let { Text(it) }
+                        AcquisitionInputs {
+                            PickerResult("Selected folder", folderUri)
+                            OutlinedTextField(folderName, { folderName = it }, label = { Text("Project name") }, enabled = !shellState.operationInProgress, singleLine = true)
+                            OutlinedTextField(folderDescription, { folderDescription = it }, label = { Text("Description (optional)") }, enabled = !shellState.operationInProgress)
                         }
-                        OutlinedTextField(folderName, { folderName = it }, label = { Text("Project name") }, singleLine = true)
-                        OutlinedTextField(folderDescription, { folderDescription = it }, label = { Text("Description") })
-                        Text("The selected folder will be inspected and registered in place. No replacement folder will be created.")
+                        val inspection = shellState.folderInspection
+                        val folderVerdict = when {
+                            shellState.operationInProgress -> AcquisitionVerdict.CHECKING
+                            inspection == null -> AcquisitionVerdict.CHECKING
+                            !inspection.readable || !inspection.writable || inspection.alreadyRegistered || !inspection.containmentVerified || inspection.overlapsRegisteredProject -> AcquisitionVerdict.BLOCKED
+                            !projectNameIsValid(folderName) -> AcquisitionVerdict.INPUT_REQUIRED
+                            else -> AcquisitionVerdict.READY
+                        }
+                        AcquisitionFeedback(reportVerdict(shellState.operationReport) ?: folderVerdict, shellState.operationReport?.message ?: when {
+                            shellState.operationInProgress -> "Registering the selected folder…"
+                            inspection == null -> "Checking whether this folder can be registered…"
+                            !inspection.readable || !inspection.writable -> "Couldn't verify the target location"
+                            inspection.alreadyRegistered -> "This folder is already registered"
+                            !inspection.containmentVerified -> "Couldn't verify the target location"
+                            inspection.overlapsRegisteredProject -> "This folder overlaps another project"
+                            !projectNameIsValid(folderName) -> "Enter a valid project name to continue"
+                            else -> "Ready to register this folder in place"
+                        }, shellState.operationInProgress || inspection == null)
                     }
                 },
                 confirmButton = {
@@ -259,28 +345,36 @@ fun AppRoot(viewModel: AppShellViewModel, ideViewModel: IdeViewModel, onExit: ()
                         val uri = folderUri
                         if (uri != null) {
                             viewModel.importExistingFolder(uri, folderName, folderDescription)
-                            folderReviewVisible = false
                         }
-                    }, enabled = folderName.isNotBlank() && shellState.folderInspection?.let {
+                    }, enabled = shellState.operationReport == null && !shellState.operationInProgress && projectNameIsValid(folderName) && shellState.folderInspection?.let {
                         it.readable && it.writable && !it.alreadyRegistered &&
                             it.containmentVerified && !it.overlapsRegisteredProject
                     } == true) { Text("Import project") }
                 },
-                dismissButton = { TextButton(onClick = { folderReviewVisible = false }) { Text("Cancel") } },
+                dismissButton = { TextButton(onClick = { folderReviewVisible = false }, enabled = !shellState.operationInProgress) { Text("Cancel") } },
             )
         }
         if (zipReviewVisible) {
+            val zipReady = zipUri != null && projectNameIsValid(zipName) && zipDestination != null
             AlertDialog(
-                onDismissRequest = { zipReviewVisible = false },
+                onDismissRequest = { if (!shellState.operationInProgress) zipReviewVisible = false },
                 title = { Text("Review ZIP import") },
                 text = {
                     Column {
-                        PickerResult("Archive", zipUri)
-                        OutlinedTextField(zipName, { zipName = it }, label = { Text("Project name") }, singleLine = true)
-                        OutlinedTextField(zipDescription, { zipDescription = it }, label = { Text("Description") })
-                        PickerResult("Extraction destination", zipDestination)
-                        Button(onClick = { zipDestinationPicker.launch(null) }) { Text("Choose destination") }
-                        Text("The archive and destination will be validated for unsafe paths and conflicts before extraction.")
+                        AcquisitionInputs {
+                            PickerResult("ZIP archive", zipUri)
+                            OutlinedTextField(zipName, { zipName = it }, label = { Text("Project name") }, enabled = !shellState.operationInProgress, singleLine = true)
+                            OutlinedTextField(zipDescription, { zipDescription = it }, label = { Text("Description (optional)") }, enabled = !shellState.operationInProgress)
+                            PickerResult("Storage location", zipDestination)
+                            Button(onClick = { zipDestinationPicker.launch(null) }, enabled = !shellState.operationInProgress) { Text("Choose storage location") }
+                        }
+                        AcquisitionFeedback(reportVerdict(shellState.operationReport) ?: if (shellState.operationInProgress) AcquisitionVerdict.CHECKING else if (zipReady) AcquisitionVerdict.READY else AcquisitionVerdict.INPUT_REQUIRED, shellState.operationReport?.message ?: when {
+                            shellState.operationInProgress -> "Validating and importing the archive…"
+                            zipUri == null -> "Choose a ZIP archive to continue"
+                            !projectNameIsValid(zipName) -> "Enter a valid project name to continue"
+                            zipDestination == null -> "Choose a storage location to continue"
+                            else -> "Ready to validate the archive and destination"
+                        }, shellState.operationInProgress)
                     }
                 },
                 confirmButton = {
@@ -289,11 +383,10 @@ fun AppRoot(viewModel: AppShellViewModel, ideViewModel: IdeViewModel, onExit: ()
                         val destination = zipDestination
                         if (archive != null && destination != null) {
                             viewModel.importZip(archive, destination, zipName, zipDescription)
-                            zipReviewVisible = false
                         }
-                    }, enabled = zipName.isNotBlank() && zipDestination != null) { Text("Import project") }
+                    }, enabled = shellState.operationReport == null && !shellState.operationInProgress && zipReady) { Text("Import project") }
                 },
-                dismissButton = { TextButton(onClick = { zipReviewVisible = false }) { Text("Cancel") } },
+                dismissButton = { TextButton(onClick = { zipReviewVisible = false }, enabled = !shellState.operationInProgress) { Text("Cancel") } },
             )
         }
         if (exportReviewVisible) {

@@ -15,6 +15,10 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -70,7 +74,7 @@ fun ProjectDetailsSurface(
         } ?: state.statusMessage?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text(project?.name ?: "Project Details", style = MaterialTheme.typography.headlineMedium)
-            TextButton(onClick = { menuOpen = true }) { Text("More") }
+            IconButton(onClick = { menuOpen = true }) { Icon(Icons.Default.MoreVert, contentDescription = "Project actions") }
             DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                 DropdownMenuItem(text = { Text("Refresh") }, enabled = !state.operationInProgress && !state.detailsLoading, onClick = { menuOpen = false; viewModel.refreshSelectedProjectDetails() })
                 DropdownMenuItem(text = { Text("Rename") }, enabled = !state.operationInProgress, onClick = { menuOpen = false; renameValue = project?.name.orEmpty(); renameVisible = true })

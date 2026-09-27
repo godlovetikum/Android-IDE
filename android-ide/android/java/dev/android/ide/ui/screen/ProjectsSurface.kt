@@ -2,10 +2,15 @@ package dev.android.ide.ui.screen
 
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -15,8 +20,19 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Archive
 import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.MergeType
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Sort
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.AlertDialog
@@ -24,6 +40,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FloatingActionButton
@@ -33,13 +50,17 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.activity.compose.BackHandler
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalContext
@@ -57,7 +78,7 @@ import kotlin.random.Random
 fun ProjectsSurface(
     state: AppShellState,
     viewModel: AppShellViewModel,
-    onCreateProject: () -> Unit,
+    onCreateProject: (String?) -> Unit,
     onImportFolder: () -> Unit,
     onImportZip: () -> Unit,
     onCloneGit: () -> Unit,
@@ -82,6 +103,7 @@ fun ProjectsSurface(
     var filterOpen by remember { mutableStateOf(false) }
     var filterMode by rememberSaveable { mutableStateOf(ProjectFilter.ALL) }
     var addActionsExpanded by remember { mutableStateOf(false) }
+    val fabScale by animateFloatAsState(if (addActionsExpanded) 1.08f else 1f, label = "project-fab-scale")
     var confirmBatchRemove by remember { mutableStateOf(false) }
     var confirmBatchExport by remember { mutableStateOf(false) }
     var confirmBatchDelete by remember { mutableStateOf(false) }
@@ -108,36 +130,43 @@ fun ProjectsSurface(
             }
         }
 
+    BackHandler(enabled = addActionsExpanded) { addActionsExpanded = false }
     Box(modifier.fillMaxSize()) {
+    if (addActionsExpanded) {
+        Box(Modifier.fillMaxSize().clickable { addActionsExpanded = false })
+    }
     Column(Modifier.fillMaxSize().padding(20.dp).padding(bottom = 88.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text("Projects", style = MaterialTheme.typography.headlineMedium)
-        Text("Your projects")
-        TextField(
-            value = searchQuery,
-            onValueChange = { searchQuery = it },
-            modifier = Modifier.fillMaxWidth(),
-            label = { Text("Search projects") },
-            singleLine = true,
-        )
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Sort: ${sortMode.label}")
-            TextButton(onClick = { sortOpen = true }) { Text("Change") }
-            DropdownMenu(expanded = sortOpen, onDismissRequest = { sortOpen = false }) {
-                ProjectsSurfaceSort.entries.forEach { option ->
-                    DropdownMenuItem(text = { Text(option.label) }, onClick = { sortMode = option; sortOpen = false })
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.End) {
+            Spacer(Modifier.weight(1f))
+            IconButton(onClick = viewModel::refreshProjectList, enabled = !state.operationInProgress) {
+                Icon(Icons.Default.Refresh, contentDescription = "Refresh projects")
+            }
+            Box {
+                IconButton(onClick = { sortOpen = true }) { Icon(Icons.Default.Sort, contentDescription = "Sort projects") }
+                DropdownMenu(expanded = sortOpen, onDismissRequest = { sortOpen = false }) {
+                    ProjectsSurfaceSort.entries.forEach { option ->
+                        DropdownMenuItem(text = { Text(option.label) }, onClick = { sortMode = option; sortOpen = false })
+                    }
                 }
             }
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Filter: ${filterMode.label}")
-            TextButton(onClick = { filterOpen = true }) { Text("Change") }
-            DropdownMenu(expanded = filterOpen, onDismissRequest = { filterOpen = false }) {
-                ProjectFilter.entries.forEach { option ->
-                    DropdownMenuItem(text = { Text(option.label) }, onClick = { filterMode = option; filterOpen = false })
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            TextField(
+                value = searchQuery,
+                onValueChange = { searchQuery = it },
+                modifier = Modifier.weight(1f),
+                placeholder = { Text("Search projects") },
+                singleLine = true,
+            )
+            Box {
+                IconButton(onClick = { filterOpen = true }) { Icon(Icons.Default.FilterList, contentDescription = "Filter projects") }
+                DropdownMenu(expanded = filterOpen, onDismissRequest = { filterOpen = false }) {
+                    ProjectFilter.entries.forEach { option ->
+                        DropdownMenuItem(text = { Text(option.label) }, onClick = { filterMode = option; filterOpen = false })
+                    }
                 }
             }
         }
-        TextButton(onClick = viewModel::refreshProjectList) { Text("Refresh") }
         state.registryWarning?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         if (state.operationInProgress) Text("Refreshing projects…")
         state.statusMessage?.let { Text(it, color = MaterialTheme.colorScheme.error) }
@@ -190,7 +219,14 @@ fun ProjectsSurface(
             )
         }
         if (visibleProjects.isEmpty()) {
-            Text(if (searchQuery.isBlank()) "No registered projects" else "No matching projects")
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(if (searchQuery.isBlank()) "No registered projects" else "No matching projects")
+                if (searchQuery.isNotBlank()) {
+                    TextButton(onClick = { onCreateProject(searchQuery) }) {
+                        Text("Create a new project named ${searchQuery.trim()}")
+                    }
+                }
+            }
         } else {
             LazyColumn(
                 Modifier.fillMaxWidth().weight(1f),
@@ -219,20 +255,31 @@ fun ProjectsSurface(
             }
         }
     }
+    if (state.operationInProgress) {
+        Box(
+            Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface.copy(alpha = 0.72f)).clickable { },
+            contentAlignment = Alignment.Center,
+        ) { CircularProgressIndicator() }
+    }
     FloatingActionButton(
-        onClick = { addActionsExpanded = !addActionsExpanded },
-        modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp),
-    ) { androidx.compose.material3.Icon(Icons.Default.Add, contentDescription = if (addActionsExpanded) "Close project actions" else "Add project") }
+        onClick = { if (!state.operationInProgress) addActionsExpanded = !addActionsExpanded },
+        modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp).graphicsLayer { scaleX = fabScale; scaleY = fabScale },
+    ) { androidx.compose.material3.Icon(if (addActionsExpanded) Icons.Default.Close else Icons.Default.Add, contentDescription = if (addActionsExpanded) "Close project actions" else "Add project") }
     if (addActionsExpanded) {
+        Card(
+            modifier = Modifier.align(Alignment.BottomEnd).padding(end = 16.dp, bottom = 84.dp).animateContentSize(),
+            elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
+        ) {
         Column(
-            modifier = Modifier.align(Alignment.BottomEnd).padding(end = 16.dp, bottom = 84.dp),
+            modifier = Modifier.padding(8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
             horizontalAlignment = Alignment.End,
         ) {
-            ProjectAcquisitionAction(Icons.Default.Code, "Create blank project") { addActionsExpanded = false; onCreateProject() }
+            ProjectAcquisitionAction(Icons.Default.Code, "Create blank project") { addActionsExpanded = false; onCreateProject(null) }
             ProjectAcquisitionAction(Icons.Default.FolderOpen, "Import existing folder") { addActionsExpanded = false; onImportFolder() }
             ProjectAcquisitionAction(Icons.Default.Archive, "Import ZIP archive") { addActionsExpanded = false; onImportZip() }
             ProjectAcquisitionAction(Icons.Default.MergeType, "Clone remote Git repository") { addActionsExpanded = false; onCloneGit() }
+        }
         }
     }
     }
@@ -300,36 +347,38 @@ private fun ProjectCard(
         ),
     ) {
         Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.Top) {
             Column(Modifier.weight(1f)) {
                 if (selected) Text("Selected", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelSmall)
-                Text(project.name, style = MaterialTheme.typography.titleMedium)
-                Text(if (project.description.isBlank()) "No description" else project.description, maxLines = 2)
-                Text("Files: ${summary?.fileCount ?: "Unavailable"}", style = MaterialTheme.typography.bodySmall)
-                Text("Size: ${summary?.totalBytes?.let(::formatBytes) ?: "Unavailable"}", style = MaterialTheme.typography.bodySmall)
-                if (summary?.hasGit == true) Text("Git", style = MaterialTheme.typography.labelSmall)
-                Text(relativeLastOpened(project.lastOpenedAt), style = MaterialTheme.typography.labelSmall)
+                Text(project.name, style = MaterialTheme.typography.titleLarge)
+                Text(if (project.description.isBlank()) "No description" else project.description, maxLines = 1, style = MaterialTheme.typography.bodySmall)
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                    if (summary?.hasGit == true) Text("Git", style = MaterialTheme.typography.labelSmall)
+                    Text("${summary?.fileCount ?: "Unavailable"} files", style = MaterialTheme.typography.bodySmall)
+                    Text(summary?.totalBytes?.let(::formatBytes) ?: "Unavailable", style = MaterialTheme.typography.bodySmall)
+                }
                 summary?.status?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelSmall) }
+                Text(relativeLastOpened(project.lastOpenedAt), style = MaterialTheme.typography.labelSmall)
             }
-            TextButton(onClick = { onSelect(project.id); menuOpen = true }) { Text("More") }
+            IconButton(onClick = { onSelect(project.id); menuOpen = true }) { Icon(Icons.Default.MoreVert, contentDescription = "Project actions") }
         }
         DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-            DropdownMenuItem(text = { Text("Project details") }, onClick = { menuOpen = false; onDetails(project.id) })
-            DropdownMenuItem(text = { Text("Refresh") }, onClick = { menuOpen = false; onSelect(project.id); onRefresh() })
-            DropdownMenuItem(text = { Text("Rename") }, onClick = { menuOpen = false; renameValue = project.name; renameVisible = true })
-            DropdownMenuItem(text = { Text("Change Location") }, onClick = { menuOpen = false; onRelocate(project.id) })
-            DropdownMenuItem(text = { Text("Copy & Duplicate") }, onClick = { menuOpen = false; onDuplicate(project.id) })
-            DropdownMenuItem(text = { Text("Export or Share") }, onClick = { menuOpen = false; onExport(project.id) })
-            DropdownMenuItem(text = { Text("Copy Storage Path") }, onClick = { menuOpen = false; onCopyPath(project.id) })
-            DropdownMenuItem(text = { Text("Git Remote Details") }, onClick = { menuOpen = false; onDetails(project.id) })
+            DropdownMenuItem(leadingIcon = { Icon(Icons.Default.Info, null) }, text = { Text("Project details") }, onClick = { menuOpen = false; onDetails(project.id) })
+            DropdownMenuItem(leadingIcon = { Icon(Icons.Default.Refresh, null) }, text = { Text("Refresh") }, onClick = { menuOpen = false; onSelect(project.id); onRefresh() })
+            DropdownMenuItem(leadingIcon = { Icon(Icons.Default.Edit, null) }, text = { Text("Rename") }, onClick = { menuOpen = false; renameValue = project.name; renameVisible = true })
+            DropdownMenuItem(leadingIcon = { Icon(Icons.Default.FolderOpen, null) }, text = { Text("Change Location") }, onClick = { menuOpen = false; onRelocate(project.id) })
+            DropdownMenuItem(leadingIcon = { Icon(Icons.Default.ContentCopy, null) }, text = { Text("Copy & Duplicate") }, onClick = { menuOpen = false; onDuplicate(project.id) })
+            DropdownMenuItem(leadingIcon = { Icon(Icons.Default.Share, null) }, text = { Text("Export or Share") }, onClick = { menuOpen = false; onExport(project.id) })
+            DropdownMenuItem(leadingIcon = { Icon(Icons.Default.Code, null) }, text = { Text("Copy Storage Path") }, onClick = { menuOpen = false; onCopyPath(project.id) })
+            DropdownMenuItem(leadingIcon = { Icon(Icons.Default.MergeType, null) }, text = { Text("Git Remote Details") }, onClick = { menuOpen = false; onDetails(project.id) })
             HorizontalDivider()
-            DropdownMenuItem(text = { Text("Open in Editor") }, onClick = { menuOpen = false; onOpen(project.id) })
-            DropdownMenuItem(text = { Text("Open Git") }, onClick = { menuOpen = false; onFeedback("Open Git") })
-            DropdownMenuItem(text = { Text("Open Terminal") }, onClick = { menuOpen = false; onFeedback("Open Terminal") })
-            DropdownMenuItem(text = { Text("Open Browser or Preview") }, onClick = { menuOpen = false; onFeedback("Open Browser or Preview") })
+            DropdownMenuItem(leadingIcon = { Icon(Icons.Default.Code, null) }, text = { Text("Open in Editor") }, onClick = { menuOpen = false; onOpen(project.id) })
+            DropdownMenuItem(leadingIcon = { Icon(Icons.Default.MergeType, null) }, text = { Text("Open Git") }, onClick = { menuOpen = false; onFeedback("Open Git") })
+            DropdownMenuItem(leadingIcon = { Icon(Icons.Default.Terminal, null) }, text = { Text("Open Terminal") }, onClick = { menuOpen = false; onFeedback("Open Terminal") })
+            DropdownMenuItem(leadingIcon = { Icon(Icons.Default.FolderOpen, null) }, text = { Text("Open Browser or Preview") }, onClick = { menuOpen = false; onFeedback("Open Browser or Preview") })
             HorizontalDivider()
-            DropdownMenuItem(text = { Text("Remove from Registry", color = MaterialTheme.colorScheme.secondary) }, onClick = { menuOpen = false; onSelect(project.id); confirmRemove = true })
-            DropdownMenuItem(text = { Text("Permanently Delete", color = MaterialTheme.colorScheme.error) }, onClick = { menuOpen = false; onSelect(project.id); deleteCode = Random.nextInt(100, 1000).toString(); enteredDeleteCode = ""; confirmDelete = true })
+            DropdownMenuItem(leadingIcon = { Icon(Icons.Default.Delete, null) }, text = { Text("Remove from Registry", color = MaterialTheme.colorScheme.secondary) }, onClick = { menuOpen = false; onSelect(project.id); confirmRemove = true })
+            DropdownMenuItem(leadingIcon = { Icon(Icons.Default.Delete, null, tint = MaterialTheme.colorScheme.error) }, text = { Text("Permanently Delete", color = MaterialTheme.colorScheme.error) }, onClick = { menuOpen = false; onSelect(project.id); deleteCode = Random.nextInt(100, 1000).toString(); enteredDeleteCode = ""; confirmDelete = true })
         }
         if (confirmRemove) {
             AlertDialog(
@@ -382,14 +431,14 @@ private fun formatBytes(bytes: Long): String {
 }
 
 private fun relativeLastOpened(lastOpenedAt: Instant?): String {
-    if (lastOpenedAt == null) return "Never opened"
+    if (lastOpenedAt == null) return "Never"
     val seconds = Duration.between(lastOpenedAt, Instant.now()).seconds.coerceAtLeast(0)
     return when {
-        seconds < 60 -> "Opened just now"
-        seconds < 3600 -> "Opened ${seconds / 60}m ago"
-        seconds < 86_400 -> "Opened ${seconds / 3600}h ago"
-        seconds < 2_592_000 -> "Opened ${seconds / 86_400}d ago"
-        seconds < 31_536_000 -> "Opened ${seconds / 2_592_000}mo ago"
-        else -> "Opened ${seconds / 31_536_000}y ago"
+        seconds < 60 -> "just now"
+        seconds < 3600 -> "${seconds / 60}m ago"
+        seconds < 86_400 -> "${seconds / 3600}h ago"
+        seconds < 2_592_000 -> "${seconds / 86_400}d ago"
+        seconds < 31_536_000 -> "${seconds / 2_592_000}mo ago"
+        else -> "${seconds / 31_536_000}y ago"
     }
 }
