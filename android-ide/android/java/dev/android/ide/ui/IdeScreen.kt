@@ -40,7 +40,6 @@ import androidx.compose.material.icons.filled.MergeType
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.MyLocation
-import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.SaveAs
@@ -391,12 +390,10 @@ fun IdeScreen(
                             activeTab        = activeTab,
                             fileTree         = uiState.fileTree,
                             projectRootUri   = uiState.projectRootUri,
-                            isPreviewVisible = uiState.isPreviewVisible,
                             autoSave         = uiState.editorSettings.autoSave,
                             onSave           = ideViewModel::saveActiveFile,
                             onSaveAs         = onSaveAs,
                             onFind           = ideViewModel::showEditorFind,
-                            onTogglePreview  = ideViewModel::requestRun,
                             onOpenFile       = { uri -> ideViewModel.openFile(uri) },
                             onRevealInTree   = { uri ->
                                 ideViewModel.revealActiveFile()
@@ -575,11 +572,7 @@ private fun EditorContent(
             },
             isEditorReady           = uiState.isEditorReady,
             editorBindRevision     = uiState.editorBindRevision,
-            isPreviewVisible        = uiState.isPreviewVisible,
-            previewHtmlContent      = uiState.previewHtmlContent,
-            previewLayout           = s.previewLayout,
             editorCommands          = ideViewModel.editorCommand,
-            onEditorReady           = ideViewModel::onEditorReady,
             onEditorRendererGone   = ideViewModel::onEditorRendererGone,
             onEditorMessage         = ideViewModel::onEditorMessage,
             onInsertText            = { text -> ideViewModel.sendEditorCommand(EditorOutbound.InsertText(text)) },
@@ -588,7 +581,6 @@ private fun EditorContent(
             hasEditorSelection      = uiState.hasEditorSelection,
             showKeyboardToolbar     = s.showKeyboardToolbar,
             showSymbolBar           = s.showSymbolBar,
-            customSymbols           = s.customSymbols,
             tabCursorPositions      = uiState.tabCursorPositions,
             tabScrollPositions      = uiState.tabScrollPositions,
             modifier                = Modifier.weight(1f).fillMaxWidth(),
@@ -1032,7 +1024,7 @@ private fun FilesHeader(
 //
 // Layout:
 //   Left:  Sidebar toggle (hamburger) | breadcrumb file path
-//   Right: Save (when autoSave off) | Search | Run/Preview | overflow (Find & Replace, Save As)
+//   Right: Save (when autoSave off) | Search | overflow (Find & Replace, Save As)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -1041,12 +1033,10 @@ private fun IdeTopBar(
     activeTab: dev.android.ide.viewmodel.model.EditorTab?,
     fileTree: List<FileNode>,
     projectRootUri: String?,
-    isPreviewVisible: Boolean,
     autoSave: Boolean,
     onSave: () -> Unit,
     onSaveAs: () -> Unit,
     onFind: () -> Unit,
-    onTogglePreview: () -> Unit,
     onOpenFile: (String) -> Unit,
     onRevealInTree: (String) -> Unit,
     onMenuClick: (() -> Unit)?,
@@ -1210,14 +1200,6 @@ private fun IdeTopBar(
                     tint               = colors.textSecondary,
                 )
             }
-            // Run / Preview — always visible
-            IconButton(onClick = onTogglePreview) {
-                Icon(
-                    imageVector        = Icons.Default.PlayArrow,
-                    contentDescription = if (isPreviewVisible) "Hide preview" else "Preview / Run",
-                    tint               = if (isPreviewVisible) colors.accent else colors.textSecondary,
-                )
-            }
             // Overflow: less-frequent actions (Save As)
             Box {
                 IconButton(onClick = { overflowOpen = true }) {
@@ -1270,6 +1252,8 @@ private fun FileOpDialogHost(
             node      = dialog.node,
             onConfirm = { ideViewModel.deleteNode(dialog.node, dialog.selectedNodes) },
             onDismiss = ideViewModel::dismissFileOpDialog,
+            errorMessage = dialog.errorMessage,
+            isSubmitting = dialog.isSubmitting,
         )
         is FileOpDialog.CreateFile -> CreateFileDialog(
             parent       = dialog.parentNode,
@@ -1395,18 +1379,19 @@ private fun RenameDialog(
 }
 
 @Composable
-private fun DeleteDialog(node: FileNode, onConfirm: () -> Unit, onDismiss: () -> Unit) {
+private fun DeleteDialog(node: FileNode, onConfirm: () -> Unit, onDismiss: () -> Unit, errorMessage: String? = null, isSubmitting: Boolean = false) {
     AlertDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = { if (!isSubmitting) onDismiss() },
         title   = { Text("Delete") },
-        text    = { Text("Permanently delete \"${node.displayName}\"? This cannot be undone.") },
+        text    = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { Text("Permanently delete \"${node.displayName}\"? This cannot be undone."); errorMessage?.let { Text(it, color = MaterialTheme.colorScheme.error) }; if (isSubmitting) { Row(verticalAlignment = Alignment.CenterVertically) { CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp); Text("Deleting…", Modifier.padding(start = 8.dp)) } } } },
         confirmButton = {
             TextButton(
                 onClick = onConfirm,
+                enabled = !isSubmitting,
                 colors  = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
-            ) { Text("Delete") }
+            ) { Text(if (isSubmitting) "Deleting…" else if (errorMessage != null) "Retry delete" else "Delete") }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        dismissButton = { TextButton(onClick = onDismiss, enabled = !isSubmitting) { Text(if (isSubmitting) "Please wait" else "Cancel") } },
     )
 }
 

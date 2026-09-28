@@ -10,12 +10,14 @@ sealed class FileOpDialog {
     data class BinaryOpenError(val fileName: String) : FileOpDialog()
 
     /** Rename dialog for [node]. [errorMessage] is shown inline when non-null. */
-    data class Rename(val node: FileNode, val errorMessage: String? = null) : FileOpDialog()
+    data class Rename(val node: FileNode, val errorMessage: String? = null, val isSubmitting: Boolean = false) : FileOpDialog()
 
     /** Delete confirmation dialog for [node] or the snapshotted [selectedNodes]. */
     data class Delete(
         val node: FileNode,
         val selectedNodes: List<FileNode> = emptyList(),
+        val errorMessage: String? = null,
+        val isSubmitting: Boolean = false,
     ) : FileOpDialog()
 
     /** "Create file" dialog; new file will be created inside [parentNode]. [errorMessage] is shown inline when non-null. */
@@ -36,7 +38,10 @@ sealed class FileOpDialog {
      * Duplicate dialog for [node].
      * Pre-fills the name field with "copy_<displayName>". [errorMessage] is shown inline when non-null.
      */
-    data class Duplicate(val node: FileNode, val errorMessage: String? = null) : FileOpDialog()
+    data class Duplicate(val node: FileNode, val errorMessage: String? = null, val isSubmitting: Boolean = false) : FileOpDialog()
+
+    /** Export confirmation for a file-tree file or folder. */
+    data class Export(val node: FileNode, val resultMessage: String? = null, val failed: Boolean = false, val isSubmitting: Boolean = false) : FileOpDialog()
 
     /**
      * Confirm-close dialog shown when the user tries to close a tab that has

@@ -112,16 +112,6 @@ data class IdeUiState(
     /** True while the active file is being bound into Monaco. */
     val editorFileLoading: Boolean = false,
 
-    /** Whether the live-preview WebView is visible. */
-    val isPreviewVisible: Boolean = false,
-
-    /**
-     * Raw HTML content for the preview WebView.
-     * Passed directly to WebView.loadDataWithBaseURL — not base64 encoded.
-     * Empty when preview is not active.
-     */
-    val previewHtmlContent: String = "",
-
     // ── Cursor ─────────────────────────────────────────────────────────────
     val cursorLine: Int = 1,
     val cursorColumn: Int = 1,

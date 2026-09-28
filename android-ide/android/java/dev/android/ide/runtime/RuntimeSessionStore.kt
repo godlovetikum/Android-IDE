@@ -26,6 +26,7 @@ class RuntimeSessionStore(context: Context) {
                             id = item.getString("id"),
                             ownerScope = item.getString("ownerScope"),
                             backendId = item.optString("backendId").ifBlank { null },
+                            name = item.optString("name", "Terminal").ifBlank { "Terminal" },
                             workingDirectory = item.optString("workingDirectory").ifBlank { null },
                             createdAt = Instant.parse(item.getString("createdAt")),
                             availability = SessionAvailability.valueOf(item.getString("availability")),
@@ -45,6 +46,7 @@ class RuntimeSessionStore(context: Context) {
                     .put("id", session.id)
                     .put("ownerScope", session.ownerScope)
                     .put("backendId", session.backendId)
+                    .put("name", session.name)
                     .put("workingDirectory", session.workingDirectory)
                     .put("createdAt", session.createdAt.toString())
                     .put("availability", session.availability.name)

@@ -562,6 +562,6 @@ function loadFile(path, content, language) {
   applyLayout();
   requestAnimationFrame(applyLayout);
 
-  // Focus the editor so the soft keyboard can appear immediately on tap.
-  editor.focus();
+  // Do not focus during file initialization. Native touch handling controls
+  // focus and IME visibility; focusing here opens the keyboard while files load.
 }

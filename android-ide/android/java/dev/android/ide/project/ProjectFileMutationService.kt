@@ -57,6 +57,8 @@ class ProjectFileMutationService(private val storage: ProjectStorageAdapterImpl)
 
     suspend fun read(sourceUri: String): ByteArray? = storage.readDocument(sourceUri)
 
-    suspend fun write(sourceUri: String, content: ByteArray): Boolean =
-        storage.writeDocument(sourceUri, content)
+    suspend fun write(sourceUri: String, content: ByteArray): Boolean {
+        if (!storage.writeDocument(sourceUri, content)) return false
+        return storage.readDocument(sourceUri)?.contentEquals(content) == true
+    }
 }

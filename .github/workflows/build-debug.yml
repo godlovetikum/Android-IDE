@@ -19,10 +19,22 @@ on:
   pull_request:
     branches: [main, dev]
   workflow_dispatch:
+    inputs:
+      abi:
+        description: "One Android ABI to package with the matching Termux runtime"
+        required: false
+        default: arm64-v8a
+        type: choice
+        options:
+          - arm64-v8a
+          - armeabi-v7a
+          - x86_64
+          - x86
 
 env:
   ANDROID_TARGET_SDK: "34"
   ANDROID_BUILD_TOOLS: "34.0.0"
+  TERMUX_ABI: ${{ inputs.abi || 'arm64-v8a' }}
 
 jobs:
   check:
@@ -97,6 +109,6 @@ jobs:
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: android-ide-debug
+          name: android-ide-debug-${{ env.TERMUX_ABI }}
           path: android-ide/android/app/build/outputs/apk/debug/*.apk
           retention-days: 7

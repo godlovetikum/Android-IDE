@@ -881,9 +881,9 @@ build/
 
             val copied = runCatching {
                 fileMutations.copy(uri, targetParentUri, storageName)
-            }.getOrElse { error ->
+            }.getOrElse { _ ->
                 _uiState.update { state ->
-                    state.copy(statusMessage = "Move failed: ${error.message ?: "storage provider error"}")
+                    state.copy(statusMessage = "Move failed: the destination could not be verified")
                 }
                 return@launch
             }
@@ -1141,9 +1141,18 @@ build/
             _uiState.update { it.copy(fileMutationLoading = true, statusMessage = "Processing file operation…") }
             var successCount = 0
             items.forEach { source ->
-                if (source.isDirectory && (source.documentUri == targetDir.documentUri || containsDocumentUri(source, targetDir.documentUri))) {
-                    _uiState.update { it.copy(statusMessage = "Cannot paste a folder into itself or one of its subfolders") }
-                    return@forEach
+                if (source.isDirectory) {
+                    when (safRepository.isSameOrDescendant(source.documentUri, targetDir.documentUri)) {
+                        true -> {
+                            _uiState.update { it.copy(statusMessage = "Cannot paste a folder into itself or one of its subfolders") }
+                            return@forEach
+                        }
+                        null -> {
+                            _uiState.update { it.copy(statusMessage = "Could not verify the paste destination") }
+                            return@forEach
+                        }
+                        false -> Unit
+                    }
                 }
                 if (isCut) {
                     val sourceParent = source.parentDocumentUri ?: run {
@@ -1190,31 +1199,33 @@ build/
         }
     }
 
-    private fun containsDocumentUri(node: FileNode, documentUri: String): Boolean =
-        node.children.any { it.documentUri == documentUri || containsDocumentUri(it, documentUri) }
-
     // ── Import / Export ────────────────────────────────────────────────────
 
     fun importFiles(targetDirUri: String, sourceUris: List<String>) {
+        if (sourceUris.isEmpty()) return
         viewModelScope.launch {
-            var count = 0
-            sourceUris.forEach { uri ->
-                val name  = safRepository.getDisplayName(uri)
-                    ?: uri.substringAfterLast('/', "imported_file")
-                when (fileMutations.copy(uri, targetDirUri, name)) {
-                    is SafeMutationResult.Created -> count++
-                    else -> Unit
+            _uiState.update { it.copy(fileMutationLoading = true, statusMessage = "Importing selected files…") }
+            try {
+                var count = 0
+                sourceUris.forEach { uri ->
+                    val name  = safRepository.getDisplayName(uri)
+                        ?: uri.substringAfterLast('/', "imported_file")
+                    when (fileMutations.copy(uri, targetDirUri, name)) {
+                        is SafeMutationResult.Created -> count++
+                        else -> Unit
+                    }
                 }
+                refreshProjectNow()
+                val outcome = if (count == sourceUris.size) "Imported $count file(s)" else "Imported $count of ${sourceUris.size} file(s); some files could not be imported"
+                _uiState.update { it.copy(statusMessage = outcome) }
+            } finally {
+                _uiState.update { it.copy(fileMutationLoading = false) }
             }
-            refreshProjectNow()
-            _uiState.update { it.copy(statusMessage = "Imported $count file(s)") }
         }
     }
 
     fun exportDirectory(node: FileNode) {
-        _uiState.update {
-            it.copy(statusMessage = "Choose a destination file to export ${node.displayName}")
-        }
+        _uiState.update { it.copy(fileOpDialog = FileOpDialog.Export(node)) }
     }
 
     fun exportProject() {
@@ -1238,15 +1249,21 @@ build/
 
     fun exportDirectory(node: FileNode, destinationUri: String) {
         viewModelScope.launch {
-            val result = safRepository.exportZip(node.documentUri, destinationUri)
-            _uiState.update {
-                it.copy(
-                    statusMessage = if (result == null) {
-                        "Export failed for ${node.displayName}"
-                    } else {
-                        "Exported ${node.displayName} (${result.fileCount} file(s))"
-                    },
-                )
+            _uiState.update { state -> state.copy(fileMutationLoading = true, fileOpDialog = (state.fileOpDialog as? FileOpDialog.Export)?.copy(isSubmitting = true, resultMessage = null, failed = false)) }
+            try {
+                val result = safRepository.exportZip(node.documentUri, destinationUri)
+                _uiState.update {
+                    it.copy(
+                        fileOpDialog = (it.fileOpDialog as? FileOpDialog.Export)?.copy(
+                            isSubmitting = false,
+                            resultMessage = if (result == null) "Export failed for ${node.displayName}" else "Exported ${node.displayName} (${result.fileCount} file(s))",
+                            failed = result == null,
+                        ),
+                        statusMessage = if (result == null) "Export failed for ${node.displayName}" else "Exported ${node.displayName} (${result.fileCount} file(s))",
+                    )
+                }
+            } finally {
+                _uiState.update { it.copy(fileMutationLoading = false) }
             }
         }
     }
@@ -1652,109 +1669,6 @@ build/
         }
     }
 
-    // ── Preview / Run ──────────────────────────────────────────────────────
-
-    // ── Run — project-scoped entry point ──────────────────────────────────
-    //
-    // requestRun is the single entry point for the Run action.
-    // It is PROJECT-scoped, not file-scoped.
-    //
-    // Application dispatch:
-    //   HTML and Markdown files → preview provider (togglePreview).
-    //   All other file types   → status message; no crash.
-    //
-    //   Add new when-branches here for live server, terminal execution, etc.
-    //   Each branch should launch its provider safely (coroutine + runCatching).
-    //   The Run action must never terminate the application under any failure.
-    fun requestRun() {
-        val state  = _uiState.value
-        val active = state.openTabs.firstOrNull { it.isActive }
-
-        // Active file is directly previewable — just toggle the preview.
-        if (active != null && active.language in listOf("html", "markdown")) {
-            togglePreview()
-            return
-        }
-
-        // the first .html file.  When found, open it as the active tab so the user
-        // can press Run once more to preview it.  This covers the common case where
-        // a .css or .js file is active inside an HTML project.
-        val htmlNode = findFirstHtmlNode(state.fileTree)
-        if (htmlNode != null) {
-            viewModelScope.launch {
-                openFileInternal(htmlNode.documentUri, markActive = true, temporary = true)
-                _uiState.update {
-                    it.copy(statusMessage = "Opened ${htmlNode.displayName} — press Run to preview")
-                }
-            }
-            return
-        }
-
-        _uiState.update {
-            it.copy(statusMessage = when {
-                active == null              -> "Open a file to run or preview"
-                state.projectRootUri == null -> "Open a project first"
-                else -> "No HTML or Markdown files found — open one to preview"
-            })
-        }
-    }
-
-    /** Recursively searches [nodes] for the first non-directory .html file. */
-    private fun findFirstHtmlNode(nodes: List<FileNode>): FileNode? {
-        for (node in nodes) {
-            if (!node.isDirectory && node.displayName.endsWith(".html", ignoreCase = true)) return node
-            if (node.isDirectory) { findFirstHtmlNode(node.children)?.let { return it } }
-        }
-        return null
-    }
-
-    // ── Preview provider ───────────────────────────────────────────────────
-    //
-    // Called by requestRun for HTML and Markdown files.
-    // Runs in a viewModelScope coroutine so the main thread is never blocked.
-    // Markdown rendering is offloaded to Dispatchers.Default.
-    // All failure paths surface a user-facing statusMessage — the app never
-    // crashes due to an exception inside this function.
-    fun togglePreview() {
-        viewModelScope.launch {
-            // Hide preview if already visible.
-            if (_uiState.value.isPreviewVisible) {
-                _uiState.update { it.copy(isPreviewVisible = false) }
-                return@launch
-            }
-            val active = _uiState.value.openTabs.firstOrNull { it.isActive }
-            if (active == null) {
-                _uiState.update { it.copy(statusMessage = "No active file to preview") }
-                return@launch
-            }
-            val content = pendingContent[active.id] ?: active.content.orEmpty()
-
-            // Generate HTML on the Default dispatcher — never blocks the main thread.
-            // runCatching contains any exception from markdownToPreviewHtml or any
-            // future provider; the user sees a status message instead of a crash.
-            val htmlResult = runCatching {
-                withContext(Dispatchers.Default) {
-                    when (active.language) {
-                        "html"     -> content
-                        "markdown" -> markdownToPreviewHtml(content)
-                        else       -> null
-                    }
-                }
-            }
-
-            val htmlContent = htmlResult.getOrElse { error ->
-                _uiState.update {
-                    it.copy(
-                        statusMessage = "Preview failed: ${error.message ?: error.javaClass.simpleName}"
-                    )
-                }
-                return@launch
-            } ?: return@launch   // null = unsupported language (already handled by requestRun)
-
-            _uiState.update { it.copy(isPreviewVisible = true, previewHtmlContent = htmlContent) }
-        }
-    }
-
     // ── File search ────────────────────────────────────────────────────────
 
     fun showFileSearch() {
@@ -1818,9 +1732,9 @@ build/
                         val bytes = fileMutations.read(node.documentUri) ?: return@forEach
                         if (bytes.take(8192).any { it == 0.toByte() }) return@forEach
                         val content = bytes.toString(Charsets.UTF_8)
-                        val matchingLine = content.lineSequence().firstOrNull { it.contains(query, ignoreCase = true) }
+                        val matchingLine = content.lineSequence().withIndex().firstOrNull { it.value.contains(query, ignoreCase = true) }
                         if (matchingLine != null) {
-                            results += FileSearchResult(node.documentUri, node.displayName, "/$nodePath", matchingLine.trim().take(180))
+                            results += FileSearchResult(node.documentUri, node.displayName, "/$nodePath", matchingLine.value.trim().take(180), matchingLine.index + 1)
                         }
                     }
                 }
@@ -1829,6 +1743,39 @@ build/
             if (_uiState.value.contentSearchQuery == query) {
                 _uiState.update { it.copy(contentSearchResults = results.sortedBy { result -> result.relativePath.lowercase() }) }
             }
+        }
+    }
+
+    /** Replace matches only in the verified content-search result set. */
+    fun replaceProjectContents(find: String, replacement: String) {
+        if (find.isBlank()) return
+        val results = _uiState.value.contentSearchResults
+        if (results.isEmpty()) {
+            _uiState.update { it.copy(statusMessage = "No matching project content to replace") }
+            return
+        }
+        viewModelScope.launch {
+            var changedFiles = 0
+            var failedFiles = 0
+            results.forEach { result ->
+                val bytes = fileMutations.read(result.documentUri)
+                if (bytes == null || bytes.take(8192).any { it == 0.toByte() }) {
+                    failedFiles++
+                    return@forEach
+                }
+                val original = bytes.toString(Charsets.UTF_8)
+                val changed = original.replace(find, replacement, ignoreCase = true)
+                if (changed == original) return@forEach
+                if (fileMutations.write(result.documentUri, changed.toByteArray(Charsets.UTF_8))) changedFiles++ else failedFiles++
+            }
+            _uiState.update {
+                it.copy(statusMessage = if (failedFiles == 0) {
+                    "Replaced matches in $changedFiles file(s)"
+                } else {
+                    "Replaced matches in $changedFiles file(s); $failedFiles file(s) could not be updated"
+                })
+            }
+            searchProjectContents(_uiState.value.contentSearchQuery)
         }
     }
 
@@ -2164,6 +2111,24 @@ build/
         }
         _uiState.update { it.copy(statusMessage = "Deleting project…") }
         viewModelScope.launch {
+            var child: Project? = null
+            var containmentUnknown = false
+            projectRepository.getAll().filter { it.uri != uri }.forEach { candidate ->
+                when (safRepository.isSameOrDescendant(uri, candidate.uri)) {
+                    true -> if (child == null) child = candidate
+                    null -> containmentUnknown = true
+                    false -> Unit
+                }
+            }
+            if (containmentUnknown) {
+                _uiState.update { it.copy(statusMessage = "Could not verify project boundaries; deletion was blocked") }
+                return@launch
+            }
+            val registeredChild = child
+            if (registeredChild != null) {
+                _uiState.update { it.copy(statusMessage = "Delete the registered child project first: ${registeredChild.name}") }
+                return@launch
+            }
             val deleted = fileMutations.delete(uri) && !fileMutations.exists(uri)
             if (!deleted) {
                 _uiState.update { it.copy(statusMessage = "Project deletion failed; files were not confirmed removed") }
@@ -2217,11 +2182,12 @@ build/
             }
         when (val normalized = normalizeUserProjectPath(input, rootUri, baseSegments)) {
             NormalizedPathResult.AboveProjectRoot ->
-                _uiState.update { it.copy(statusMessage = "The path cannot go above the project root") }
+                _uiState.update { state -> state.copy(fileOpDialog = (state.fileOpDialog as? FileOpDialog.Rename)?.copy(errorMessage = "The path cannot go above the project root"), statusMessage = "The path cannot go above the project root") }
             NormalizedPathResult.MissingFinalName,
             NormalizedPathResult.InvalidComponent ->
-                _uiState.update { it.copy(statusMessage = "Enter a valid rename path") }
+                _uiState.update { state -> state.copy(fileOpDialog = (state.fileOpDialog as? FileOpDialog.Rename)?.copy(errorMessage = "Enter a valid rename path"), statusMessage = "Enter a valid rename path") }
             is NormalizedPathResult.Success -> viewModelScope.launch {
+                _uiState.update { state -> state.copy(fileOpDialog = (state.fileOpDialog as? FileOpDialog.Rename)?.copy(errorMessage = null, isSubmitting = true)) }
                 when (val resolved = safRepository.resolveOrCreatePathSafely(rootUri, normalized.segments)) {
                     is PathResolutionResult.Resolved -> {
                         val result = fileMutations.moveAndRename(
@@ -2239,9 +2205,7 @@ build/
                                 }
                             }
                             is SafeMutationResult.Partial -> {
-                                _uiState.update {
-                                    it.copy(statusMessage = "Rename partially completed; inspect both source and destination")
-                                }
+                                _uiState.update { state -> state.copy(fileOpDialog = (state.fileOpDialog as? FileOpDialog.Rename)?.copy(errorMessage = "Rename partially completed; inspect both source and destination"), statusMessage = "Rename partially completed") }
                             }
                             SafeMutationResult.Duplicate -> {
                                 safRepository.rollbackCreatedDirectories(resolved.createdIntermediateUris)
@@ -2251,27 +2215,31 @@ build/
                             }
                             SafeMutationResult.InspectionFailed -> {
                                 safRepository.rollbackCreatedDirectories(resolved.createdIntermediateUris)
-                                _uiState.update { it.copy(statusMessage = "Could not inspect the rename destination") }
+                                _uiState.update { state -> state.copy(fileOpDialog = (state.fileOpDialog as? FileOpDialog.Rename)?.copy(errorMessage = "Could not inspect the rename destination"), statusMessage = "Could not inspect the rename destination") }
                             }
                             SafeMutationResult.Failed -> {
                                 safRepository.rollbackCreatedDirectories(resolved.createdIntermediateUris)
-                                _uiState.update { it.copy(statusMessage = "Rename failed") }
+                                _uiState.update { state -> state.copy(fileOpDialog = (state.fileOpDialog as? FileOpDialog.Rename)?.copy(errorMessage = "Rename failed"), statusMessage = "Rename failed") }
                             }
                         }
                     }
                     is PathResolutionResult.BlockedByFile -> {
                         safRepository.rollbackCreatedDirectories(resolved.createdIntermediateUris)
-                        _uiState.update { it.copy(statusMessage = "A file blocks part of the rename path") }
+                        _uiState.update { state -> state.copy(fileOpDialog = (state.fileOpDialog as? FileOpDialog.Rename)?.copy(errorMessage = "A file blocks part of the rename path"), statusMessage = "A file blocks part of the rename path") }
                     }
                     is PathResolutionResult.IntermediateCreationFailed -> {
                         safRepository.rollbackCreatedDirectories(resolved.createdIntermediateUris)
-                        _uiState.update { it.copy(statusMessage = "Could not create the rename path") }
+                        _uiState.update { state -> state.copy(fileOpDialog = (state.fileOpDialog as? FileOpDialog.Rename)?.copy(errorMessage = "Could not create the rename path"), statusMessage = "Could not create the rename path") }
                     }
                     is PathResolutionResult.IntermediateNameMismatch -> {
                         safRepository.rollbackCreatedDirectories(resolved.createdIntermediateUris)
-                        _uiState.update { it.copy(statusMessage = "A rename folder could not be created exactly") }
+                        _uiState.update { state -> state.copy(fileOpDialog = (state.fileOpDialog as? FileOpDialog.Rename)?.copy(errorMessage = "A rename folder could not be created exactly"), statusMessage = "A rename folder could not be created exactly") }
                     }
-                    PathResolutionResult.EmptyPath -> _uiState.update { it.copy(statusMessage = "Could not resolve the rename path") }
+                    PathResolutionResult.EmptyPath -> _uiState.update { state -> state.copy(fileOpDialog = (state.fileOpDialog as? FileOpDialog.Rename)?.copy(errorMessage = "Could not resolve the rename path"), statusMessage = "Could not resolve the rename path") }
+                }
+                _uiState.update { state ->
+                    val dialog = state.fileOpDialog as? FileOpDialog.Rename
+                    if (dialog != null) state.copy(fileOpDialog = dialog.copy(isSubmitting = false)) else state
                 }
             }
         }
@@ -2281,7 +2249,7 @@ build/
         val nodes = if (selectedNodes.isEmpty()) listOf(node) else selectedNodes
         val allAffectedUris = nodes.flatMap { affectedUris(it) }.toSet()
         viewModelScope.launch {
-            _uiState.update { it.copy(fileMutationLoading = true, statusMessage = "Deleting ${nodes.size} item(s)…") }
+            _uiState.update { state -> state.copy(fileMutationLoading = true, statusMessage = "Deleting ${nodes.size} item(s)…", fileOpDialog = (state.fileOpDialog as? FileOpDialog.Delete)?.copy(errorMessage = null, isSubmitting = true)) }
             var deletedCount = 0
             val deletedUris = mutableSetOf<String>()
             nodes.forEach { selectedNode ->
@@ -2296,16 +2264,21 @@ build/
                 .filter { it.documentUri in deletedUris }
                 .forEach { closeTab(it.id) }
             refreshProjectNow()
+            val complete = deletedCount == nodes.size
+            val message = if (complete) {
+                "Deleted $deletedCount item(s)"
+            } else {
+                "Deleted $deletedCount of ${nodes.size} item(s)"
+            }
             _uiState.update { it.copy(
                 fileMutationLoading = false,
-                fileOpDialog = null,
+                fileOpDialog = if (complete) null else (it.fileOpDialog as? FileOpDialog.Delete)?.copy(
+                    isSubmitting = false,
+                    errorMessage = "$message. Some items could not be removed; inspect the project and retry.",
+                ),
                 isMultiSelectMode = false,
                 selectedUris = emptySet(),
-                statusMessage = if (deletedCount == nodes.size) {
-                    "Deleted $deletedCount item(s)"
-                } else {
-                    "Deleted $deletedCount of ${nodes.size} item(s)"
-                },
+                statusMessage = message,
             ) }
         }
     }
@@ -2536,17 +2509,18 @@ build/
             return
         }
         viewModelScope.launch {
+            _uiState.update { state -> state.copy(fileOpDialog = (state.fileOpDialog as? FileOpDialog.Duplicate)?.copy(errorMessage = null, isSubmitting = true)) }
             val copied = fileMutations.copy(node.documentUri, parentUri, newName)
             val newUri = when (copied) {
                 is SafeMutationResult.Created -> copied.documentUri
                 is SafeMutationResult.Partial -> {
                     _uiState.update {
-                        it.copy(fileOpDialog = null, statusMessage = "Duplicate partially completed: ${copied.recoveryHint}")
+                        it.copy(fileOpDialog = (it.fileOpDialog as? FileOpDialog.Duplicate)?.copy(isSubmitting = false, errorMessage = "Duplicate partially completed: ${copied.recoveryHint}"), statusMessage = "Duplicate partially completed")
                     }
                     return@launch
                 }
                 else -> {
-                    _uiState.update { it.copy(fileOpDialog = null, statusMessage = "Duplicate: create error") }
+                    _uiState.update { it.copy(fileOpDialog = (it.fileOpDialog as? FileOpDialog.Duplicate)?.copy(isSubmitting = false, errorMessage = "The item could not be duplicated"), statusMessage = "The item could not be duplicated") }
                     return@launch
                 }
             }
@@ -2686,74 +2660,6 @@ build/
         }
     }
 
-    // ── Markdown preview converter ─────────────────────────────────────────
-
-    private fun markdownToPreviewHtml(markdown: String): String {
-        val sb = StringBuilder()
-        sb.append(
-            """<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<style>
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:760px;margin:0 auto;padding:16px 20px;background:#fff;color:#24292e;line-height:1.6}
-h1,h2{border-bottom:1px solid #eaecef;padding-bottom:.3em}
-pre{background:#f6f8fa;border:1px solid #e1e4e8;border-radius:6px;padding:16px;overflow-x:auto}
-code{font-family:'SFMono-Regular',Consolas,monospace;background:#f0f0f0;padding:.2em .4em;border-radius:3px;font-size:.9em}
-pre code{background:none;padding:0;font-size:1em}
-blockquote{margin:0;padding:0 1em;color:#6a737d;border-left:4px solid #dfe2e5}
-hr{border:none;border-top:1px solid #e1e4e8;margin:16px 0}
-img{max-width:100%}a{color:#0366d6}
-ul,ol{padding-left:2em}
-</style></head><body>"""
-        )
-        val lines = markdown.lines()
-        var i = 0
-        while (i < lines.size) {
-            val line = lines[i]
-            if (line.startsWith("```")) {
-                val codeLines = mutableListOf<String>()
-                i++
-                while (i < lines.size && !lines[i].startsWith("```")) {
-                    codeLines += lines[i]; i++
-                }
-                sb.append("<pre><code>").append(codeLines.joinToString("\n").escHtml()).append("</code></pre>\n")
-                i++; continue
-            }
-            sb.append(when {
-                line.startsWith("######") -> "<h6>${line.removePrefix("######").trim().mdInline()}</h6>"
-                line.startsWith("#####")  -> "<h5>${line.removePrefix("#####").trim().mdInline()}</h5>"
-                line.startsWith("####")   -> "<h4>${line.removePrefix("####").trim().mdInline()}</h4>"
-                line.startsWith("###")    -> "<h3>${line.removePrefix("###").trim().mdInline()}</h3>"
-                line.startsWith("##")     -> "<h2>${line.removePrefix("##").trim().mdInline()}</h2>"
-                line.startsWith("#")      -> "<h1>${line.removePrefix("#").trim().mdInline()}</h1>"
-                line.startsWith("- ") || line.startsWith("* ") ->
-                    "<ul><li>${line.substring(2).trim().mdInline()}</li></ul>"
-                line.matches(Regex("\\d+\\.\\s.*")) ->
-                    "<ol><li>${line.substringAfter(". ").trim().mdInline()}</li></ol>"
-                line.startsWith("> ") -> "<blockquote>${line.removePrefix("> ").mdInline()}</blockquote>"
-                line.matches(Regex("[-*_]{3,}\\s*")) -> "<hr/>"
-                line.isBlank() -> "<br/>"
-                else -> "<p>${line.mdInline()}</p>"
-            }).append('\n')
-            i++
-        }
-        sb.append("</body></html>")
-        return sb.toString()
-    }
-
-    private fun String.mdInline(): String {
-        var s = this.escHtml()
-        s = s.replace(Regex("\\*\\*\\*(.*?)\\*\\*\\*"), "<strong><em>$1</em></strong>")
-        s = s.replace(Regex("\\*\\*(.*?)\\*\\*"),       "<strong>$1</strong>")
-        s = s.replace(Regex("__(.*?)__"),               "<strong>$1</strong>")
-        s = s.replace(Regex("\\*(.*?)\\*"),             "<em>$1</em>")
-        s = s.replace(Regex("`(.*?)`"),                 "<code>$1</code>")
-        s = s.replace(Regex("!\\[(.*?)]\\((.*?)\\)"),   "<img alt='$1' src='$2'>")
-        s = s.replace(Regex("\\[(.*?)]\\((.*?)\\)"),    "<a href='$2'>$1</a>")
-        return s
-    }
-
-    private fun String.escHtml(): String =
-        replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
-
     // ── Private helpers ────────────────────────────────────────────────────
 
     private suspend fun nextAvailableProjectName(
@@ -2779,7 +2685,7 @@ ul,ol{padding-left:2em}
         when (result) {
             SafeMutationResult.Duplicate -> "a project with that name already exists"
             SafeMutationResult.InspectionFailed -> "the destination could not be inspected"
-            SafeMutationResult.Failed -> "the storage provider rejected the operation"
+            SafeMutationResult.Failed -> "the operation could not be completed"
             is SafeMutationResult.Partial -> "source and destination may both remain; inspect both locations"
             is SafeMutationResult.Created -> "unexpected result"
         }

@@ -11,10 +11,12 @@ package dev.android.ide.viewmodel.model
  * [displayName]  The file's name.
  * [relativePath] Full display path relative to the project root (e.g. "src/main/Main.kt").
  * [matchPreview] A short line containing the matching text, when available.
+ * [matchLine] One-based line number for the displayed match, when available.
  */
 data class FileSearchResult(
     val documentUri: String,
     val displayName: String,
     val relativePath: String,
     val matchPreview: String = "",
+    val matchLine: Int? = null,
 )

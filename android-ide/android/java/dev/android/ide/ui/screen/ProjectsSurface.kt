@@ -168,8 +168,17 @@ fun ProjectsSurface(
             }
         }
         state.registryWarning?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-        if (state.operationInProgress) Text("Refreshing projects…")
-        state.statusMessage?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+        if (state.statusMessage != null && !state.operationInProgress) {
+            val statusColor = when (state.operationReport?.outcome) {
+                dev.android.ide.contracts.OperationOutcome.COMPLETE -> MaterialTheme.colorScheme.primary
+                dev.android.ide.contracts.OperationOutcome.BLOCKED,
+                dev.android.ide.contracts.OperationOutcome.FAILED,
+                dev.android.ide.contracts.OperationOutcome.PARTIAL,
+                dev.android.ide.contracts.OperationOutcome.INTERRUPTED -> MaterialTheme.colorScheme.error
+                else -> MaterialTheme.colorScheme.onSurfaceVariant
+            }
+            Text(state.statusMessage!!, color = statusColor, style = MaterialTheme.typography.bodySmall)
+        }
         if (state.selectedProjectIds.isNotEmpty()) {
             Row(
                 Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
@@ -185,7 +194,7 @@ fun ProjectsSurface(
         }
         if (confirmBatchDelete) {
             AlertDialog(
-                onDismissRequest = { confirmBatchDelete = false },
+                onDismissRequest = { if (!state.operationInProgress) confirmBatchDelete = false },
                 title = { Text("Permanently delete selected projects?") },
                 text = {
                     Column {
@@ -195,17 +204,17 @@ fun ProjectsSurface(
                         OutlinedTextField(enteredBatchDeleteCode, { enteredBatchDeleteCode = it }, label = { Text("Confirmation code") }, singleLine = true)
                     }
                 },
-                confirmButton = { Button(onClick = { confirmBatchDelete = false; viewModel.permanentlyDeleteProjects(state.selectedProjectIds.toList()) }, enabled = enteredBatchDeleteCode == batchDeleteCode, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)) { Text("Delete permanently") } },
-                dismissButton = { TextButton(onClick = { confirmBatchDelete = false }) { Text("Cancel") } },
+                confirmButton = { Button(onClick = { viewModel.permanentlyDeleteProjects(state.selectedProjectIds.toList()) }, enabled = enteredBatchDeleteCode == batchDeleteCode && !state.operationInProgress, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)) { if (state.operationInProgress) CircularProgressIndicator(Modifier.padding(end = 8.dp), strokeWidth = 2.dp); Text(if (state.operationInProgress) "Deleting…" else "Delete permanently") } },
+                dismissButton = { TextButton(onClick = { confirmBatchDelete = false }, enabled = !state.operationInProgress) { Text("Cancel") } },
             )
         }
         if (confirmBatchRemove) {
             AlertDialog(
-                onDismissRequest = { confirmBatchRemove = false },
+                onDismissRequest = { if (!state.operationInProgress) confirmBatchRemove = false },
                 title = { Text("Remove selected projects from registry?") },
                 text = { Text("${state.selectedProjectIds.size} project record(s) will be removed from Android IDE. User files, Git data, and locations remain unchanged.") },
-                confirmButton = { Button(onClick = { confirmBatchRemove = false; viewModel.removeProjectsFromRegistry(state.selectedProjectIds.toList()) }) { Text("Remove from Registry") } },
-                dismissButton = { TextButton(onClick = { confirmBatchRemove = false }) { Text("Cancel") } },
+                confirmButton = { Button(onClick = { viewModel.removeProjectsFromRegistry(state.selectedProjectIds.toList()) }, enabled = !state.operationInProgress) { if (state.operationInProgress) CircularProgressIndicator(Modifier.padding(end = 8.dp), strokeWidth = 2.dp); Text(if (state.operationInProgress) "Removing…" else "Remove from Registry") } },
+                dismissButton = { TextButton(onClick = { confirmBatchRemove = false }, enabled = !state.operationInProgress) { Text("Cancel") } },
             )
         }
         if (confirmBatchExport) {
@@ -213,9 +222,20 @@ fun ProjectsSurface(
             AlertDialog(
                 onDismissRequest = { confirmBatchExport = false },
                 title = { Text("Export selected projects as ZIP") },
-                text = { Text("Selected projects: $selectedNames\n\nOne ZIP archive per project will be created in a destination you choose. Source projects remain unchanged.") },
-                confirmButton = { Button(onClick = { confirmBatchExport = false; onExportProjects(state.selectedProjectIds) }) { Text("Choose export location") } },
-                dismissButton = { TextButton(onClick = { confirmBatchExport = false }) { Text("Cancel") } },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("Selected projects: $selectedNames\n\nOne ZIP archive per project will be created in a destination you choose. Source projects remain unchanged.")
+                        state.operationReport?.let { report ->
+                            Text(report.message, color = if (report.outcome == dev.android.ide.contracts.OperationOutcome.COMPLETE) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error)
+                        }
+                        if (state.operationInProgress) Row(verticalAlignment = Alignment.CenterVertically) {
+                            CircularProgressIndicator(Modifier.padding(end = 8.dp), strokeWidth = 2.dp)
+                            Text("Exporting…")
+                        }
+                    }
+                },
+                confirmButton = { Button(onClick = { onExportProjects(state.selectedProjectIds) }, enabled = !state.operationInProgress) { Text("Choose export location") } },
+                dismissButton = { TextButton(onClick = { confirmBatchExport = false }, enabled = !state.operationInProgress) { Text(if (state.operationInProgress) "Please wait" else "Cancel") } },
             )
         }
         if (visibleProjects.isEmpty()) {
@@ -250,6 +270,7 @@ fun ProjectsSurface(
                         onExport = onExportProject,
                         onDuplicate = onDuplicateProject,
                         onRelocate = onRelocateProject,
+                        operationInProgress = state.operationInProgress,
                     )
                 }
             }
@@ -259,7 +280,12 @@ fun ProjectsSurface(
         Box(
             Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface.copy(alpha = 0.72f)).clickable { },
             contentAlignment = Alignment.Center,
-        ) { CircularProgressIndicator() }
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                CircularProgressIndicator()
+                Text("Working…", style = MaterialTheme.typography.bodyMedium)
+            }
+        }
     }
     FloatingActionButton(
         onClick = { if (!state.operationInProgress) addActionsExpanded = !addActionsExpanded },
@@ -329,6 +355,7 @@ private fun ProjectCard(
     onExport: (String) -> Unit,
     onDuplicate: (String) -> Unit,
     onRelocate: (String) -> Unit,
+    operationInProgress: Boolean,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
     var confirmRemove by remember { mutableStateOf(false) }
@@ -360,33 +387,35 @@ private fun ProjectCard(
                 summary?.status?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelSmall) }
                 Text(relativeLastOpened(project.lastOpenedAt), style = MaterialTheme.typography.labelSmall)
             }
-            IconButton(onClick = { onSelect(project.id); menuOpen = true }) { Icon(Icons.Default.MoreVert, contentDescription = "Project actions") }
-        }
-        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-            DropdownMenuItem(leadingIcon = { Icon(Icons.Default.Info, null) }, text = { Text("Project details") }, onClick = { menuOpen = false; onDetails(project.id) })
-            DropdownMenuItem(leadingIcon = { Icon(Icons.Default.Refresh, null) }, text = { Text("Refresh") }, onClick = { menuOpen = false; onSelect(project.id); onRefresh() })
-            DropdownMenuItem(leadingIcon = { Icon(Icons.Default.Edit, null) }, text = { Text("Rename") }, onClick = { menuOpen = false; renameValue = project.name; renameVisible = true })
-            DropdownMenuItem(leadingIcon = { Icon(Icons.Default.FolderOpen, null) }, text = { Text("Change Location") }, onClick = { menuOpen = false; onRelocate(project.id) })
-            DropdownMenuItem(leadingIcon = { Icon(Icons.Default.ContentCopy, null) }, text = { Text("Copy & Duplicate") }, onClick = { menuOpen = false; onDuplicate(project.id) })
-            DropdownMenuItem(leadingIcon = { Icon(Icons.Default.Share, null) }, text = { Text("Export or Share") }, onClick = { menuOpen = false; onExport(project.id) })
-            DropdownMenuItem(leadingIcon = { Icon(Icons.Default.Code, null) }, text = { Text("Copy Storage Path") }, onClick = { menuOpen = false; onCopyPath(project.id) })
-            DropdownMenuItem(leadingIcon = { Icon(Icons.Default.MergeType, null) }, text = { Text("Git Remote Details") }, onClick = { menuOpen = false; onDetails(project.id) })
-            HorizontalDivider()
-            DropdownMenuItem(leadingIcon = { Icon(Icons.Default.Code, null) }, text = { Text("Open in Editor") }, onClick = { menuOpen = false; onOpen(project.id) })
-            DropdownMenuItem(leadingIcon = { Icon(Icons.Default.MergeType, null) }, text = { Text("Open Git") }, onClick = { menuOpen = false; onFeedback("Open Git") })
-            DropdownMenuItem(leadingIcon = { Icon(Icons.Default.Terminal, null) }, text = { Text("Open Terminal") }, onClick = { menuOpen = false; onFeedback("Open Terminal") })
-            DropdownMenuItem(leadingIcon = { Icon(Icons.Default.FolderOpen, null) }, text = { Text("Open Browser or Preview") }, onClick = { menuOpen = false; onFeedback("Open Browser or Preview") })
-            HorizontalDivider()
-            DropdownMenuItem(leadingIcon = { Icon(Icons.Default.Delete, null) }, text = { Text("Remove from Registry", color = MaterialTheme.colorScheme.secondary) }, onClick = { menuOpen = false; onSelect(project.id); confirmRemove = true })
-            DropdownMenuItem(leadingIcon = { Icon(Icons.Default.Delete, null, tint = MaterialTheme.colorScheme.error) }, text = { Text("Permanently Delete", color = MaterialTheme.colorScheme.error) }, onClick = { menuOpen = false; onSelect(project.id); deleteCode = Random.nextInt(100, 1000).toString(); enteredDeleteCode = ""; confirmDelete = true })
+            Box {
+                IconButton(onClick = { onSelect(project.id); menuOpen = true }) { Icon(Icons.Default.MoreVert, contentDescription = "Project actions") }
+                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                    DropdownMenuItem(leadingIcon = { Icon(Icons.Default.Info, null) }, text = { Text("Project details") }, onClick = { menuOpen = false; onDetails(project.id) })
+                    DropdownMenuItem(leadingIcon = { Icon(Icons.Default.Refresh, null) }, text = { Text("Refresh") }, onClick = { menuOpen = false; onSelect(project.id); onRefresh() })
+                    DropdownMenuItem(leadingIcon = { Icon(Icons.Default.Edit, null) }, text = { Text("Rename") }, onClick = { menuOpen = false; renameValue = project.name; renameVisible = true })
+                    DropdownMenuItem(leadingIcon = { Icon(Icons.Default.FolderOpen, null) }, text = { Text("Change Location") }, onClick = { menuOpen = false; onRelocate(project.id) })
+                    DropdownMenuItem(leadingIcon = { Icon(Icons.Default.ContentCopy, null) }, text = { Text("Copy & Duplicate") }, onClick = { menuOpen = false; onDuplicate(project.id) })
+                    DropdownMenuItem(leadingIcon = { Icon(Icons.Default.Share, null) }, text = { Text("Export or Share") }, onClick = { menuOpen = false; onExport(project.id) })
+                    DropdownMenuItem(leadingIcon = { Icon(Icons.Default.Code, null) }, text = { Text("Copy Storage Path") }, onClick = { menuOpen = false; onCopyPath(project.id) })
+                    DropdownMenuItem(leadingIcon = { Icon(Icons.Default.MergeType, null) }, text = { Text("Git Remote Details") }, onClick = { menuOpen = false; onDetails(project.id) })
+                    HorizontalDivider()
+                    DropdownMenuItem(leadingIcon = { Icon(Icons.Default.Code, null) }, text = { Text("Open in Editor") }, onClick = { menuOpen = false; onOpen(project.id) })
+                    DropdownMenuItem(leadingIcon = { Icon(Icons.Default.MergeType, null) }, text = { Text("Open Git") }, onClick = { menuOpen = false; onFeedback("Open Git") })
+                    DropdownMenuItem(leadingIcon = { Icon(Icons.Default.Terminal, null) }, text = { Text("Open Terminal") }, onClick = { menuOpen = false; onFeedback("Open Terminal") })
+                    DropdownMenuItem(leadingIcon = { Icon(Icons.Default.FolderOpen, null) }, text = { Text("Open Browser or Preview") }, onClick = { menuOpen = false; onFeedback("Open Browser or Preview") })
+                    HorizontalDivider()
+                    DropdownMenuItem(leadingIcon = { Icon(Icons.Default.Delete, null) }, text = { Text("Remove from Registry", color = MaterialTheme.colorScheme.secondary) }, onClick = { menuOpen = false; onSelect(project.id); confirmRemove = true })
+                    DropdownMenuItem(leadingIcon = { Icon(Icons.Default.Delete, null, tint = MaterialTheme.colorScheme.error) }, text = { Text("Permanently Delete", color = MaterialTheme.colorScheme.error) }, onClick = { menuOpen = false; onSelect(project.id); deleteCode = Random.nextInt(100, 1000).toString(); enteredDeleteCode = ""; confirmDelete = true })
+                }
+            }
         }
         if (confirmRemove) {
             AlertDialog(
                 onDismissRequest = { confirmRemove = false },
                 title = { Text("Remove project from registry?") },
-                text = { Text("${project.name} will be removed from Android IDE, but its files, Git data, and location will remain unchanged.\n\nLocation: ${humanReadableStorageLocation(project.location.userVisiblePath ?: project.location.displayLabel)}") },
-                confirmButton = { Button(onClick = { confirmRemove = false; onRemove() }) { Text("Remove from Registry") } },
-                dismissButton = { TextButton(onClick = { confirmRemove = false }) { Text("Cancel") } },
+                text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { Text("${project.name} will be removed from Android IDE, but its files, Git data, and location will remain unchanged.\n\nLocation: ${humanReadableStorageLocation(project.location.userVisiblePath ?: project.location.displayLabel)}") }; if (operationInProgress) Row(verticalAlignment = Alignment.CenterVertically) { CircularProgressIndicator(Modifier.padding(end = 8.dp), strokeWidth = 2.dp); Text("Removing…") } },
+                confirmButton = { Button(onClick = onRemove, enabled = !operationInProgress) { Text(if (operationInProgress) "Removing…" else "Remove from Registry") } },
+                dismissButton = { TextButton(onClick = { confirmRemove = false }, enabled = !operationInProgress) { Text(if (operationInProgress) "Please wait" else "Cancel") } },
             )
         }
         if (confirmDelete) {
@@ -399,22 +428,23 @@ private fun ProjectCard(
                         Text("Project: ${project.name}")
                         Text("Location: ${humanReadableStorageLocation(project.location.userVisiblePath ?: project.location.displayLabel)}")
                         Text("Type $deleteCode to confirm")
-                        OutlinedTextField(enteredDeleteCode, { enteredDeleteCode = it }, label = { Text("Confirmation code") }, singleLine = true)
+                        OutlinedTextField(enteredDeleteCode, { enteredDeleteCode = it }, label = { Text("Confirmation code") }, singleLine = true, enabled = !operationInProgress)
+                        if (operationInProgress) Row(verticalAlignment = Alignment.CenterVertically) { CircularProgressIndicator(Modifier.padding(end = 8.dp), strokeWidth = 2.dp); Text("Deleting…") }
                     }
                 },
-                confirmButton = { Button(onClick = { confirmDelete = false; onDelete() }, enabled = enteredDeleteCode == deleteCode, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)) { Text("Delete permanently") } },
-                dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Cancel") } },
+                confirmButton = { Button(onClick = onDelete, enabled = enteredDeleteCode == deleteCode && !operationInProgress, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)) { Text(if (operationInProgress) "Deleting…" else "Delete permanently") } },
+                dismissButton = { TextButton(onClick = { confirmDelete = false }, enabled = !operationInProgress) { Text(if (operationInProgress) "Please wait" else "Cancel") } },
             )
         }
         if (renameVisible) {
             AlertDialog(
                 onDismissRequest = { renameVisible = false },
                 title = { Text("Rename project") },
-                text = { OutlinedTextField(renameValue, { renameValue = it }, label = { Text("Project name") }, singleLine = true) },
+                text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { OutlinedTextField(renameValue, { renameValue = it }, label = { Text("Project name") }, singleLine = true, enabled = !operationInProgress); if (operationInProgress) Row(verticalAlignment = Alignment.CenterVertically) { CircularProgressIndicator(Modifier.padding(end = 8.dp), strokeWidth = 2.dp); Text("Renaming…") } } },
                 confirmButton = {
-                    Button(onClick = { renameVisible = false; onSelect(project.id); onRename(renameValue) }, enabled = renameValue.isNotBlank()) { Text("Rename") }
+                    Button(onClick = { onSelect(project.id); onRename(renameValue) }, enabled = renameValue.isNotBlank() && !operationInProgress) { Text(if (operationInProgress) "Renaming…" else "Rename") }
                 },
-                dismissButton = { TextButton(onClick = { renameVisible = false }) { Text("Cancel") } },
+                dismissButton = { TextButton(onClick = { renameVisible = false }, enabled = !operationInProgress) { Text(if (operationInProgress) "Please wait" else "Cancel") } },
             )
         }
         }

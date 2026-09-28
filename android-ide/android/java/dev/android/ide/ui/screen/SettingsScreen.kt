@@ -1,40 +1,76 @@
-// android-ide/android/java/dev/android/ide/ui/screen/SettingsScreen.kt
-//
-// Settings screen — app theme, editor theme, preview layout, editor display,
-// feature placeholders.
-
 package dev.android.ide.ui.screen
 
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Extension
-import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.MergeType
+import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Terminal
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.RadioButton
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Slider
+import androidx.compose.material3.Switch
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
-import kotlinx.coroutines.launch
 import dev.android.ide.data.model.AppTheme
 import dev.android.ide.data.model.EditorSettings
-import dev.android.ide.data.model.PreviewLayout
 import dev.android.ide.data.model.VolumeKeyMode
-import dev.android.ide.ui.theme.IdeColors
 import dev.android.ide.ui.theme.LocalIdeColors
 import dev.android.ide.viewmodel.IdeViewModel
 import dev.android.ide.viewmodel.model.IdeUiState
 
-@OptIn(ExperimentalMaterial3Api::class)
+enum class SettingsCategory(val title: String, val description: String, val icon: ImageVector) {
+    GENERAL("General", "App theme and interface-wide preferences", Icons.Default.Palette),
+    EDITOR("Editor", "Editor appearance, code behavior, keyboard, and file tree", Icons.Default.Code),
+    PROJECTS("Projects", "Project creation and storage preferences", Icons.Default.FolderOpen),
+    GIT("Git", "Repository identity, history, and source control", Icons.Default.MergeType),
+    CREDENTIALS_SECURITY("Credentials & Security", "Account credentials, permissions, and protected data", Icons.Default.Lock),
+    TERMINAL("Terminal", "Terminal runtime and session preferences", Icons.Default.Terminal),
+    BROWSER("Browser", "Browser preview and web-project preferences", Icons.Default.Language),
+    EXTENSIONS("Extensions", "Language tools and editor extensions", Icons.Default.Extension),
+}
+
 @Composable
 fun SettingsScreen(
     uiState: IdeUiState,
@@ -43,34 +79,38 @@ fun SettingsScreen(
     scrollToSection: String? = null,
     onScrollConsumed: () -> Unit = {},
 ) {
-    val colors         = LocalIdeColors.current
-    val scrollState    = rememberScrollState()
-    val coroutineScope = rememberCoroutineScope()
-    val sectionOffsets = remember { mutableStateMapOf<String, Int>() }
-
-    LaunchedEffect(scrollToSection, scrollToSection?.let { sectionOffsets[it] }) {
-        if (scrollToSection != null) {
-            val offset = sectionOffsets[scrollToSection]
-            if (offset != null) {
-                coroutineScope.launch { scrollState.animateScrollTo(offset) }
-                onScrollConsumed()
-            }
-        }
+    var selectedCategoryName by rememberSaveable { mutableStateOf<String?>(null) }
+    val selectedCategory = selectedCategoryName?.let { name ->
+        SettingsCategory.values().firstOrNull { it.name == name }
     }
 
+    LaunchedEffect(scrollToSection) {
+        val requested = scrollToSection ?: return@LaunchedEffect
+        val category = when (requested) {
+            "App Theme", "UI Font Size" -> SettingsCategory.GENERAL
+            "Editor Theme", "Editor", "Controls", "File Tree" -> SettingsCategory.EDITOR
+            "Project Storage" -> SettingsCategory.PROJECTS
+            else -> null
+        }
+        if (category != null) selectedCategoryName = category.name
+        onScrollConsumed()
+    }
+
+    val colors = LocalIdeColors.current
     Scaffold(
         topBar = {
             TopAppBar(
-                title  = { Text("Settings", color = colors.textPrimary) },
+                title = { Text(selectedCategory?.title ?: "Settings", color = colors.textPrimary) },
                 navigationIcon = {
-                    if (onNavigationIconClick != null) {
-                        IconButton(onClick = onNavigationIconClick) {
-                            Icon(
-                                imageVector        = Icons.Default.Menu,
-                                contentDescription = "Open sidebar",
-                                tint               = colors.accent,
-                            )
-                        }
+                    IconButton(onClick = {
+                        if (selectedCategory != null) selectedCategoryName = null
+                        else onNavigationIconClick?.invoke()
+                    }) {
+                        Icon(
+                            imageVector = if (selectedCategory != null) Icons.Default.ArrowBack else Icons.Default.Menu,
+                            contentDescription = if (selectedCategory != null) "Back to settings" else "Open sidebar",
+                            tint = colors.accent,
+                        )
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = colors.surface),
@@ -78,650 +118,263 @@ fun SettingsScreen(
         },
         containerColor = colors.background,
     ) { innerPadding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-                .verticalScroll(scrollState)
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(24.dp),
-        ) {
-            val s = uiState.editorSettings
-
-            // ── App Appearance ─────────────────────────────────────────────
-            SectionHeader("App Theme", modifier = Modifier.onGloballyPositioned { sectionOffsets["App Theme"] = it.positionInParent().y.toInt() })
-            Card(colors = CardDefaults.cardColors(containerColor = colors.surface)) {
-                Column(
-                    modifier = Modifier.fillMaxWidth().selectableGroup().padding(vertical = 8.dp),
-                ) {
-                    AppThemeOption("Dark",   AppTheme.DARK,   uiState.appTheme, ideViewModel)
-                    AppThemeOption("Light",  AppTheme.LIGHT,  uiState.appTheme, ideViewModel)
-                    AppThemeOption("System", AppTheme.SYSTEM, uiState.appTheme, ideViewModel)
-                }
-            }
-
-            // ── UI Font Scale ───────────────────────────────────────────────
-            SectionHeader("UI Font Size", modifier = Modifier.onGloballyPositioned { sectionOffsets["UI Font Size"] = it.positionInParent().y.toInt() })
-            Card(colors = CardDefaults.cardColors(containerColor = colors.surface)) {
-                Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text  = "Text Scale",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = colors.textPrimary,
-                            )
-                            val pct = (s.uiFontScale * 100).toInt()
-                            Text(
-                                text  = "$pct% — affects all UI text (file tree, menus, dialogs)",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = colors.textSecondary,
-                            )
-                        }
-                    }
-                    Spacer(Modifier.height(8.dp))
-                    Slider(
-                        value         = s.uiFontScale,
-                        onValueChange = { v ->
-                            val snapped = (v / EditorSettings.UI_FONT_SCALE_STEP).toInt() *
-                                EditorSettings.UI_FONT_SCALE_STEP
-                            ideViewModel.setEditorSettings(
-                                s.copy(uiFontScale = snapped.coerceIn(
-                                    EditorSettings.UI_FONT_SCALE_MIN,
-                                    EditorSettings.UI_FONT_SCALE_MAX,
-                                ))
-                            )
-                        },
-                        valueRange    = EditorSettings.UI_FONT_SCALE_MIN..EditorSettings.UI_FONT_SCALE_MAX,
-                        steps         = ((EditorSettings.UI_FONT_SCALE_MAX - EditorSettings.UI_FONT_SCALE_MIN) /
-                            EditorSettings.UI_FONT_SCALE_STEP).toInt() - 1,
-                        modifier      = Modifier.fillMaxWidth(),
-                    )
-                    Row(
-                        modifier              = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                    ) {
-                        Text(
-                            text  = "${(EditorSettings.UI_FONT_SCALE_MIN * 100).toInt()}%",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = colors.textDisabled,
-                        )
-                        TextButton(
-                            onClick  = { ideViewModel.setEditorSettings(s.copy(uiFontScale = 1.0f)) },
-                            enabled  = s.uiFontScale != 1.0f,
-                            modifier = Modifier.height(28.dp),
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
-                        ) {
-                            Text("Reset", style = MaterialTheme.typography.labelSmall)
-                        }
-                        Text(
-                            text  = "${(EditorSettings.UI_FONT_SCALE_MAX * 100).toInt()}%",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = colors.textDisabled,
-                        )
-                    }
-                }
-            }
-
-            // ── Editor Theme ───────────────────────────────────────────────
-            SectionHeader("Editor Theme")
-            Card(colors = CardDefaults.cardColors(containerColor = colors.surface)) {
-                Column(
-                    modifier = Modifier.fillMaxWidth().selectableGroup().padding(vertical = 8.dp),
-                ) {
-                    EditorThemeOption("Dark",   "dark",   s.editorTheme, s, ideViewModel)
-                    EditorThemeOption("Light",  "light",  s.editorTheme, s, ideViewModel)
-                    EditorThemeOption("System (follow app theme)", "system", s.editorTheme, s, ideViewModel)
-                }
-            }
-
-            Card(colors = CardDefaults.cardColors(containerColor = colors.surface)) {
-                VisibilitySettingRow(
-                    title = "Document information row",
-                    description = "Show line, column, spacing, language, and encoding below the editor.",
-                    checked = s.showStatusBar,
-                    onCheckedChange = { ideViewModel.setEditorSettings(s.copy(showStatusBar = it)) },
-                    colors = colors,
-                )
-            }
-
-            // ── Preview Layout ─────────────────────────────────────────────
-            SectionHeader("Preview Layout (Portrait)")
-            Card(colors = CardDefaults.cardColors(containerColor = colors.surface)) {
-                Column(
-                    modifier = Modifier.fillMaxWidth().selectableGroup().padding(vertical = 8.dp),
-                ) {
-                    PreviewLayoutOption(
-                        "Preview Above Editor",
-                        PreviewLayout.PREVIEW_ABOVE,
-                        s.previewLayout, s, ideViewModel,
-                    )
-                    PreviewLayoutOption(
-                        "Editor Above Preview",
-                        PreviewLayout.EDITOR_ABOVE,
-                        s.previewLayout, s, ideViewModel,
-                    )
-                }
-            }
-
-            // ── Editor ─────────────────────────────────────────────────────
-            SectionHeader("Editor", modifier = Modifier.onGloballyPositioned { sectionOffsets["Editor"] = it.positionInParent().y.toInt() })
-            Card(colors = CardDefaults.cardColors(containerColor = colors.surface)) {
-                Column(modifier = Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-
-                    // Font size
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Code Font Size", color = colors.textPrimary, style = MaterialTheme.typography.bodyMedium)
-                            Text("${s.fontSize} sp (Monaco code surface)", color = colors.textSecondary, style = MaterialTheme.typography.bodySmall)
-                        }
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            OutlinedButton(
-                                onClick = { if (s.fontSize > 10) ideViewModel.setEditorSettings(s.copy(fontSize = s.fontSize - 1)) },
-                                modifier = Modifier.size(32.dp),
-                                contentPadding = PaddingValues(0.dp),
-                            ) { Text("\u2212", style = MaterialTheme.typography.labelLarge) }
-                            OutlinedButton(
-                                onClick = { if (s.fontSize < 28) ideViewModel.setEditorSettings(s.copy(fontSize = s.fontSize + 1)) },
-                                modifier = Modifier.size(32.dp),
-                                contentPadding = PaddingValues(0.dp),
-                            ) { Text("+", style = MaterialTheme.typography.labelLarge) }
-                        }
-                    }
-
-                    HorizontalDivider(color = colors.separator)
-
-                    // Tab size
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("Tab Size", color = colors.textPrimary, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                            listOf(2, 4, 8).forEach { size ->
-                                FilterChip(
-                                    selected = s.tabSize == size,
-                                    onClick  = { ideViewModel.setEditorSettings(s.copy(tabSize = size)) },
-                                    label    = { Text("$size") },
-                                )
-                            }
-                        }
-                    }
-
-                    HorizontalDivider(color = colors.separator)
-
-                    // Word wrap
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .selectable(selected = s.wordWrap, role = Role.Switch, onClick = {
-                                ideViewModel.setEditorSettings(s.copy(wordWrap = !s.wordWrap))
-                            }),
-                    ) {
-                        Text("Word Wrap", color = colors.textPrimary, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-                        Switch(checked = s.wordWrap, onCheckedChange = { ideViewModel.setEditorSettings(s.copy(wordWrap = it)) })
-                    }
-
-                    HorizontalDivider(color = colors.separator)
-
-                    // Line numbers
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .selectable(selected = s.lineNumbers, role = Role.Switch, onClick = {
-                                ideViewModel.setEditorSettings(s.copy(lineNumbers = !s.lineNumbers))
-                            }),
-                    ) {
-                        Text("Line Numbers", color = colors.textPrimary, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-                        Switch(checked = s.lineNumbers, onCheckedChange = { ideViewModel.setEditorSettings(s.copy(lineNumbers = it)) })
-                    }
-
-                    HorizontalDivider(color = colors.separator)
-
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Render Whitespace", color = colors.textPrimary, style = MaterialTheme.typography.bodyMedium)
-                            Text("Highlight space / tab characters", color = colors.textSecondary, style = MaterialTheme.typography.bodySmall)
-                        }
-                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                            listOf("None" to "none", "Selection" to "selection", "All" to "all").forEach { (label, value) ->
-                                FilterChip(
-                                    selected = s.renderWhitespace == value,
-                                    onClick  = { ideViewModel.setEditorSettings(s.copy(renderWhitespace = value)) },
-                                    label    = { Text(label) },
-                                )
-                            }
-                        }
-                    }
-
-                    HorizontalDivider(color = colors.separator)
-
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .selectable(selected = s.minimapEnabled, role = Role.Switch, onClick = {
-                                ideViewModel.setEditorSettings(s.copy(minimapEnabled = !s.minimapEnabled))
-                            }),
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Minimap", color = colors.textPrimary, style = MaterialTheme.typography.bodyMedium)
-                            Text("Show code overview panel on the right edge", color = colors.textSecondary, style = MaterialTheme.typography.bodySmall)
-                        }
-                        Switch(checked = s.minimapEnabled, onCheckedChange = { ideViewModel.setEditorSettings(s.copy(minimapEnabled = it)) })
-                    }
-
-                    HorizontalDivider(color = colors.separator)
-
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .selectable(selected = s.scrollBeyondLastLine, role = Role.Switch, onClick = {
-                                ideViewModel.setEditorSettings(s.copy(scrollBeyondLastLine = !s.scrollBeyondLastLine))
-                            }),
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Scroll Past Last Line", color = colors.textPrimary, style = MaterialTheme.typography.bodyMedium)
-                            Text("Allow scrolling so the last line can sit at centre", color = colors.textSecondary, style = MaterialTheme.typography.bodySmall)
-                        }
-                        Switch(checked = s.scrollBeyondLastLine, onCheckedChange = { ideViewModel.setEditorSettings(s.copy(scrollBeyondLastLine = it)) })
-                    }
-
-                    HorizontalDivider(color = colors.separator)
-
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .selectable(selected = s.bracketPairColorization, role = Role.Switch, onClick = {
-                                ideViewModel.setEditorSettings(s.copy(bracketPairColorization = !s.bracketPairColorization))
-                            }),
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Bracket Pair Colors", color = colors.textPrimary, style = MaterialTheme.typography.bodyMedium)
-                            Text("Colour each nested bracket level differently", color = colors.textSecondary, style = MaterialTheme.typography.bodySmall)
-                        }
-                        Switch(checked = s.bracketPairColorization, onCheckedChange = { ideViewModel.setEditorSettings(s.copy(bracketPairColorization = it)) })
-                    }
-
-                    HorizontalDivider(color = colors.separator)
-
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Cursor Style", color = colors.textPrimary, style = MaterialTheme.typography.bodyMedium)
-                            Text("Cursor appearance in the editor", color = colors.textSecondary, style = MaterialTheme.typography.bodySmall)
-                        }
-                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                            listOf("Line" to "line", "Block" to "block", "Underline" to "underline").forEach { (label, value) ->
-                                FilterChip(
-                                    selected = s.cursorStyle == value,
-                                    onClick  = { ideViewModel.setEditorSettings(s.copy(cursorStyle = value)) },
-                                    label    = { Text(label) },
-                                )
-                            }
-                        }
-                    }
-
-                    HorizontalDivider(color = colors.separator)
-
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Auto-close Brackets", color = colors.textPrimary, style = MaterialTheme.typography.bodyMedium)
-                            Text("Insert matching bracket automatically", color = colors.textSecondary, style = MaterialTheme.typography.bodySmall)
-                        }
-                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                            listOf("Always" to "always", "Smart" to "languageDefined", "Never" to "never").forEach { (label, value) ->
-                                FilterChip(
-                                    selected = s.autoClosingBrackets == value,
-                                    onClick  = { ideViewModel.setEditorSettings(s.copy(autoClosingBrackets = value)) },
-                                    label    = { Text(label) },
-                                )
-                            }
-                        }
-                    }
-
-                    HorizontalDivider(color = colors.separator)
-
-                    // Auto save
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .selectable(selected = s.autoSave, role = Role.Switch, onClick = {
-                                ideViewModel.setEditorSettings(s.copy(autoSave = !s.autoSave))
-                            }),
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Auto Save", color = colors.textPrimary, style = MaterialTheme.typography.bodyMedium)
-                            Text("Save on every edit (150 ms debounce)", color = colors.textSecondary, style = MaterialTheme.typography.bodySmall)
-                        }
-                        Switch(checked = s.autoSave, onCheckedChange = { ideViewModel.setEditorSettings(s.copy(autoSave = it)) })
-                    }
-
-                    HorizontalDivider(color = colors.separator)
-
-                    // Show keyboard toolbar
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .selectable(selected = s.showKeyboardToolbar, role = Role.Switch, onClick = {
-                                ideViewModel.setEditorSettings(s.copy(showKeyboardToolbar = !s.showKeyboardToolbar))
-                            }),
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Keyboard Toolbar", color = colors.textPrimary, style = MaterialTheme.typography.bodyMedium)
-                            Text("Show cursor navigation & edit buttons above the keyboard", color = colors.textSecondary, style = MaterialTheme.typography.bodySmall)
-                        }
-                        Switch(checked = s.showKeyboardToolbar, onCheckedChange = { ideViewModel.setEditorSettings(s.copy(showKeyboardToolbar = it)) })
-                    }
-
-                    HorizontalDivider(color = colors.separator)
-
-                    // Show symbol bar
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .selectable(selected = s.showSymbolBar, role = Role.Switch, onClick = {
-                                ideViewModel.setEditorSettings(s.copy(showSymbolBar = !s.showSymbolBar))
-                            }),
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Symbol Bar", color = colors.textPrimary, style = MaterialTheme.typography.bodyMedium)
-                            Text("Show one-tap common character shortcuts above the keyboard", color = colors.textSecondary, style = MaterialTheme.typography.bodySmall)
-                        }
-                        Switch(checked = s.showSymbolBar, onCheckedChange = { ideViewModel.setEditorSettings(s.copy(showSymbolBar = it)) })
-                    }
-
-                    HorizontalDivider(color = colors.separator)
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Code Completion", color = colors.textDisabled, style = MaterialTheme.typography.bodyMedium)
-                            Text("Requires Language Server — Phase 4", color = colors.textDisabled, style = MaterialTheme.typography.bodySmall)
-                        }
-                        Switch(checked = false, onCheckedChange = null, enabled = false)
-                    }
-
-                    HorizontalDivider(color = colors.separator)
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Code Folding", color = colors.textDisabled, style = MaterialTheme.typography.bodyMedium)
-                            Text("Requires Language Server — Phase 4", color = colors.textDisabled, style = MaterialTheme.typography.bodySmall)
-                        }
-                        Switch(checked = false, onCheckedChange = null, enabled = false)
-                    }
-                }
-            }
-
-            // ── File Tree ──────────────────────────────────────────────────
-            SectionHeader("File Tree", modifier = Modifier.onGloballyPositioned { sectionOffsets["File Tree"] = it.positionInParent().y.toInt() })
-            Card(colors = CardDefaults.cardColors(containerColor = colors.surface)) {
-                Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .selectable(selected = s.hideGitFolder, role = Role.Switch, onClick = {
-                                ideViewModel.setEditorSettings(s.copy(hideGitFolder = !s.hideGitFolder))
-                            }),
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Hide .git Folder", color = colors.textPrimary, style = MaterialTheme.typography.bodyMedium)
-                            Text("Remove the .git directory from the file tree", color = colors.textSecondary, style = MaterialTheme.typography.bodySmall)
-                        }
-                        Switch(checked = s.hideGitFolder, onCheckedChange = { ideViewModel.setEditorSettings(s.copy(hideGitFolder = it)) })
-                    }
-                    HorizontalDivider(color = colors.separator)
-                    VisibilitySettingRow(
-                        title = "Hide .dev-android-ide Metadata",
-                        description = "Hide project-local workspace metadata from the file tree",
-                        checked = s.hideProjectMetadataFolder,
-                        onCheckedChange = { ideViewModel.setEditorSettings(s.copy(hideProjectMetadataFolder = it)) },
-                        colors = colors,
-                    )
-                }
-            }
-
-            // ── Project Storage ────────────────────────────────────────────
-            SectionHeader("Project Storage", modifier = Modifier.onGloballyPositioned { sectionOffsets["Project Storage"] = it.positionInParent().y.toInt() })
-            Card(colors = CardDefaults.cardColors(containerColor = colors.surface)) {
-                Column(modifier = Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(
-                        text  = "Default Project Directory",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = colors.textPrimary,
-                    )
-                    Text(
-                        text  = "New blank projects are created here. Leave empty to use app-private storage (no special permissions required).",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = colors.textSecondary,
-                    )
-                    Spacer(Modifier.height(4.dp))
-
-                    val dir = s.defaultProjectDir
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier          = Modifier.fillMaxWidth(),
-                    ) {
-                        Text(
-                            text     = if (dir.isEmpty()) "(app-private storage)" else dir,
-                            style    = MaterialTheme.typography.bodySmall,
-                            color    = if (dir.isEmpty()) colors.textDisabled else colors.textPrimary,
-                            modifier = Modifier.weight(1f),
-                            maxLines = 2,
-                        )
-                        if (dir.isNotEmpty()) {
-                            Spacer(Modifier.width(8.dp))
-                            OutlinedButton(
-                                onClick        = { ideViewModel.setEditorSettings(s.copy(defaultProjectDir = "")) },
-                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
-                                modifier       = Modifier.height(32.dp),
-                            ) {
-                                Text("Reset", style = MaterialTheme.typography.labelSmall)
-                            }
-                        }
-                    }
-                    Text(
-                        text  = "To change this directory, edit it here directly or use the \"New Project\" dialog in the Projects screen.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = colors.textDisabled,
-                    )
-                    var editPath by remember { mutableStateOf(dir) }
-                    LaunchedEffect(dir) { editPath = dir }
-                    OutlinedTextField(
-                        value         = editPath,
-                        onValueChange = { editPath = it },
-                        modifier      = Modifier.fillMaxWidth(),
-                        label         = { Text("Path", style = MaterialTheme.typography.bodySmall) },
-                        singleLine    = true,
-                        textStyle     = MaterialTheme.typography.bodySmall,
-                        placeholder   = { Text("/storage/emulated/0/Projects", style = MaterialTheme.typography.bodySmall) },
-                        trailingIcon  = {
-                            if (editPath != dir) {
-                                TextButton(
-                                    onClick        = { ideViewModel.setEditorSettings(s.copy(defaultProjectDir = editPath.trim())) },
-                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
-                                ) {
-                                    Text("Apply", style = MaterialTheme.typography.labelSmall)
-                                }
-                            }
-                        },
-                    )
-                }
-            }
-
-            // ── Controls ───────────────────────────────────────────────────
-            SectionHeader("Controls", modifier = Modifier.onGloballyPositioned { sectionOffsets["Controls"] = it.positionInParent().y.toInt() })
-            Card(colors = CardDefaults.cardColors(containerColor = colors.surface)) {
-                Column(
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp, horizontal = 16.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    Text(
-                        text  = "Volume Keys in Editor",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = colors.textSecondary,
-                        modifier = Modifier.padding(bottom = 4.dp),
-                    )
-                    Column(modifier = Modifier.selectableGroup()) {
-                        VolumeKeyOption("Cursor horizontal (\u2190 / \u2192)", VolumeKeyMode.HORIZONTAL, uiState.volumeKeyMode, ideViewModel)
-                        VolumeKeyOption("Cursor vertical (\u2191 / \u2193)",   VolumeKeyMode.VERTICAL,   uiState.volumeKeyMode, ideViewModel)
-                        VolumeKeyOption("Disabled (system volume)",             VolumeKeyMode.DISABLED,   uiState.volumeKeyMode, ideViewModel)
-                    }
-                }
-            }
-
-            // ── Coming soon ────────────────────────────────────────────────
-            SectionHeader("Coming in Future Phases")
-            Text(
-                text  = "These features are planned for Phase 2 and beyond.",
-                style = MaterialTheme.typography.bodySmall,
-                color = colors.textSecondary,
+        if (selectedCategory == null) {
+            SettingsCategoryList(
+                modifier = Modifier.padding(innerPadding),
+                onCategorySelected = { selectedCategoryName = it.name },
             )
-            ComingSoonItem(icon = Icons.Default.Terminal,  title = "Terminal",   description = "Run shell commands inside the IDE.")
-            ComingSoonItem(icon = Icons.Default.MergeType, title = "Git",        description = "Commit, push, pull, and branch directly in the editor.")
-            ComingSoonItem(icon = Icons.Default.Extension, title = "Extensions", description = "Install language servers and plugins.")
+        } else {
+            SettingsCategoryContent(
+                category = selectedCategory,
+                uiState = uiState,
+                ideViewModel = ideViewModel,
+                modifier = Modifier.padding(innerPadding),
+            )
         }
     }
 }
 
 @Composable
-private fun VisibilitySettingRow(
-    title: String,
-    description: String,
-    checked: Boolean,
-    onCheckedChange: (Boolean) -> Unit,
-    colors: IdeColors,
+private fun SettingsCategoryList(
+    modifier: Modifier,
+    onCategorySelected: (SettingsCategory) -> Unit,
 ) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier
-            .fillMaxWidth()
-            .selectable(selected = checked, role = Role.Switch, onClick = { onCheckedChange(!checked) }),
+    val colors = LocalIdeColors.current
+    LazyColumn(
+        modifier = modifier.fillMaxSize().padding(horizontal = 16.dp),
+        contentPadding = PaddingValues(vertical = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(title, color = colors.textPrimary, style = MaterialTheme.typography.bodyMedium)
-            Text(description, color = colors.textSecondary, style = MaterialTheme.typography.bodySmall)
+        item {
+            Text(
+                "Choose a settings category",
+                style = MaterialTheme.typography.titleMedium,
+                color = colors.textPrimary,
+                modifier = Modifier.padding(bottom = 6.dp),
+            )
         }
+        items(SettingsCategory.values().toList()) { category ->
+            Card(
+                onClick = { onCategorySelected(category) },
+                colors = CardDefaults.cardColors(containerColor = colors.surface),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(category.icon, contentDescription = null, tint = colors.accent, modifier = Modifier.size(24.dp))
+                    Spacer(Modifier.width(16.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(category.title, color = colors.textPrimary, style = MaterialTheme.typography.titleSmall)
+                        Text(category.description, color = colors.textSecondary, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SettingsCategoryContent(
+    category: SettingsCategory,
+    uiState: IdeUiState,
+    ideViewModel: IdeViewModel,
+    modifier: Modifier,
+) {
+    val s = uiState.editorSettings
+    val colors = LocalIdeColors.current
+    LazyColumn(
+        modifier = modifier.fillMaxSize().padding(horizontal = 16.dp),
+        contentPadding = PaddingValues(vertical = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        item {
+            Text(category.description, color = colors.textSecondary, style = MaterialTheme.typography.bodyMedium)
+        }
+        when (category) {
+            SettingsCategory.GENERAL -> item { GeneralSettings(uiState, s, ideViewModel) }
+            SettingsCategory.EDITOR -> item { EditorSettingsContent(uiState, s, ideViewModel) }
+            SettingsCategory.PROJECTS -> item { ProjectsSettingsContent() }
+            SettingsCategory.GIT,
+            SettingsCategory.CREDENTIALS_SECURITY,
+            SettingsCategory.TERMINAL,
+            SettingsCategory.BROWSER,
+            SettingsCategory.EXTENSIONS -> item { DomainPlaceholder(category) }
+        }
+    }
+}
+
+@Composable
+private fun GeneralSettings(uiState: IdeUiState, s: EditorSettings, ideViewModel: IdeViewModel) {
+    SettingsCard {
+        Text("App theme", style = MaterialTheme.typography.titleSmall)
+        Column(Modifier.selectableGroup()) {
+            AppThemeOption("Dark", AppTheme.DARK, uiState.appTheme, ideViewModel)
+            AppThemeOption("Light", AppTheme.LIGHT, uiState.appTheme, ideViewModel)
+            AppThemeOption("System", AppTheme.SYSTEM, uiState.appTheme, ideViewModel)
+        }
+    }
+    SettingsCard {
+        Text("Interface text size", style = MaterialTheme.typography.titleSmall)
+        Text("Affects menus, file lists, dialogs, and other interface text.", style = MaterialTheme.typography.bodySmall, color = LocalIdeColors.current.textSecondary)
+        val pct = (s.uiFontScale * 100).toInt()
+        Text("$pct%", style = MaterialTheme.typography.bodyMedium)
+        Slider(
+            value = s.uiFontScale,
+            onValueChange = { value ->
+                val snapped = (value / EditorSettings.UI_FONT_SCALE_STEP).toInt() * EditorSettings.UI_FONT_SCALE_STEP
+                ideViewModel.setEditorSettings(s.copy(uiFontScale = snapped.coerceIn(EditorSettings.UI_FONT_SCALE_MIN, EditorSettings.UI_FONT_SCALE_MAX)))
+            },
+            valueRange = EditorSettings.UI_FONT_SCALE_MIN..EditorSettings.UI_FONT_SCALE_MAX,
+            steps = ((EditorSettings.UI_FONT_SCALE_MAX - EditorSettings.UI_FONT_SCALE_MIN) / EditorSettings.UI_FONT_SCALE_STEP).toInt() - 1,
+        )
+        TextButton(onClick = { ideViewModel.setEditorSettings(s.copy(uiFontScale = 1f)) }, enabled = s.uiFontScale != 1f) { Text("Reset") }
+    }
+    SettingsCard {
+        Text("Editor theme", style = MaterialTheme.typography.titleSmall)
+        Column(Modifier.selectableGroup()) {
+            EditorThemeOption("Dark", "dark", s.editorTheme, s, ideViewModel)
+            EditorThemeOption("Light", "light", s.editorTheme, s, ideViewModel)
+            EditorThemeOption("Follow app theme", "system", s.editorTheme, s, ideViewModel)
+        }
+    }
+    SettingsCard {
+        VisibilitySettingRow("Document information row", "Show line, column, spacing, language, and encoding below the editor.", s.showStatusBar, { ideViewModel.setEditorSettings(s.copy(showStatusBar = it)) })
+    }
+}
+
+@Composable
+private fun EditorSettingsContent(uiState: IdeUiState, s: EditorSettings, ideViewModel: IdeViewModel) {
+    val colors = LocalIdeColors.current
+    SettingsCard {
+        SettingStepper("Code font size", "${s.fontSize} sp", {
+            if (s.fontSize > 10) ideViewModel.setEditorSettings(s.copy(fontSize = s.fontSize - 1))
+        }, {
+            if (s.fontSize < 28) ideViewModel.setEditorSettings(s.copy(fontSize = s.fontSize + 1))
+        })
+        HorizontalDivider(color = colors.separator)
+        Text("Tab size", style = MaterialTheme.typography.bodyMedium)
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) { listOf(2, 4, 8).forEach { size -> FilterChip(s.tabSize == size, { ideViewModel.setEditorSettings(s.copy(tabSize = size)) }, label = { Text("$size") }) } }
+        HorizontalDivider(color = colors.separator)
+        VisibilitySettingRow("Word wrap", "Wrap long lines inside the editor.", s.wordWrap, { ideViewModel.setEditorSettings(s.copy(wordWrap = it)) })
+        HorizontalDivider(color = colors.separator)
+        VisibilitySettingRow("Line numbers", "Show line numbers beside the code.", s.lineNumbers, { ideViewModel.setEditorSettings(s.copy(lineNumbers = it)) })
+        HorizontalDivider(color = colors.separator)
+        Text("Whitespace", style = MaterialTheme.typography.bodyMedium)
+        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) { listOf("None" to "none", "Selection" to "selection", "All" to "all").forEach { (label, value) -> FilterChip(s.renderWhitespace == value, { ideViewModel.setEditorSettings(s.copy(renderWhitespace = value)) }, label = { Text(label) }) } }
+        HorizontalDivider(color = colors.separator)
+        VisibilitySettingRow("Minimap", "Show a code overview at the edge of the editor.", s.minimapEnabled, { ideViewModel.setEditorSettings(s.copy(minimapEnabled = it)) })
+        HorizontalDivider(color = colors.separator)
+        VisibilitySettingRow("Scroll past the last line", "Allow the last line to sit at the centre of the view.", s.scrollBeyondLastLine, { ideViewModel.setEditorSettings(s.copy(scrollBeyondLastLine = it)) })
+        HorizontalDivider(color = colors.separator)
+        VisibilitySettingRow("Bracket pair colors", "Color nested bracket levels differently.", s.bracketPairColorization, { ideViewModel.setEditorSettings(s.copy(bracketPairColorization = it)) })
+        HorizontalDivider(color = colors.separator)
+        ChoiceSetting("Cursor style", listOf("Line" to "line", "Block" to "block", "Underline" to "underline"), s.cursorStyle) { ideViewModel.setEditorSettings(s.copy(cursorStyle = it)) }
+        HorizontalDivider(color = colors.separator)
+        ChoiceSetting("Auto-close brackets", listOf("Always" to "always", "Smart" to "languageDefined", "Never" to "never"), s.autoClosingBrackets) { ideViewModel.setEditorSettings(s.copy(autoClosingBrackets = it)) }
+        HorizontalDivider(color = colors.separator)
+        VisibilitySettingRow("Auto save", "Save changes shortly after editing.", s.autoSave, { ideViewModel.setEditorSettings(s.copy(autoSave = it)) })
+    }
+    KeyboardSettingsContent(uiState, s, ideViewModel)
+    FileTreeSettingsContent(s, ideViewModel)
+}
+
+@Composable
+private fun KeyboardSettingsContent(uiState: IdeUiState, s: EditorSettings, ideViewModel: IdeViewModel) {
+    SettingsCard {
+        VisibilitySettingRow("Keyboard toolbar", "Show cursor, selection, and editing controls above the keyboard.", s.showKeyboardToolbar, { ideViewModel.setEditorSettings(s.copy(showKeyboardToolbar = it)) })
+        HorizontalDivider()
+        VisibilitySettingRow("Symbol bar", "Show one-tap common character shortcuts above the keyboard.", s.showSymbolBar, { ideViewModel.setEditorSettings(s.copy(showSymbolBar = it)) })
+        HorizontalDivider()
+        Text("Volume keys in editor", style = MaterialTheme.typography.bodyMedium)
+        Column(Modifier.selectableGroup()) {
+            VolumeKeyOption("Cursor horizontal (← / →)", VolumeKeyMode.HORIZONTAL, uiState.volumeKeyMode, ideViewModel)
+            VolumeKeyOption("Cursor vertical (↑ / ↓)", VolumeKeyMode.VERTICAL, uiState.volumeKeyMode, ideViewModel)
+            VolumeKeyOption("Disabled (system volume)", VolumeKeyMode.DISABLED, uiState.volumeKeyMode, ideViewModel)
+        }
+    }
+}
+
+@Composable
+private fun FileTreeSettingsContent(s: EditorSettings, ideViewModel: IdeViewModel) {
+    SettingsCard {
+        VisibilitySettingRow("Hide .git folder", "Keep repository internals out of the file tree.", s.hideGitFolder, { ideViewModel.setEditorSettings(s.copy(hideGitFolder = it)) })
+        HorizontalDivider()
+        VisibilitySettingRow("Hide workspace metadata", "Keep Android IDE workspace metadata out of the file tree.", s.hideProjectMetadataFolder, { ideViewModel.setEditorSettings(s.copy(hideProjectMetadataFolder = it)) })
+    }
+}
+
+@Composable
+private fun ProjectsSettingsContent() {
+    SettingsCard {
+        Text("Storage locations are chosen during project creation.", style = MaterialTheme.typography.bodyMedium)
+        Text("The editor does not keep a hidden default path. This avoids creating projects in an unexpected folder.", style = MaterialTheme.typography.bodySmall, color = LocalIdeColors.current.textSecondary)
+    }
+}
+
+@Composable
+private fun DomainPlaceholder(category: SettingsCategory) {
+    Text(
+        text = "${category.title} settings are not available yet. This domain will be added in its own workflow.",
+        color = LocalIdeColors.current.textSecondary,
+        style = MaterialTheme.typography.bodyMedium,
+    )
+}
+
+@Composable
+private fun SettingsCard(content: @Composable ColumnScope.() -> Unit) {
+    Card(colors = CardDefaults.cardColors(containerColor = LocalIdeColors.current.surface)) {
+        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp), content = content)
+    }
+}
+
+@Composable
+private fun SettingStepper(title: String, value: String, onDecrease: () -> Unit, onIncrease: () -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) { Text(title); Text(value, color = LocalIdeColors.current.textSecondary, style = MaterialTheme.typography.bodySmall) }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = onDecrease, modifier = Modifier.size(36.dp), contentPadding = PaddingValues(0.dp)) { Text("−") }
+            OutlinedButton(onClick = onIncrease, modifier = Modifier.size(36.dp), contentPadding = PaddingValues(0.dp)) { Text("+") }
+        }
+    }
+}
+
+@Composable
+private fun VisibilitySettingRow(title: String, description: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().selectable(selected = checked, role = Role.Switch, onClick = { onCheckedChange(!checked) })) {
+        Column(Modifier.weight(1f)) { Text(title, color = LocalIdeColors.current.textPrimary); Text(description, color = LocalIdeColors.current.textSecondary, style = MaterialTheme.typography.bodySmall) }
         Switch(checked = checked, onCheckedChange = onCheckedChange)
     }
 }
 
-// ── Private composables ────────────────────────────────────────────────────────
-
 @Composable
-private fun SectionHeader(title: String, modifier: Modifier = Modifier) {
-    val colors = LocalIdeColors.current
-    Text(text = title, style = MaterialTheme.typography.labelMedium, color = colors.accent, modifier = modifier)
+private fun ChoiceSetting(title: String, choices: List<Pair<String, String>>, selected: String, onSelected: (String) -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(title)
+        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) { choices.forEach { (label, value) -> FilterChip(selected == value, { onSelected(value) }, label = { Text(label) }) } }
+    }
 }
 
 @Composable
 private fun AppThemeOption(label: String, theme: AppTheme, current: AppTheme, ideViewModel: IdeViewModel) {
-    val colors   = LocalIdeColors.current
     val selected = theme == current
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier
-            .fillMaxWidth()
-            .selectable(selected = selected, role = Role.RadioButton, onClick = { ideViewModel.setTheme(theme) })
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-    ) {
-        RadioButton(selected = selected, onClick = null)
-        Spacer(Modifier.width(8.dp))
-        Text(text = label, color = LocalIdeColors.current.textPrimary)
+    Row(Modifier.fillMaxWidth().selectable(selected = selected, role = Role.RadioButton, onClick = { ideViewModel.setTheme(theme) }).padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        RadioButton(selected, onClick = null); Spacer(Modifier.width(8.dp)); Text(label)
     }
 }
 
 @Composable
-private fun EditorThemeOption(
-    label: String,
-    themeKey: String,
-    currentKey: String,
-    settings: EditorSettings,
-    ideViewModel: IdeViewModel,
-) {
-    val colors   = LocalIdeColors.current
+private fun EditorThemeOption(label: String, themeKey: String, currentKey: String, settings: EditorSettings, ideViewModel: IdeViewModel) {
     val selected = themeKey == currentKey
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier
-            .fillMaxWidth()
-            .selectable(selected = selected, role = Role.RadioButton, onClick = {
-                ideViewModel.setEditorSettings(settings.copy(editorTheme = themeKey))
-            })
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-    ) {
-        RadioButton(selected = selected, onClick = null)
-        Spacer(Modifier.width(8.dp))
-        Text(text = label, color = colors.textPrimary)
-    }
-}
-
-@Composable
-private fun PreviewLayoutOption(
-    label: String,
-    layout: PreviewLayout,
-    current: PreviewLayout,
-    settings: EditorSettings,
-    ideViewModel: IdeViewModel,
-) {
-    val colors   = LocalIdeColors.current
-    val selected = layout == current
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier
-            .fillMaxWidth()
-            .selectable(selected = selected, role = Role.RadioButton, onClick = {
-                ideViewModel.setEditorSettings(settings.copy(previewLayout = layout))
-            })
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-    ) {
-        RadioButton(selected = selected, onClick = null)
-        Spacer(Modifier.width(8.dp))
-        Text(text = label, color = colors.textPrimary)
+    Row(Modifier.fillMaxWidth().selectable(selected = selected, role = Role.RadioButton, onClick = { ideViewModel.setEditorSettings(settings.copy(editorTheme = themeKey)) }).padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        RadioButton(selected, onClick = null); Spacer(Modifier.width(8.dp)); Text(label)
     }
 }
 
 @Composable
 private fun VolumeKeyOption(label: String, mode: VolumeKeyMode, current: VolumeKeyMode, ideViewModel: IdeViewModel) {
-    val colors   = LocalIdeColors.current
     val selected = mode == current
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier
-            .fillMaxWidth()
-            .selectable(selected = selected, role = Role.RadioButton, onClick = { ideViewModel.setVolumeKeyMode(mode) })
-            .padding(vertical = 8.dp),
-    ) {
-        RadioButton(selected = selected, onClick = null)
-        Spacer(Modifier.width(8.dp))
-        Text(text = label, color = colors.textPrimary, style = MaterialTheme.typography.bodyMedium)
-    }
-}
-
-@Composable
-private fun ComingSoonItem(icon: ImageVector, title: String, description: String) {
-    val colors = LocalIdeColors.current
-    Card(colors = CardDefaults.cardColors(containerColor = colors.surface)) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier          = Modifier.padding(16.dp),
-        ) {
-            Icon(imageVector = icon, contentDescription = null, tint = colors.textDisabled, modifier = Modifier.size(24.dp))
-            Spacer(Modifier.width(12.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(text = title,       style = MaterialTheme.typography.bodyMedium, color = colors.textDisabled)
-                Text(text = description, style = MaterialTheme.typography.bodySmall,  color = colors.textDisabled)
-            }
-            Spacer(Modifier.width(8.dp))
-            Text(text = "Phase 2", style = MaterialTheme.typography.labelSmall, color = colors.textDisabled)
-        }
+    Row(Modifier.fillMaxWidth().selectable(selected = selected, role = Role.RadioButton, onClick = { ideViewModel.setVolumeKeyMode(mode) }).padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        RadioButton(selected, onClick = null); Spacer(Modifier.width(8.dp)); Text(label)
     }
 }

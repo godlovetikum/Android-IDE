@@ -27,9 +27,23 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+// Termux bootstrap archives are generated just before the Android build. The
+// repository intentionally does not carry all four architecture archives.
+// Select an ABI with -PtermuxAbi=arm64-v8a (or TERMUX_ABI); arm64 is the local
+// default for developer builds. The fetch script verifies the pinned checksum.
+val termuxAbi = providers.gradleProperty("termuxAbi")
+    .orElse(providers.environmentVariable("TERMUX_ABI"))
+    .orElse("arm64-v8a")
+val prepareTermuxBootstrap = tasks.register<Exec>("prepareTermuxBootstrap") {
+    val script = rootProject.projectDir.resolve("../../scripts/fetch-termux-bootstrap.sh").normalize()
+    commandLine("bash", script.absolutePath, termuxAbi.get())
+}
+tasks.named("preBuild").configure { dependsOn(prepareTermuxBootstrap) }
+
 android {
     namespace = "dev.android.ide"
     compileSdk = 34
+    ndkVersion = "22.1.7171670"
 
     defaultConfig {
         applicationId = "dev.android.ide"
@@ -37,8 +51,27 @@ android {
         targetSdk = 34
         versionCode = 1
         versionName = "1.0.0-alpha"
+        // The runtime bootstrap is ABI-specific. Keep the APK aligned with
+        // the selected runtime instead of producing a universal artifact.
+        ndk {
+            abiFilters += termuxAbi.get()
+        }
     }
 
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include(termuxAbi.get())
+            isUniversalApk = false
+        }
+    }
+
+    externalNativeBuild {
+        ndkBuild {
+            path = file("src/main/cpp/termux-pty/Android.mk")
+        }
+    }
     sourceSets {
         named("main") {
             // Kotlin source files live at android/java/ — one level above app/.
@@ -195,6 +228,10 @@ dependencies {
     // viewModelScope, Dispatchers.IO for SAF operations
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
 
+    // Pinned Termux terminal-view dependency surface. The source is vendored
+    // under android/java/com/termux so it is compiled with this app namespace;
+    // its JNI PTY library is built below for the selected ABI only.
+    implementation("androidx.annotation:annotation:1.7.1")
     // ── Debug tooling ──────────────────────────────────────────────────────
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")

@@ -128,7 +128,7 @@ fun ProjectDetailsScreen(
                 DetailSection("Identity") {
                     CopyableDetail("Display name", details.project.name, clipboard::setText)
                     DetailValue("Description", details.description.ifBlank { "No description" })
-                    CopyableDetail("Storage provider", details.storageProvider, clipboard::setText)
+                    CopyableDetail("Storage location type", details.storageProvider, clipboard::setText)
                     CopyableDetail("Location", details.storagePath, clipboard::setText)
                 }
                 DetailSection("Timeline") {

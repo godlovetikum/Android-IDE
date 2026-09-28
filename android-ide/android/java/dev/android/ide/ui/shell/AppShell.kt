@@ -21,6 +21,7 @@ import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.MergeType
 import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Source
 import androidx.compose.material.icons.filled.Settings
@@ -28,8 +29,6 @@ import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -51,6 +50,8 @@ import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.unit.dp
 import dev.android.ide.app.AppShellState
 import dev.android.ide.app.AppShellViewModel
@@ -61,6 +62,7 @@ import dev.android.ide.ui.screen.ProjectDetailsSurface
 import dev.android.ide.ui.screen.EditorSurface
 import dev.android.ide.ui.screen.ProjectsSurface
 import dev.android.ide.ui.screen.SettingsScreen
+import dev.android.ide.ui.screen.TerminalSurface
 import dev.android.ide.viewmodel.IdeViewModel
 import kotlinx.coroutines.launch
 
@@ -79,6 +81,15 @@ fun AppShell(
     onRelocateProject: (String) -> Unit,
 ) {
     val state by viewModel.state.collectAsState()
+    val ideState by ideViewModel.uiState.collectAsState()
+    var editorNavigationPrompt by rememberSaveable { mutableStateOf(false) }
+    var pendingEditorNavigation by rememberSaveable { mutableStateOf<Surface?>(null) }
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
+    fun dismissEditorIme() {
+        keyboardController?.hide()
+        focusManager.clearFocus(force = true)
+    }
     var moreOpen by rememberSaveable { mutableStateOf(false) }
     var phaseFeedback by rememberSaveable { mutableStateOf<String?>(null) }
     var settingsSection by rememberSaveable { mutableStateOf<String?>(null) }
@@ -88,11 +99,12 @@ fun AppShell(
     val surfaceStateHolder = rememberSaveableStateHolder()
 
     BackHandler(
-        enabled = drawerState.isOpen || phaseFeedback != null ||
+        enabled = drawerState.isOpen || phaseFeedback != null || editorNavigationPrompt || state.operationInProgress ||
             state.exitConfirmationVisible || state.navigationStack.size > 1,
     ) {
         when {
             state.exitConfirmationVisible -> viewModel.dismissExitConfirmation()
+            editorNavigationPrompt -> { editorNavigationPrompt = false; pendingEditorNavigation = null }
             phaseFeedback != null -> phaseFeedback = null
             drawerState.isOpen -> { moreOpen = false; coroutineScope.launch { drawerState.close() } }
             !viewModel.back() -> viewModel.requestExitConfirmation()
@@ -100,6 +112,12 @@ fun AppShell(
     }
 
     fun navigate(surface: Surface) {
+        dismissEditorIme()
+        if (ideState.fileMutationLoading) {
+            pendingEditorNavigation = surface
+            editorNavigationPrompt = true
+            return
+        }
         viewModel.navigate(surface)
         moreOpen = false
         coroutineScope.launch { drawerState.close() }
@@ -120,7 +138,10 @@ fun AppShell(
             onDuplicateProject = onDuplicateProject,
             onRelocateProject = onRelocateProject,
             onRequestExit = viewModel::requestExitConfirmation,
-            onOpenNavigation = { coroutineScope.launch { drawerState.open() } },
+            onOpenNavigation = {
+                dismissEditorIme()
+                coroutineScope.launch { drawerState.open() }
+            },
             onFeedback = { phaseFeedback = it },
             settingsSection = settingsSection,
             onSettingsSectionConsumed = { settingsSection = null },
@@ -190,6 +211,31 @@ fun AppShell(
             dismissButton = { TextButton(onClick = viewModel::dismissExitConfirmation) { Text("Cancel") } },
         )
     }
+    if (editorNavigationPrompt) {
+        AlertDialog(
+            onDismissRequest = { editorNavigationPrompt = false; pendingEditorNavigation = null },
+            title = { Text("File operation in progress") },
+            text = { Text("A file operation is still running. Stay here to keep its progress visible, or leave it running in the background and continue.") },
+            confirmButton = {
+                Button(onClick = {
+                    val destination = pendingEditorNavigation
+                    editorNavigationPrompt = false
+                    pendingEditorNavigation = null
+                    if (destination != null) viewModel.navigate(destination)
+                }) { Text("Leave running") }
+            },
+            dismissButton = { TextButton(onClick = { editorNavigationPrompt = false; pendingEditorNavigation = null }) { Text("Keep waiting") } },
+        )
+    }
+    if (state.navigationPromptVisible) {
+        AlertDialog(
+            onDismissRequest = viewModel::dismissNavigationPrompt,
+            title = { Text("Operation in progress") },
+            text = { Text("An operation is still running. Stay here to keep its progress visible, or leave it running in the background and continue.") },
+            confirmButton = { Button(onClick = viewModel::continuePendingNavigation) { Text("Leave running") } },
+            dismissButton = { TextButton(onClick = viewModel::dismissNavigationPrompt) { Text("Keep waiting") } },
+        )
+    }
     phaseFeedback?.let { action ->
         AlertDialog(
             onDismissRequest = { phaseFeedback = null },
@@ -220,7 +266,7 @@ private fun ContextualNavigation(
     onDismissDrawer: () -> Unit,
     onOpenEditorPanel: () -> Unit,
 ) {
-    val navigationActive = state.surface in setOf(Surface.HOME, Surface.PROJECTS, Surface.EXTENSIONS, Surface.SETTINGS, Surface.PROJECT_DETAILS)
+    val navigationActive = state.surface in setOf(Surface.HOME, Surface.PROJECTS, Surface.EXTENSIONS, Surface.PROJECT_DETAILS)
     LazyColumn(
         modifier = modifier.navigationBarsPadding().padding(horizontal = 12.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp),
@@ -237,6 +283,17 @@ private fun ContextualNavigation(
         }
         item { HorizontalDivider(Modifier.padding(vertical = 8.dp)) }
         when {
+            state.surface == Surface.PROJECTS -> {
+                item { Text("Project management", style = MaterialTheme.typography.labelLarge) }
+                item { NavigationItem(Icons.Default.Add, "Create blank project", false) { onCreateProject(null) } }
+                item { NavigationItem(Icons.Default.FolderOpen, "Import existing folder", false) { onImportFolder() } }
+                item { NavigationItem(Icons.Default.FolderOpen, "Import ZIP archive", false) { onImportZip() } }
+                item { NavigationItem(Icons.Default.MergeType, "Clone remote Git repository", false) { onCloneGit() } }
+                if (state.projects.isNotEmpty()) {
+                    item { Text("Recent projects", style = MaterialTheme.typography.labelLarge) }
+                    items(state.projects.take(5), key = { it.id }) { project -> ProjectContextItem(project, onOpenProject) }
+                }
+            }
             navigationActive -> {
                 item { Text("Navigation", style = MaterialTheme.typography.labelLarge) }
                 item { NavigationItem(Icons.Default.Home, "Home", state.surface == Surface.HOME) { onNavigate(Surface.HOME) } }
@@ -252,31 +309,26 @@ private fun ContextualNavigation(
                 item { NavigationItem(Icons.Default.FolderOpen, "Locate current file", false) { ideViewModel.revealActiveFile(); onDismissDrawer() } }
                 item { NavigationItem(Icons.Default.Settings, "Editor settings", false) { onSettingsSection("Editor"); onDismissDrawer() } }
             }
-            state.surface == Surface.TERMINAL -> item { UnavailableSidebarFeature("Terminal", 3) }
+            state.surface == Surface.SETTINGS -> {
+                item { Text("Settings categories", style = MaterialTheme.typography.labelLarge) }
+                item { NavigationItem(Icons.Default.Settings, "App Theme", false) { onSettingsSection("App Theme") } }
+                item { NavigationItem(Icons.Default.Code, "Editor", false) { onSettingsSection("Editor") } }
+                item { NavigationItem(Icons.Default.FolderOpen, "File Tree", false) { onSettingsSection("File Tree") } }
+                item { NavigationItem(Icons.Default.FolderOpen, "Project Storage", false) { onSettingsSection("Project Storage") } }
+                item { NavigationItem(Icons.Default.Terminal, "Controls", false) { onSettingsSection("Controls") } }
+                item { UnavailableSidebarFeature("Credentials and security", 8) }
+            }
+            state.surface == Surface.TERMINAL -> {
+                item { Text("Terminal sessions", style = MaterialTheme.typography.labelLarge) }
+                item { NavigationItem(Icons.Default.Add, "New terminal session", false) { viewModel.createTerminalSession(); onDismissDrawer() } }
+                state.terminalSessions.forEach { session ->
+                    item { NavigationItem(Icons.Default.Terminal, session.workingDirectory ?: "Session ${session.id.take(6)}", session.id == state.selectedTerminalSessionId) { viewModel.selectTerminalSession(session.id); onDismissDrawer() } }
+                }
+                item { NavigationItem(Icons.Default.Close, "Close all sessions", false) { viewModel.closeAllTerminalSessions(); onDismissDrawer() } }
+            }
             state.surface == Surface.BROWSER -> item { UnavailableSidebarFeature("Browser", 5) }
             state.surface == Surface.GIT -> item { UnavailableSidebarFeature("Git", 6) }
             else -> item { UnavailableSidebarFeature(surfaceTitle(state.surface), placeholderPhase(surfaceTitle(state.surface))) }
-        }
-    }
-}
-
-private fun androidx.compose.foundation.lazy.LazyListScope.ContextActionItems(
-    actions: List<String>,
-    onFeedback: (String) -> Unit,
-) {
-    item { Text("Actions", style = MaterialTheme.typography.labelLarge) }
-    actions.forEach { action ->
-        item {
-            Card(
-                onClick = { onFeedback(action) },
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-            ) {
-                Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                    Text(action, style = MaterialTheme.typography.titleSmall)
-                    Text("Structured placeholder — planned for phase ${placeholderPhase(action)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-            }
         }
     }
 }
@@ -314,12 +366,7 @@ private fun NavigationTopItem(icon: androidx.compose.ui.graphics.vector.ImageVec
 
 @Composable
 private fun UnavailableSidebarFeature(feature: String, phase: Int) {
-    Card(
-        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-    ) {
-        Text("$feature not available. Coming soon (phase $phase)", Modifier.padding(16.dp), style = MaterialTheme.typography.bodyMedium)
-    }
+    Text("$feature not available. Coming soon (phase $phase)", Modifier.padding(top = 8.dp), style = MaterialTheme.typography.bodyMedium)
 }
 
 @Composable
@@ -360,6 +407,7 @@ private fun SurfaceHost(
             onFeedback = onFeedback,
             modifier = modifier,
         )
+        Surface.TERMINAL -> TerminalSurface(state, viewModel, modifier)
         Surface.SETTINGS -> SettingsScreen(
             uiState = ideState,
             ideViewModel = ideViewModel,
@@ -373,14 +421,8 @@ private fun SurfaceHost(
 
 @Composable
 private fun DomainPlaceholderSurface(title: String, modifier: Modifier, onFeedback: (String) -> Unit) {
-    MaterialSurface(
-        modifier = modifier.padding(20.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant,
-        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-    ) {
-        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("$title not available. Coming soon (phase ${placeholderPhase(title)})", style = MaterialTheme.typography.titleMedium)
-        }
+    Column(modifier.padding(20.dp)) {
+        Text("$title not available. Coming soon (phase ${placeholderPhase(title)})", style = MaterialTheme.typography.bodyMedium)
     }
 }
 

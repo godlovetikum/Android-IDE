@@ -18,9 +18,7 @@ fun humanReadableStorageLocation(raw: String?): String {
                     ?: uri.lastPathSegment
                     ?: "Selected folder"
                 val readableId = Uri.decode(decodedId).replace(':', '/')
-                val provider = uri.authority?.substringAfterLast('.')?.replaceFirstChar { it.uppercase() }
-                    ?: "Storage provider"
-                "$provider storage / $readableId"
+                "Selected storage / $readableId"
             }
             value.startsWith("file://", ignoreCase = true) -> Uri.decode(Uri.parse(value).path.orEmpty()).ifBlank { "Device file" }
             else -> Uri.decode(value).replace("%2F", "/", ignoreCase = true)

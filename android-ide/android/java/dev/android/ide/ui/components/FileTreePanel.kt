@@ -39,9 +39,9 @@ import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -105,6 +105,7 @@ fun FileTreePanel(
     onExitSelectionMode: () -> Unit,
     onSearchQueryChange: (String) -> Unit,
     onContentSearchQueryChange: (String) -> Unit,
+    onReplaceProjectContents: (String, String) -> Unit,
     onHideFileSearch: () -> Unit,
     onHideContentSearch: () -> Unit,
     onSearchFileSelect: (String) -> Unit,
@@ -135,17 +136,26 @@ fun FileTreePanel(
                         textStyle     = MaterialTheme.typography.bodyMedium,
                     )
                     if (isContentSearchVisible) {
-                        TextButton(onClick = { replaceOpen = !replaceOpen }) { Text(if (replaceOpen) "Find" else "Replace") }
+                        TextButton(onClick = { replaceOpen = !replaceOpen }) {
+                            Text(if (replaceOpen) "Hide replace" else "Replace")
+                        }
                     }
                 }
-                if (replaceOpen && isContentSearchVisible) {
-                    OutlinedTextField(
-                        value = replaceQuery,
-                        onValueChange = { replaceQuery = it },
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
-                        placeholder = { Text("Replace with…") },
-                        singleLine = true,
-                    )
+                if (isContentSearchVisible && replaceOpen) {
+                    Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        OutlinedTextField(
+                            value = replaceQuery,
+                            onValueChange = { replaceQuery = it },
+                            modifier = Modifier.weight(1f),
+                            placeholder = { Text("Replace with…") },
+                            singleLine = true,
+                        )
+                        Button(
+                            onClick = { onReplaceProjectContents(query, replaceQuery) },
+                            enabled = query.isNotBlank() && results.isNotEmpty(),
+                            modifier = Modifier.padding(start = 8.dp),
+                        ) { Text("Replace all") }
+                    }
                 }
                 if (results.isEmpty() && query.isNotEmpty()) {
                     Box(modifier = Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.TopCenter) {
@@ -304,12 +314,7 @@ private fun SearchResultRow(
             .combinedClickable(onClick = { onSelect(result.documentUri) })
             .padding(horizontal = 12.dp, vertical = 8.dp),
     ) {
-        Icon(
-            imageVector        = Icons.Default.InsertDriveFile,
-            contentDescription = null,
-            tint               = colors.textSecondary,
-            modifier           = Modifier.size(14.dp),
-        )
+        FileTypeBadge(result.displayName, muted = false, accent = false)
         Spacer(Modifier.width(8.dp))
         Column(modifier = Modifier.weight(1f)) {
             Text(
@@ -326,6 +331,13 @@ private fun SearchResultRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
+            result.matchLine?.let { line ->
+                Text(
+                    text = "Line $line",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = colors.accent,
+                )
+            }
             if (result.matchPreview.isNotBlank()) {
                 Text(
                     text = result.matchPreview,
@@ -517,23 +529,20 @@ private fun FileTreeRow(
         // Use one leading slot for both the folder chevron and file icon.
         // This keeps filenames aligned at the same depth without reserving
         // an additional, invisible folder-icon slot.
-        Icon(
-            imageVector = when {
-                node.isDirectory -> if (node.isExpanded) Icons.Default.ExpandMore else Icons.Default.ChevronRight
-                else             -> fileIconFor(node.displayName)
-            },
-            contentDescription = if (node.isDirectory) {
-                if (node.isExpanded) "Collapse" else "Expand"
-            } else {
-                null
-            },
-            tint = when {
-                isInClipboard && clipboardIsCut -> colors.textDisabled
-                isInClipboard                   -> colors.accent.copy(alpha = 0.5f)
-                else                            -> colors.textSecondary
-            },
-            modifier = Modifier.size(14.dp),
-        )
+        if (node.isDirectory) {
+            Icon(
+                imageVector = if (node.isExpanded) Icons.Default.ExpandMore else Icons.Default.ChevronRight,
+                contentDescription = if (node.isExpanded) "Collapse" else "Expand",
+                tint = colors.textSecondary,
+                modifier = Modifier.size(14.dp),
+            )
+        } else {
+            FileTypeBadge(
+                displayName = node.displayName,
+                muted = isInClipboard && clipboardIsCut,
+                accent = isInClipboard,
+            )
+        }
 
         Spacer(Modifier.width(4.dp))
 
@@ -676,12 +685,37 @@ private fun FileTreeRow(
  * Priority: image formats → text/docs → code → generic.
  * Uses only icons confirmed present in material-icons-extended.
  */
-private fun fileIconFor(displayName: String): ImageVector {
-    return when (EditorLanguageRegistry.iconKindForFileName(displayName)) {
-        FileIconKind.IMAGE   -> Icons.Default.Image
-        FileIconKind.TEXT    -> Icons.Default.Article
-        FileIconKind.CODE    -> Icons.Default.Code
-        FileIconKind.GENERIC -> Icons.Default.InsertDriveFile
+@Composable
+private fun FileTypeBadge(displayName: String, muted: Boolean, accent: Boolean) {
+    val kind = EditorLanguageRegistry.iconKindForFileName(displayName)
+    val label = when (kind) {
+        FileIconKind.HTML -> "HTML"
+        FileIconKind.CSS -> "CSS"
+        FileIconKind.JAVASCRIPT -> "JS"
+        FileIconKind.TYPESCRIPT -> "TS"
+        FileIconKind.IMAGE -> "IMG"
+        FileIconKind.TEXT -> "TXT"
+        FileIconKind.CODE -> "CODE"
+        FileIconKind.GENERIC -> "FILE"
+    }
+    val color = when (kind) {
+        FileIconKind.HTML -> Color(0xFFE44D26)
+        FileIconKind.CSS -> Color(0xFF2965F1)
+        FileIconKind.JAVASCRIPT -> Color(0xFFF0DB4F)
+        FileIconKind.TYPESCRIPT -> Color(0xFF3178C6)
+        FileIconKind.IMAGE -> Color(0xFF8E6AC8)
+        FileIconKind.TEXT -> Color(0xFF6B7280)
+        FileIconKind.CODE -> Color(0xFF4F8CC9)
+        FileIconKind.GENERIC -> Color(0xFF6B7280)
+    }
+    Surface(
+        color = color.copy(alpha = if (muted) 0.28f else if (accent) 0.55f else 0.9f),
+        shape = MaterialTheme.shapes.extraSmall,
+        modifier = Modifier.width(30.dp).height(18.dp),
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Text(label, style = MaterialTheme.typography.labelSmall, color = if (kind == FileIconKind.JAVASCRIPT) Color.Black else Color.White, maxLines = 1)
+        }
     }
 }
 

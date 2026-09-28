@@ -23,6 +23,11 @@ import dev.android.ide.data.model.ProjectDetails
 import dev.android.ide.project.ProjectOperationsService
 import dev.android.ide.saf.SafRepository
 import dev.android.ide.runtime.RuntimeStateStore
+import dev.android.ide.runtime.TerminalRuntimeAdapterImpl
+import com.termux.terminal.TerminalSession
+import dev.android.ide.contracts.RuntimeCapabilities
+import dev.android.ide.contracts.SessionDescriptor
+import dev.android.ide.contracts.SessionAvailability
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -46,6 +51,16 @@ data class AppShellState(
     val acquiredProjectId: String? = null,
     val detailsLoading: Boolean = false,
     val exitConfirmationVisible: Boolean = false,
+    val runtimeCapabilities: RuntimeCapabilities? = null,
+    val terminalSessions: List<SessionDescriptor> = emptyList(),
+    val selectedTerminalSessionId: String? = null,
+    val terminalOutput: String = "",
+    val terminalFeedback: OperationReport? = null,
+    val terminalOperationInProgress: Boolean = false,
+    val installedRuntimePackages: List<dev.android.ide.contracts.RuntimePackage> = emptyList(),
+    val navigationPromptVisible: Boolean = false,
+    val pendingNavigation: Surface? = null,
+    val pendingBackNavigation: Boolean = false,
 )
 
 data class FolderInspection(
@@ -78,6 +93,7 @@ class AppShellViewModel(application: Application) : AndroidViewModel(application
     private val lifecycle = LifecycleCoordinatorImpl(application)
     private val applicationState = ApplicationStateStore(application)
     private val runtimeState = RuntimeStateStore(application)
+    private val terminalRuntime = TerminalRuntimeAdapterImpl(application)
     private var restoreJob: kotlinx.coroutines.Job? = null
     private var summaryJob: kotlinx.coroutines.Job? = null
     private var restoreGeneration = 0L
@@ -96,6 +112,10 @@ class AppShellViewModel(application: Application) : AndroidViewModel(application
         }
         viewModelScope.launch {
             runtimeState.ensureReady()
+            terminalRuntime.initialize()
+            _state.update { it.copy(runtimeCapabilities = terminalRuntime.capabilities()) }
+            refreshTerminalSessions()
+            refreshRuntimePackages()
         }
     }
 
@@ -105,6 +125,122 @@ class AppShellViewModel(application: Application) : AndroidViewModel(application
 
     fun background() {
         viewModelScope.launch { lifecycle.onBackground() }
+    }
+
+    fun refreshTerminalSessions() {
+        viewModelScope.launch {
+            val sessions = terminalRuntime.listSessions()
+            _state.update {
+                it.copy(
+                    terminalSessions = sessions,
+                    selectedTerminalSessionId = it.selectedTerminalSessionId?.takeIf { id -> sessions.any { session -> session.id == id } }
+                        ?: sessions.firstOrNull()?.id,
+                    runtimeCapabilities = terminalRuntime.capabilities(),
+                )
+            }
+        }
+    }
+
+    fun createTerminalSession(workingDirectory: String? = null, name: String = "Terminal") {
+        viewModelScope.launch {
+            val selected = _state.value.selectedProjectId
+            val project = _state.value.projects.firstOrNull { it.id == selected }
+            val access = project?.let { terminalRuntime.inspectProjectAccess(it) }
+            if (access != null && !access.available) {
+                _state.update { it.copy(terminalFeedback = OperationReport(dev.android.ide.contracts.OperationOutcome.BLOCKED, access.explanation ?: "Terminal access is unavailable", dev.android.ide.contracts.ErrorCategory.UNAVAILABLE_RUNTIME)) }
+                return@launch
+            }
+            val session = terminalRuntime.createSession(
+                workingDirectory ?: project?.let { terminalRuntime.workingDirectory(it) },
+                name.trim().ifBlank { "Terminal" },
+            )
+            _state.update { it.copy(selectedTerminalSessionId = session.id, terminalFeedback = null) }
+            refreshTerminalSessions()
+        }
+    }
+
+    fun resizeTerminal(columns: Int, rows: Int) {
+        val sessionId = _state.value.selectedTerminalSessionId ?: return
+        viewModelScope.launch {
+            _state.update { it.copy(terminalFeedback = terminalRuntime.resize(sessionId, columns, rows)) }
+        }
+    }
+
+    fun refreshRuntimePackages() {
+        viewModelScope.launch {
+            _state.update { it.copy(installedRuntimePackages = terminalRuntime.installedPackages()) }
+        }
+    }
+
+    fun installRuntimePackages(packageNames: List<String>) {
+        val requested = packageNames.map(String::trim).filter(String::isNotBlank).distinct()
+        if (requested.isEmpty()) {
+            _state.update { it.copy(terminalFeedback = OperationReport(dev.android.ide.contracts.OperationOutcome.BLOCKED, "Choose at least one package", dev.android.ide.contracts.ErrorCategory.PACKAGE_FAILURE)) }
+            return
+        }
+        viewModelScope.launch {
+            val capabilities = terminalRuntime.capabilities()
+            if (!capabilities.packageManagerAvailable) {
+                _state.update { it.copy(terminalFeedback = OperationReport(dev.android.ide.contracts.OperationOutcome.BLOCKED, "The terminal package manager is unavailable", dev.android.ide.contracts.ErrorCategory.UNAVAILABLE_RUNTIME)) }
+                return@launch
+            }
+            _state.update { it.copy(terminalOperationInProgress = true, terminalFeedback = OperationReport(dev.android.ide.contracts.OperationOutcome.BLOCKED, "Installing selected packages…", dev.android.ide.contracts.ErrorCategory.PACKAGE_FAILURE)) }
+            val report = terminalRuntime.installPackages(requested)
+            _state.update { it.copy(terminalOperationInProgress = false, terminalFeedback = report) }
+            refreshRuntimePackages()
+        }
+    }
+
+    fun terminalSession(sessionId: String): TerminalSession? = terminalRuntime.terminalSession(sessionId)
+    fun bindTerminalView(sessionId: String, invalidate: () -> Unit) = terminalRuntime.bindTerminalView(sessionId, invalidate)
+    fun unbindTerminalView(sessionId: String) = terminalRuntime.unbindTerminalView(sessionId)
+
+    fun selectTerminalSession(sessionId: String) {
+        _state.update { it.copy(selectedTerminalSessionId = sessionId, terminalOutput = terminalRuntime.outputSnapshot(sessionId)) }
+    }
+
+    fun sendTerminalInput(input: String) {
+        val sessionId = _state.value.selectedTerminalSessionId ?: return
+        viewModelScope.launch {
+            val report = terminalRuntime.sendInput(sessionId, input.toByteArray(Charsets.UTF_8))
+            _state.update { it.copy(terminalFeedback = report) }
+            refreshTerminalOutput()
+        }
+    }
+
+    fun refreshTerminalOutput() {
+        val sessionId = _state.value.selectedTerminalSessionId ?: return
+        viewModelScope.launch {
+            terminalRuntime.readOutput(sessionId)
+            _state.update { it.copy(terminalOutput = terminalRuntime.outputSnapshot(sessionId)) }
+        }
+    }
+
+    fun interruptTerminalSession() {
+        val sessionId = _state.value.selectedTerminalSessionId ?: return
+        viewModelScope.launch {
+            _state.update { it.copy(terminalFeedback = terminalRuntime.interrupt(sessionId)) }
+            refreshTerminalSessions()
+        }
+    }
+
+    fun closeTerminalSession(sessionId: String) {
+        viewModelScope.launch {
+            _state.update { it.copy(terminalFeedback = terminalRuntime.closeSession(sessionId)) }
+            refreshTerminalSessions()
+        }
+    }
+
+    fun closeAllTerminalSessions() {
+        viewModelScope.launch {
+            _state.update { it.copy(terminalFeedback = terminalRuntime.closeAllSessions()) }
+            refreshTerminalSessions()
+        }
+    }
+
+    override fun onCleared() {
+        terminalRuntime.shutdown()
+        super.onCleared()
     }
 
     fun reportStatus(message: String) {
@@ -183,6 +319,10 @@ class AppShellViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun navigate(surface: Surface) {
+        if (_state.value.operationInProgress) {
+            _state.update { it.copy(navigationPromptVisible = true, pendingNavigation = surface, pendingBackNavigation = false) }
+            return
+        }
         restoreGeneration++
         restoreJob?.cancel()
         _state.update { current ->
@@ -208,6 +348,10 @@ class AppShellViewModel(application: Application) : AndroidViewModel(application
 
     fun back(): Boolean {
         val current = _state.value
+        if (current.operationInProgress) {
+            _state.update { it.copy(navigationPromptVisible = true, pendingNavigation = null, pendingBackNavigation = true) }
+            return true
+        }
         if (current.navigationStack.size <= 1) return false
         restoreGeneration++
         restoreJob?.cancel()
@@ -223,6 +367,27 @@ class AppShellViewModel(application: Application) : AndroidViewModel(application
         }
         applicationState.recordSurface(stack.last())
         return true
+    }
+
+    fun dismissNavigationPrompt() {
+        _state.update { it.copy(navigationPromptVisible = false, pendingNavigation = null, pendingBackNavigation = false) }
+    }
+
+    fun continuePendingNavigation() {
+        val current = _state.value
+        if (current.pendingBackNavigation) {
+            _state.update { it.copy(navigationPromptVisible = false, pendingNavigation = null, pendingBackNavigation = false) }
+            if (current.navigationStack.size > 1) {
+                val stack = current.navigationStack.dropLast(1)
+                _state.update { it.copy(surface = stack.last(), navigationStack = stack, restoring = false, detailsLoading = false) }
+                applicationState.recordSurface(stack.last())
+            }
+            return
+        }
+        val destination = current.pendingNavigation ?: return dismissNavigationPrompt()
+        if (_state.value.operationInProgress) return
+        _state.update { it.copy(navigationPromptVisible = false, pendingNavigation = null, pendingBackNavigation = false) }
+        navigate(destination)
     }
 
     fun exit(onComplete: () -> Unit) {

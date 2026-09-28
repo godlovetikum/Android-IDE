@@ -18,13 +18,9 @@ package dev.android.ide.editor
 
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
-import android.util.Log
 
 class EditorBridge {
 
-    companion object {
-        private const val TAG = "EditorBridge"
-    }
 
     /**
      * Callback invoked when Monaco sends a message to the native layer.
@@ -43,9 +39,7 @@ class EditorBridge {
      */
     @JavascriptInterface
     fun onMessage(json: String) {
-        Log.d(TAG, "onMessage: $json")
         val message = EditorInbound.fromJson(json) ?: run {
-            Log.w(TAG, "Unknown message type in: $json")
             return
         }
         messageListener?.invoke(message)
@@ -59,7 +53,6 @@ class EditorBridge {
      */
     fun send(webView: WebView, message: EditorOutbound) {
         val js = message.toJs()
-        Log.d(TAG, "send: $js")
         webView.post { webView.evaluateJavascript(js, null) }
     }
 }

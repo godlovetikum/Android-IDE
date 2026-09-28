@@ -6,7 +6,6 @@ package dev.android.ide.data
 
 import android.content.Context
 import dev.android.ide.data.model.EditorSettings
-import dev.android.ide.data.model.PreviewLayout
 import dev.android.ide.data.model.VolumeKeyMode
 
 class EditorSettingsRepository(context: Context) {
@@ -19,17 +18,13 @@ class EditorSettingsRepository(context: Context) {
         private const val KEY_LINE_NUMBERS         = "line_numbers"
         private const val KEY_AUTO_SAVE            = "auto_save"
         private const val KEY_EDITOR_THEME         = "editor_theme"
-        private const val KEY_PREVIEW_LAYOUT       = "preview_layout"
         private const val KEY_VOLUME_MODE          = "volume_key_mode"
         private const val KEY_SHOW_KEYBOARD_BAR    = "show_keyboard_toolbar"
         private const val KEY_SHOW_SYMBOL_BAR      = "show_symbol_bar"
         private const val KEY_SHOW_STATUS_BAR      = "show_status_bar"
         private const val KEY_HIDE_GIT_FOLDER      = "hide_git_folder"
         private const val KEY_HIDE_METADATA_FOLDER = "hide_project_metadata_folder"
-        private const val KEY_CUSTOM_SYMBOLS       = "custom_symbols"
         private const val KEY_UI_FONT_SCALE        = "ui_font_scale"
-        private const val KEY_DEFAULT_PROJECT_DIR  = "default_project_dir"
-        private const val SYMBOL_SEPARATOR         = "|"
         private const val KEY_RENDER_WHITESPACE       = "render_whitespace"
         private const val KEY_MINIMAP_ENABLED         = "minimap_enabled"
         private const val KEY_SCROLL_BEYOND_LAST_LINE = "scroll_beyond_last_line"
@@ -47,24 +42,13 @@ class EditorSettingsRepository(context: Context) {
         lineNumbers          = prefs.getBoolean(KEY_LINE_NUMBERS, true),
         autoSave             = prefs.getBoolean(KEY_AUTO_SAVE, false),
         editorTheme          = prefs.getString(KEY_EDITOR_THEME, "system") ?: "system",
-        previewLayout        = runCatching {
-            PreviewLayout.valueOf(
-                prefs.getString(KEY_PREVIEW_LAYOUT, PreviewLayout.PREVIEW_ABOVE.name) ?: "PREVIEW_ABOVE"
-            )
-        }.getOrElse { PreviewLayout.PREVIEW_ABOVE },
         showKeyboardToolbar  = prefs.getBoolean(KEY_SHOW_KEYBOARD_BAR, true),
         showSymbolBar        = prefs.getBoolean(KEY_SHOW_SYMBOL_BAR, true),
         showStatusBar        = prefs.getBoolean(KEY_SHOW_STATUS_BAR, true),
         hideGitFolder        = prefs.getBoolean(KEY_HIDE_GIT_FOLDER, true),
         hideProjectMetadataFolder = prefs.getBoolean(KEY_HIDE_METADATA_FOLDER, true),
-        customSymbols        = prefs.getString(KEY_CUSTOM_SYMBOLS, null)
-            ?.split(SYMBOL_SEPARATOR)
-            ?.filter { it.isNotEmpty() }
-            ?.ifEmpty { EditorSettings.DEFAULT_SYMBOLS }
-            ?: EditorSettings.DEFAULT_SYMBOLS,
         uiFontScale          = prefs.getFloat(KEY_UI_FONT_SCALE, 1.0f)
             .coerceIn(EditorSettings.UI_FONT_SCALE_MIN, EditorSettings.UI_FONT_SCALE_MAX),
-        defaultProjectDir    = prefs.getString(KEY_DEFAULT_PROJECT_DIR, "") ?: "",
         renderWhitespace       = prefs.getString(KEY_RENDER_WHITESPACE, "selection") ?: "selection",
         minimapEnabled         = prefs.getBoolean(KEY_MINIMAP_ENABLED, true),
         scrollBeyondLastLine   = prefs.getBoolean(KEY_SCROLL_BEYOND_LAST_LINE, false),
@@ -81,16 +65,13 @@ class EditorSettingsRepository(context: Context) {
             .putBoolean(KEY_LINE_NUMBERS,        settings.lineNumbers)
             .putBoolean(KEY_AUTO_SAVE,           settings.autoSave)
             .putString (KEY_EDITOR_THEME,        settings.editorTheme)
-            .putString (KEY_PREVIEW_LAYOUT,      settings.previewLayout.name)
             .putBoolean(KEY_SHOW_KEYBOARD_BAR,   settings.showKeyboardToolbar)
             .putBoolean(KEY_SHOW_SYMBOL_BAR,     settings.showSymbolBar)
             .putBoolean(KEY_SHOW_STATUS_BAR,     settings.showStatusBar)
             .putBoolean(KEY_HIDE_GIT_FOLDER,     settings.hideGitFolder)
             .putBoolean(KEY_HIDE_METADATA_FOLDER, settings.hideProjectMetadataFolder)
-            .putString (KEY_CUSTOM_SYMBOLS,      settings.customSymbols.joinToString(SYMBOL_SEPARATOR))
             .putFloat  (KEY_UI_FONT_SCALE,       settings.uiFontScale
                 .coerceIn(EditorSettings.UI_FONT_SCALE_MIN, EditorSettings.UI_FONT_SCALE_MAX))
-            .putString (KEY_DEFAULT_PROJECT_DIR, settings.defaultProjectDir)
             .putString (KEY_RENDER_WHITESPACE,       settings.renderWhitespace)
             .putBoolean(KEY_MINIMAP_ENABLED,         settings.minimapEnabled)
             .putBoolean(KEY_SCROLL_BEYOND_LAST_LINE, settings.scrollBeyondLastLine)

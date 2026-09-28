@@ -177,7 +177,6 @@ fun AppRoot(viewModel: AppShellViewModel, ideViewModel: IdeViewModel, onExit: ()
             viewModel.selectProject(projectId)
             viewModel.exportSelectedProject(uri.toString())
         }
-        pendingExportProjectId = null
     }
     val batchExportDestinationPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null && pendingBatchExportIds.isNotEmpty()) {
@@ -229,9 +228,10 @@ fun AppRoot(viewModel: AppShellViewModel, ideViewModel: IdeViewModel, onExit: ()
             onImportFolder = { openFolder.launch(null) },
             onImportZip = { openZip.launch(arrayOf("application/zip", "application/octet-stream")) },
             onCloneGit = { feedback = "Coming soon (phase 6): Git repository cloning is not currently wired." },
-            onExportProject = { projectId -> pendingExportProjectId = projectId; exportReviewVisible = true },
+            onExportProject = { projectId -> viewModel.clearOperationFeedback(); pendingExportProjectId = projectId; exportReviewVisible = true },
             onExportProjects = { projectIds -> pendingBatchExportIds = projectIds; batchExportDestinationPicker.launch(null) },
             onDuplicateProject = { projectId ->
+                viewModel.clearOperationFeedback()
                 val project = shellState.projects.firstOrNull { it.id == projectId }
                 operationKind = ProjectOperationKind.DUPLICATE
                 operationProjectId = projectId
@@ -240,6 +240,7 @@ fun AppRoot(viewModel: AppShellViewModel, ideViewModel: IdeViewModel, onExit: ()
                 operationDestination = null
             },
             onRelocateProject = { projectId ->
+                viewModel.clearOperationFeedback()
                 val project = shellState.projects.firstOrNull { it.id == projectId }
                 operationKind = ProjectOperationKind.RELOCATE
                 operationProjectId = projectId
@@ -392,43 +393,53 @@ fun AppRoot(viewModel: AppShellViewModel, ideViewModel: IdeViewModel, onExit: ()
         if (exportReviewVisible) {
             val project = shellState.projects.firstOrNull { it.id == pendingExportProjectId }
             AlertDialog(
-                onDismissRequest = { exportReviewVisible = false; pendingExportProjectId = null },
+                onDismissRequest = { if (!shellState.operationInProgress) { exportReviewVisible = false; pendingExportProjectId = null } },
                 title = { Text("Export project as ZIP") },
                 text = {
                     Column {
                         Text("Source: ${humanReadableStorageLocation(project?.location?.userVisiblePath ?: project?.location?.displayLabel)}")
                         Text("Archive name: ${project?.name ?: "project"}.zip")
                         Text("The project is copied without changing the source. Choose a permitted destination in the next step.")
+                        shellState.operationReport?.let { report ->
+                            Text(report.message, color = if (report.outcome == dev.android.ide.contracts.OperationOutcome.COMPLETE) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error)
+                        }
+                        if (shellState.operationInProgress) {
+                            androidx.compose.foundation.layout.Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                                CircularProgressIndicator(Modifier.padding(end = 8.dp), strokeWidth = 2.dp)
+                                Text("Exporting…")
+                            }
+                        }
                     }
                 },
                 confirmButton = {
                     Button(onClick = {
-                        exportReviewVisible = false
                         exportFilePicker.launch("${project?.name ?: "project"}.zip")
-                    }, enabled = project != null) { Text("Choose export location") }
+                    }, enabled = project != null && !shellState.operationInProgress) { Text("Choose export location") }
                 },
-                dismissButton = { TextButton(onClick = { exportReviewVisible = false; pendingExportProjectId = null }) { Text("Cancel") } },
+                dismissButton = { TextButton(onClick = { exportReviewVisible = false; pendingExportProjectId = null }, enabled = !shellState.operationInProgress) { Text(if (shellState.operationInProgress) "Please wait" else "Cancel") } },
             )
         }
         operationKind?.let { kind ->
             val project = shellState.projects.firstOrNull { it.id == operationProjectId }
             AlertDialog(
-                onDismissRequest = { operationKind = null },
+                onDismissRequest = { if (!shellState.operationInProgress) operationKind = null },
                 title = { Text(if (kind == ProjectOperationKind.DUPLICATE) "Copy & Duplicate project" else "Change project location") },
                 text = {
                     Column {
                         Text("Source: ${humanReadableStorageLocation(project?.location?.userVisiblePath ?: project?.location?.displayLabel)}")
-                        OutlinedTextField(operationName, { operationName = it }, label = { Text("Project name") }, singleLine = true)
+                        OutlinedTextField(operationName, { operationName = it }, label = { Text("Project name") }, enabled = !shellState.operationInProgress, singleLine = true)
                         if (kind == ProjectOperationKind.DUPLICATE) {
-                            OutlinedTextField(operationDescription, { operationDescription = it }, label = { Text("Description") })
+                            OutlinedTextField(operationDescription, { operationDescription = it }, label = { Text("Description") }, enabled = !shellState.operationInProgress)
                         }
                         PickerResult("Destination parent", operationDestination)
-                        Button(onClick = { operationDestinationPicker.launch(null) }) { Text("Choose destination parent") }
+                        Button(onClick = { operationDestinationPicker.launch(null) }, enabled = !shellState.operationInProgress) { Text("Choose destination parent") }
                         Text(if (kind == ProjectOperationKind.DUPLICATE) {
                             "The original remains unchanged. The destination will be checked for conflicts and project containment before copying."
                         } else {
                             "The project is copied and verified before the original is removed. A failed cleanup is reported as partial."
                         })
+                        shellState.operationReport?.let { report -> Text(report.message, color = if (report.outcome == dev.android.ide.contracts.OperationOutcome.COMPLETE) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error) }
+                        if (shellState.operationInProgress) { Row(verticalAlignment = Alignment.CenterVertically) { CircularProgressIndicator(Modifier.padding(end = 8.dp), strokeWidth = 2.dp); Text("Working…") } }
                     }
                 },
                 confirmButton = {
@@ -442,13 +453,12 @@ fun AppRoot(viewModel: AppShellViewModel, ideViewModel: IdeViewModel, onExit: ()
                             } else {
                                 viewModel.relocateSelectedProject(destination, operationName)
                             }
-                            operationKind = null
                         }
-                    }, enabled = project != null && operationName.isNotBlank() && operationDestination != null) {
-                        Text(if (kind == ProjectOperationKind.DUPLICATE) "Copy & Duplicate" else "Change Location")
+                    }, enabled = project != null && operationName.isNotBlank() && operationDestination != null && !shellState.operationInProgress) {
+                        Text(if (shellState.operationInProgress) "Working…" else if (kind == ProjectOperationKind.DUPLICATE) "Copy & Duplicate" else "Change Location")
                     }
                 },
-                dismissButton = { TextButton(onClick = { operationKind = null }) { Text("Cancel") } },
+                dismissButton = { TextButton(onClick = { operationKind = null }, enabled = !shellState.operationInProgress) { Text(if (shellState.operationInProgress) "Please wait" else "Cancel") } },
             )
         }
         shellState.acquiredProjectId?.let { projectId ->
