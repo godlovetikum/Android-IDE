@@ -474,7 +474,7 @@ private fun FileTreeRow(
     onImportFilesAt: (FileNode) -> Unit,
     onExportDirectory: (FileNode) -> Unit,
     onCopyPath: (String) -> Unit,
-    onSelect: (FileSearchResult) -> Unit,
+    onSelect: (String) -> Unit,
     onShowDuplicateDialog: (FileNode) -> Unit,
 ) {
     val colors   = LocalIdeColors.current

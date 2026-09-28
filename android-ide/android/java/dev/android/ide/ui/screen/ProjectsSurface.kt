@@ -287,6 +287,7 @@ fun ProjectsSurface(
                         onExport = onExportProject,
                         onDuplicate = onDuplicateProject,
                         onRelocate = onRelocateProject,
+                        onCopyRemoteUrls = onCopyRemoteUrls,
                         operationInProgress = listBusy,
                     )
                 }
@@ -372,6 +373,7 @@ private fun ProjectCard(
     onExport: (String) -> Unit,
     onDuplicate: (String) -> Unit,
     onRelocate: (String) -> Unit,
+    onCopyRemoteUrls: (String) -> Unit,
     operationInProgress: Boolean,
 ) {
     var menuOpen by remember { mutableStateOf(false) }

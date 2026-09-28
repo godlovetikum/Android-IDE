@@ -460,6 +460,31 @@ private fun EditorDialogHost(state: IdeUiState, ideViewModel: IdeViewModel, onCh
         is FileOpDialog.CreateFile -> EditorTextDialog("Create file", "File path", "", dialog.errorMessage, ideViewModel::dismissFileOpDialog, dialog.isSubmitting) { ideViewModel.createFileInDirectory(dialog.parentNode, it) }
         is FileOpDialog.CreateFolder -> EditorTextDialog("Create folder", "Folder path", "", dialog.errorMessage, ideViewModel::dismissFileOpDialog, dialog.isSubmitting) { ideViewModel.createFolderInDirectory(dialog.parentNode, it) }
         is FileOpDialog.SaveAs -> EditorTextDialog("Save As", "Project-relative path", dialog.suggestedName, null, ideViewModel::dismissFileOpDialog) { ideViewModel.saveAsAtPath(it) }
+        is FileOpDialog.ReplaceAll -> AlertDialog(
+            onDismissRequest = { if (!dialog.isSubmitting) ideViewModel.dismissFileOpDialog() },
+            title = { Text("Replace project content?") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Replace all occurrences of \"${dialog.find}\" with \"${dialog.replacement}\"?")
+                    Text("${dialog.matches} match(es) across ${dialog.files} file(s) will be changed.")
+                    dialog.resultMessage?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                    if (dialog.isSubmitting) Row(verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(Modifier.padding(end = 8.dp), strokeWidth = 2.dp)
+                        Text("Replacing…")
+                    }
+                }
+            },
+            confirmButton = {
+                Button(onClick = ideViewModel::confirmReplaceProjectContents, enabled = !dialog.isSubmitting) {
+                    Text(if (dialog.isSubmitting) "Replacing…" else "Replace all")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = ideViewModel::dismissFileOpDialog, enabled = !dialog.isSubmitting) {
+                    Text(if (dialog.isSubmitting) "Please wait" else "Cancel")
+                }
+            },
+        )
         null -> Unit
     }
 }
