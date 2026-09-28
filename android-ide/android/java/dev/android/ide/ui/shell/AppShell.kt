@@ -60,6 +60,7 @@ import dev.android.ide.app.AppShellState
 import dev.android.ide.app.AppShellViewModel
 import dev.android.ide.contracts.ProjectIdentity
 import dev.android.ide.contracts.Surface
+import dev.android.ide.CrashReporter
 import dev.android.ide.ui.screen.HomeSurface
 import dev.android.ide.ui.screen.ProjectDetailsSurface
 import dev.android.ide.ui.screen.EditorSurface
@@ -88,6 +89,8 @@ fun AppShell(
 ) {
     val state by viewModel.state.collectAsState()
     val ideState by ideViewModel.uiState.collectAsState()
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val crashReportCount = androidx.compose.runtime.remember { CrashReporter(context).reportCount() }
     var editorNavigationPrompt by rememberSaveable { mutableStateOf(false) }
     var pendingEditorNavigation by rememberSaveable { mutableStateOf<Surface?>(null) }
     val focusManager = LocalFocusManager.current
@@ -469,7 +472,14 @@ private fun SurfaceHost(
 ) {
     val ideState by ideViewModel.uiState.collectAsState()
     when (state.surface) {
-        Surface.HOME -> HomeSurface(onNavigate = onNavigate, onOpenNavigation = onOpenNavigation, onExit = onRequestExit, onFeedback = onFeedback)
+        Surface.HOME -> HomeSurface(
+            onNavigate = onNavigate,
+            onOpenNavigation = onOpenNavigation,
+            onExit = onRequestExit,
+            onFeedback = onFeedback,
+            crashRecoveryCount = ideState.recoveryEntries.size,
+            crashReportCount = crashReportCount,
+        )
         Surface.PROJECTS -> ProjectsSurface(state, viewModel, onCreateProject, onImportFolder, onImportZip, onCloneGit, onExportProject, onExportProjects, onDuplicateProject, onRelocateProject, viewModel::copyProjectRemoteUrls, onFeedback, onOpenNavigation, modifier)
         Surface.PROJECT_DETAILS -> ProjectDetailsSurface(state, viewModel, onExportProject, onDuplicateProject, onRelocateProject, onOpenNavigation, modifier)
         Surface.EDITOR -> EditorSurface(

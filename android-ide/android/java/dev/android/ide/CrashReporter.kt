@@ -25,6 +25,9 @@ class CrashReporter(private val context: Context) : Thread.UncaughtExceptionHand
         }
     }
 
+    /** Number of locally persisted crash reports awaiting user review. */
+    fun reportCount(): Int = reportDirectory.listFiles { file -> file.extension == "json" }?.size ?: 0
+
     override fun uncaughtException(thread: Thread, throwable: Throwable) {
         runCatching { writeReport(thread, throwable) }
         previousHandler?.uncaughtException(thread, throwable)

@@ -1,13 +1,15 @@
 package dev.android.ide.ui.screen
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -16,64 +18,97 @@ import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.MergeType
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Terminal
-import androidx.compose.material.icons.filled.MoreHoriz
-import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
+import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.android.ide.contracts.Surface
 import dev.android.ide.ui.theme.LocalIdeColors
 
 /** Home is an orientation surface only: it owns no project, process, tab, or Git summary. */
 @Composable
-fun HomeSurface(onNavigate: (Surface) -> Unit, onOpenNavigation: () -> Unit, onExit: () -> Unit, onFeedback: (String) -> Unit) {
+fun HomeSurface(
+    onNavigate: (Surface) -> Unit,
+    onOpenNavigation: () -> Unit,
+    onExit: () -> Unit,
+    onFeedback: (String) -> Unit,
+    crashRecoveryCount: Int = 0,
+    crashReportCount: Int = 0,
+) {
     val colors = LocalIdeColors.current
+    val destinations = buildList {
+        add(HomeDestinationData(Icons.Default.FolderOpen, "Projects", "Manage your projects and workspace", true) { onNavigate(Surface.PROJECTS) })
+        add(HomeDestinationData(Icons.Default.Code, "Editor", "Edit code and manage project files", true) { onNavigate(Surface.EDITOR) })
+        add(HomeDestinationData(Icons.Default.Terminal, "Terminal", "Access your project and workspace from a command line interface", true) { onNavigate(Surface.TERMINAL) })
+        add(HomeDestinationData(Icons.Default.MergeType, "Git", "Version control and remote backups", false) { onFeedback("Git") })
+        add(HomeDestinationData(Icons.Default.Language, "Browser", "Browser the web and access developer console", false) { onFeedback("Browser") })
+        add(HomeDestinationData(Icons.Default.Extension, "Extensions", "Install and manage Add-ons", false) { onFeedback("Extensions") })
+        add(HomeDestinationData(Icons.Default.Settings, "Settings", "Customize your workspace and app preferences", true) { onNavigate(Surface.SETTINGS) })
+        if (crashRecoveryCount > 0 || crashReportCount > 0) {
+            val recoveryText = when (crashRecoveryCount) {
+                1 -> "1 unsaved file is available to restore"
+                in 2..Int.MAX_VALUE -> "$crashRecoveryCount unsaved files are available to restore"
+                else -> null
+            }
+            val reportText = when (crashReportCount) {
+                1 -> "1 crash report is available to review"
+                in 2..Int.MAX_VALUE -> "$crashReportCount crash reports are available to review"
+                else -> null
+            }
+            val context = listOfNotNull(recoveryText, reportText).joinToString("; ")
+            add(HomeDestinationData(Icons.Default.WarningAmber, "Errors", "Your last session didn't exit properly — $context", true, isWarning = true) { onNavigate(Surface.EDITOR) })
+        }
+    }
+
     Column(
         modifier = Modifier.fillMaxSize().navigationBarsPadding(),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         TopAppBar(
             title = { Text("Home") },
-            navigationIcon = { IconButton(onClick = onOpenNavigation) { Icon(Icons.Default.MoreHoriz, "Open sidebar") } },
+            navigationIcon = {
+                IconButton(onClick = onOpenNavigation) {
+                    Icon(Icons.Default.Menu, contentDescription = "Open sidebar")
+                }
+            },
         )
-        Column(Modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text("Welcome back techie! Choose a domain to continue", style = MaterialTheme.typography.headlineMedium, color = colors.textPrimary)
-        val destinations = listOf(
-            HomeDestinationData(Icons.Default.FolderOpen, "Projects", "Registered projects", true) { onNavigate(Surface.PROJECTS) },
-            HomeDestinationData(Icons.Default.Code, "Editor", "Files and documents", true) { onNavigate(Surface.EDITOR) },
-            HomeDestinationData(Icons.Default.Terminal, "Terminal", "Command-line sessions", true) { onNavigate(Surface.TERMINAL) },
-            HomeDestinationData(Icons.Default.Language, "Browser", "Preview and browsing", false) { onFeedback("Browser") },
-            HomeDestinationData(Icons.Default.MergeType, "Git", "Repository operations", false) { onFeedback("Git") },
-            HomeDestinationData(Icons.Default.Extension, "Extensions", "Provider extensions", false) { onFeedback("Extensions") },
-            HomeDestinationData(Icons.Default.Settings, "Settings", "Application preferences", true) { onNavigate(Surface.SETTINGS) },
-        )
-        LazyVerticalGrid(
-            columns = GridCells.Fixed(2),
-            modifier = Modifier.fillMaxWidth().weight(1f),
+        Column(
+            Modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 12.dp),
         ) {
-            items(destinations) { destination -> HomeDestination(destination) }
-        }
-        Button(
-            onClick = onExit,
-            modifier = Modifier.fillMaxWidth(),
-            colors = ButtonDefaults.buttonColors(containerColor = colors.error),
-        ) { Text("Exit Android IDE") }
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(2),
+                modifier = Modifier.fillMaxWidth().weight(1f),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                contentPadding = PaddingValues(bottom = 12.dp),
+            ) {
+                items(destinations, key = { it.title }) { destination ->
+                    HomeDestination(destination)
+                }
+            }
+            Button(
+                onClick = onExit,
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.buttonColors(containerColor = colors.error),
+            ) { Text("Exit Android IDE") }
         }
     }
 }
@@ -81,34 +116,47 @@ fun HomeSurface(onNavigate: (Surface) -> Unit, onOpenNavigation: () -> Unit, onE
 @Composable
 private fun HomeDestination(destination: HomeDestinationData) {
     val colors = LocalIdeColors.current
-    androidx.compose.material3.Card(
+    val accent = if (destination.isWarning) Color(0xFFD6A84F) else colors.accent
+    Card(
         onClick = destination.onClick,
         enabled = destination.enabled,
-        modifier = Modifier.fillMaxWidth().height(116.dp),
-        shape = RoundedCornerShape(8.dp),
-        colors = androidx.compose.material3.CardDefaults.cardColors(
-            containerColor = colors.surface,
+        modifier = Modifier.fillMaxWidth().height(176.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = if (destination.isWarning) Color(0xFF3A3020) else colors.surface,
             contentColor = colors.textPrimary,
             disabledContainerColor = colors.surface.copy(alpha = 0.55f),
             disabledContentColor = colors.textDisabled,
         ),
     ) {
-        Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Icon(destination.icon, contentDescription = destination.title, tint = if (destination.enabled) colors.accent else colors.textSecondary, modifier = Modifier.size(36.dp))
-                Text(destination.title, style = MaterialTheme.typography.titleLarge)
+        Column(
+            Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Box(
+                modifier = Modifier.fillMaxWidth().height(78.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    destination.icon,
+                    contentDescription = destination.title,
+                    tint = if (destination.enabled) accent else colors.textSecondary,
+                    modifier = Modifier.size(60.dp),
+                )
             }
-            Text("> ${if (destination.enabled) destination.description else "${destination.description} coming soon (phase ${homePhase(destination.title)})"}", style = MaterialTheme.typography.bodySmall, color = colors.textSecondary)
+            Text(
+                destination.title,
+                style = MaterialTheme.typography.titleLarge,
+                color = if (destination.isWarning) Color(0xFFFFD98A) else colors.textPrimary,
+            )
+            Text(
+                destination.description,
+                style = MaterialTheme.typography.bodySmall,
+                color = if (destination.isWarning) Color(0xFFFFD98A) else colors.textSecondary,
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
     }
-}
-
-private fun homePhase(title: String): Int = when (title) {
-    "Terminal" -> 3
-    "Browser" -> 5
-    "Git" -> 6
-    "Extensions" -> 8
-    else -> 1
 }
 
 private data class HomeDestinationData(
@@ -116,5 +164,6 @@ private data class HomeDestinationData(
     val title: String,
     val description: String,
     val enabled: Boolean,
+    val isWarning: Boolean = false,
     val onClick: () -> Unit,
 )
