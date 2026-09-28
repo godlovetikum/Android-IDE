@@ -290,6 +290,7 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
             put("schemaVersion", 1)
             put("activeTabUri", state.openTabs.firstOrNull { it.isActive && !it.isBlank }?.documentUri ?: JSONObject.NULL)
             put("openTabUris", org.json.JSONArray(state.openTabs.filter { !it.isBlank }.map { it.documentUri }))
+            put("pinnedTabUris", org.json.JSONArray(state.openTabs.filter { !it.isBlank && it.isPinned }.map { it.documentUri }))
             put("cursorPositions", JSONObject().apply {
                 state.tabCursorPositions.forEach { (uri, position) ->
                     put(uri, org.json.JSONArray(listOf(position.first, position.second)))
@@ -554,6 +555,9 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
             (0 until array.length()).mapNotNull { index -> array.optString(index).takeIf(String::isNotBlank) }
         } ?: emptyList()
         val activeUri = workspace?.optString("activeTabUri")?.takeIf { it.isNotBlank() && it != "null" }
+        val pinnedUris = workspace?.optJSONArray("pinnedTabUris")?.let { array ->
+            (0 until array.length()).mapNotNull { index -> array.optString(index).takeIf(String::isNotBlank) }
+        }?.toSet().orEmpty()
         val cursorPositions = workspace?.optJSONObject("cursorPositions")?.let { obj ->
             obj.keys().asSequence().mapNotNull { uri ->
                 val position = obj.optJSONArray(uri)
@@ -567,7 +571,7 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
         }.orEmpty()
         _uiState.update { it.copy(tabCursorPositions = cursorPositions, tabScrollPositions = scrollPositions) }
         tabUris.forEach { uri ->
-            openFileInternal(uri, markActive = uri == activeUri)
+            openFileInternal(uri, markActive = uri == activeUri, pinned = uri in pinnedUris)
         }
         if (_uiState.value.activeTabId == null) {
             _uiState.value.openTabs.firstOrNull()?.id?.let(::selectTab)
@@ -1301,10 +1305,30 @@ build/
         viewModelScope.launch { openFileInternal(documentUri, markActive = true, temporary = false) }
     }
 
+    /** Open a search result and, for content matches, select/reveal the matching range. */
+    fun openFileAtSearchResult(result: FileSearchResult) {
+        _uiState.update { it.copy(editorFileLoading = true) }
+        viewModelScope.launch {
+            openFileInternal(result.documentUri, markActive = true, temporary = true)
+            val opened = _uiState.value.openTabs.any { it.isActive && it.documentUri == result.documentUri }
+            if (opened && (result.matchLine != null || result.matchColumn != null || result.matchLength != null)) {
+                delay(300)
+                sendEditorCommand(
+                    EditorOutbound.SelectMatch(
+                        line = result.matchLine ?: 1,
+                        column = result.matchColumn ?: 1,
+                        length = result.matchLength ?: 0,
+                    )
+                )
+            }
+        }
+    }
+
     private suspend fun openFileInternal(
         documentUri: String,
         markActive: Boolean,
         temporary: Boolean = false,
+        pinned: Boolean = false,
     ) {
         val existing = _uiState.value.openTabs.find { it.documentUri == documentUri }
         if (existing != null) {
@@ -1359,7 +1383,8 @@ build/
             language    = language,
             content     = content,
             isActive    = markActive,
-            isTemporary = temporary,
+            isTemporary = temporary && !pinned,
+            isPinned = pinned,
         )
         _uiState.update { state ->
             val tabs = if (markActive) {
@@ -1392,7 +1417,7 @@ build/
     fun pinTab(tabId: String) {
         _uiState.update { state ->
             state.copy(openTabs = state.openTabs.map {
-                if (it.id == tabId) it.copy(isTemporary = false) else it
+                if (it.id == tabId) it.copy(isTemporary = false, isPinned = true) else it
             })
         }
         scheduleWorkspaceSave()
@@ -1452,11 +1477,39 @@ build/
     }
 
     fun closeOtherTabs(tabId: String) {
-        _uiState.value.openTabs.filter { it.id != tabId }.forEach { closeTab(it.id) }
+        _uiState.value.openTabs.filter { it.id != tabId && !it.isPinned }.forEach { closeTabSafe(it.id) }
     }
 
     fun closeAllTabs() {
-        _uiState.value.openTabs.toList().forEach { closeTab(it.id) }
+        _uiState.value.openTabs.filterNot { it.isPinned }.forEach { closeTabSafe(it.id) }
+    }
+
+    /**
+     * Clears the project-scoped editor boundary after the registry/storage owner
+     * has removed the project. This deliberately disposes Monaco models before
+     * clearing tabs so a same-named file from a later project cannot reuse stale
+     * content or dirty state.
+     */
+    fun resetWorkspaceAfterProjectRemoval() {
+        workspaceSaveJob?.cancel()
+        sendEditorCommand(EditorOutbound.CloseAllModels)
+        _uiState.value.openTabs.forEach { pendingContent.remove(it.id) }
+        _uiState.update {
+            it.copy(
+                projectRootUri = null,
+                projectName = "",
+                fileTree = emptyList(),
+                openTabs = emptyList(),
+                activeTabId = null,
+                tabCursorPositions = emptyMap(),
+                tabScrollPositions = emptyMap(),
+                recoveryEntries = emptyList(),
+                projectSwitchRequest = null,
+                currentScreen = AppScreen.HOME,
+                statusMessage = "The project is no longer available in the editor",
+                editorBindRevision = it.editorBindRevision + 1,
+            )
+        }
     }
 
     fun saveAllFiles() {
@@ -1689,14 +1742,25 @@ build/
         fun searchNodes(nodes: List<FileNode>, path: String) {
             nodes.forEach { node ->
                 val nodePath = if (path.isEmpty()) node.displayName else "$path/${node.displayName}"
-                if (!node.isDirectory && node.displayName.contains(query, ignoreCase = true)) {
-                    results += FileSearchResult(node.documentUri, node.displayName, "/$nodePath")
+                if (node.displayName.contains(query, ignoreCase = true)) {
+                    results += FileSearchResult(node.documentUri, node.displayName, "/$nodePath", isDirectory = node.isDirectory)
                 }
                 if (node.isDirectory) searchNodes(node.children, nodePath)
             }
         }
-        searchNodes(_uiState.value.fileTree, "")
-        _uiState.update { it.copy(fileSearchResults = results) }
+        viewModelScope.launch {
+            val rootUri = _uiState.value.projectRootUri
+            suspend fun scan(uri: String, path: String) {
+                safRepository.listChildren(uri).forEach { node ->
+                    val nodePath = if (path.isEmpty()) node.displayName else "$path/${node.displayName}"
+                    if (node.displayName == ".git" || node.displayName in setOf(ApplicationIdentity.TARGET_METADATA_DIRECTORY, ApplicationIdentity.LEGACY_METADATA_DIRECTORY)) return@forEach
+                    if (node.displayName.contains(query, ignoreCase = true)) results += FileSearchResult(node.documentUri, node.displayName, "/$nodePath", isDirectory = node.isDirectory)
+                    if (node.isDirectory) scan(node.documentUri, nodePath)
+                }
+            }
+            if (rootUri != null) scan(rootUri, "") else searchNodes(_uiState.value.fileTree, "")
+            if (_uiState.value.fileSearchQuery == query) _uiState.update { it.copy(fileSearchResults = results.distinctBy { result -> result.documentUri }.sortedBy { it.relativePath.lowercase() }) }
+        }
     }
 
     fun showContentSearch() {
@@ -1732,9 +1796,14 @@ build/
                         val bytes = fileMutations.read(node.documentUri) ?: return@forEach
                         if (bytes.take(8192).any { it == 0.toByte() }) return@forEach
                         val content = bytes.toString(Charsets.UTF_8)
-                        val matchingLine = content.lineSequence().withIndex().firstOrNull { it.value.contains(query, ignoreCase = true) }
-                        if (matchingLine != null) {
-                            results += FileSearchResult(node.documentUri, node.displayName, "/$nodePath", matchingLine.value.trim().take(180), matchingLine.index + 1)
+                        content.lineSequence().withIndex().forEach { (lineIndex, line) ->
+                            var from = 0
+                            while (from <= line.length) {
+                                val column = line.indexOf(query, from, ignoreCase = true)
+                                if (column < 0) break
+                                results += FileSearchResult(node.documentUri, node.displayName, "/$nodePath", line.trim().take(180), lineIndex + 1, column + 1, query.length)
+                                from = column + maxOf(query.length, 1)
+                            }
                         }
                     }
                 }
@@ -1746,7 +1815,7 @@ build/
         }
     }
 
-    /** Replace matches only in the verified content-search result set. */
+    /** Show a preview before replacing; mutation starts only after confirmation. */
     fun replaceProjectContents(find: String, replacement: String) {
         if (find.isBlank()) return
         val results = _uiState.value.contentSearchResults
@@ -1754,7 +1823,15 @@ build/
             _uiState.update { it.copy(statusMessage = "No matching project content to replace") }
             return
         }
+        val matchCount = results.size
+        _uiState.update { it.copy(fileOpDialog = FileOpDialog.ReplaceAll(find, replacement, results.map { r -> r.documentUri }.distinct().size, matchCount)) }
+    }
+
+    fun confirmReplaceProjectContents() {
+        val dialog = _uiState.value.fileOpDialog as? FileOpDialog.ReplaceAll ?: return
+        _uiState.update { it.copy(fileOpDialog = dialog.copy(isSubmitting = true)) }
         viewModelScope.launch {
+            val results = _uiState.value.contentSearchResults
             var changedFiles = 0
             var failedFiles = 0
             results.forEach { result ->
@@ -1764,12 +1841,12 @@ build/
                     return@forEach
                 }
                 val original = bytes.toString(Charsets.UTF_8)
-                val changed = original.replace(find, replacement, ignoreCase = true)
+                val changed = original.replace(dialog.find, dialog.replacement, ignoreCase = true)
                 if (changed == original) return@forEach
                 if (fileMutations.write(result.documentUri, changed.toByteArray(Charsets.UTF_8))) changedFiles++ else failedFiles++
             }
             _uiState.update {
-                it.copy(statusMessage = if (failedFiles == 0) {
+                it.copy(fileOpDialog = null, statusMessage = if (failedFiles == 0) {
                     "Replaced matches in $changedFiles file(s)"
                 } else {
                     "Replaced matches in $changedFiles file(s); $failedFiles file(s) could not be updated"

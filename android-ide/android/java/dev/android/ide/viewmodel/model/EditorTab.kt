@@ -24,6 +24,8 @@ import java.util.UUID
  *                  (any keystroke), explicit pin action (double-tap file tree item or
  *                  "Keep Open" from the tab overflow menu), or "Save As".
  *                  Temporary tabs are rendered with an italic display name.
+ * [isPinned]       Durable pin. Pinned tabs survive bulk-close operations and
+ *                  are persisted with the workspace.
  */
 data class EditorTab(
     val id: String = UUID.randomUUID().toString(),
@@ -36,4 +38,5 @@ data class EditorTab(
     val isSaving: Boolean = false,
     val isBlank: Boolean = false,
     val isTemporary: Boolean = false,
+    val isPinned: Boolean = false,
 )

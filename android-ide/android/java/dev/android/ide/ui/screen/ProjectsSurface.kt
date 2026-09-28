@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.MergeType
+import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Sort
@@ -86,7 +87,9 @@ fun ProjectsSurface(
     onExportProjects: (Set<String>) -> Unit,
     onDuplicateProject: (String) -> Unit,
     onRelocateProject: (String) -> Unit,
+    onCopyRemoteUrls: (String) -> Unit,
     onFeedback: (String) -> Unit,
+    onOpenNavigation: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -104,6 +107,7 @@ fun ProjectsSurface(
     var filterMode by rememberSaveable { mutableStateOf(ProjectFilter.ALL) }
     var addActionsExpanded by remember { mutableStateOf(false) }
     val fabScale by animateFloatAsState(if (addActionsExpanded) 1.08f else 1f, label = "project-fab-scale")
+    val listBusy = state.operationInProgress || state.restoring
     var confirmBatchRemove by remember { mutableStateOf(false) }
     var confirmBatchExport by remember { mutableStateOf(false) }
     var confirmBatchDelete by remember { mutableStateOf(false) }
@@ -136,9 +140,13 @@ fun ProjectsSurface(
         Box(Modifier.fillMaxSize().clickable { addActionsExpanded = false })
     }
     Column(Modifier.fillMaxSize().padding(20.dp).padding(bottom = 88.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.End) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onOpenNavigation, enabled = !listBusy) {
+                Icon(Icons.Default.Menu, contentDescription = "Open sidebar")
+            }
+            Text("Projects", style = MaterialTheme.typography.titleLarge)
             Spacer(Modifier.weight(1f))
-            IconButton(onClick = viewModel::refreshProjectList, enabled = !state.operationInProgress) {
+            IconButton(onClick = viewModel::refreshProjectList, enabled = !listBusy) {
                 Icon(Icons.Default.Refresh, contentDescription = "Refresh projects")
             }
             Box {
@@ -157,15 +165,24 @@ fun ProjectsSurface(
                 modifier = Modifier.weight(1f),
                 placeholder = { Text("Search projects") },
                 singleLine = true,
-            )
-            Box {
-                IconButton(onClick = { filterOpen = true }) { Icon(Icons.Default.FilterList, contentDescription = "Filter projects") }
-                DropdownMenu(expanded = filterOpen, onDismissRequest = { filterOpen = false }) {
-                    ProjectFilter.entries.forEach { option ->
-                        DropdownMenuItem(text = { Text(option.label) }, onClick = { filterMode = option; filterOpen = false })
+                trailingIcon = {
+                    Row {
+                        if (searchQuery.isNotEmpty()) {
+                            IconButton(onClick = { searchQuery = "" }) {
+                                Icon(Icons.Default.Close, contentDescription = "Clear project search")
+                            }
+                        }
+                        Box {
+                            IconButton(onClick = { filterOpen = true }) { Icon(Icons.Default.FilterList, contentDescription = "Filter projects") }
+                            DropdownMenu(expanded = filterOpen, onDismissRequest = { filterOpen = false }) {
+                                ProjectFilter.entries.forEach { option ->
+                                    DropdownMenuItem(text = { Text(option.label) }, onClick = { filterMode = option; filterOpen = false })
+                                }
+                            }
+                        }
                     }
-                }
-            }
+                },
+            )
         }
         state.registryWarning?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         if (state.statusMessage != null && !state.operationInProgress) {
@@ -270,13 +287,13 @@ fun ProjectsSurface(
                         onExport = onExportProject,
                         onDuplicate = onDuplicateProject,
                         onRelocate = onRelocateProject,
-                        operationInProgress = state.operationInProgress,
+                        operationInProgress = listBusy,
                     )
                 }
             }
         }
     }
-    if (state.operationInProgress) {
+    if (listBusy) {
         Box(
             Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface.copy(alpha = 0.72f)).clickable { },
             contentAlignment = Alignment.Center,
@@ -288,7 +305,7 @@ fun ProjectsSurface(
         }
     }
     FloatingActionButton(
-        onClick = { if (!state.operationInProgress) addActionsExpanded = !addActionsExpanded },
+        onClick = { if (!listBusy) addActionsExpanded = !addActionsExpanded },
         modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp).graphicsLayer { scaleX = fabScale; scaleY = fabScale },
     ) { androidx.compose.material3.Icon(if (addActionsExpanded) Icons.Default.Close else Icons.Default.Add, contentDescription = if (addActionsExpanded) "Close project actions" else "Add project") }
     if (addActionsExpanded) {
@@ -376,16 +393,16 @@ private fun ProjectCard(
         Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.Top) {
             Column(Modifier.weight(1f)) {
-                if (selected) Text("Selected", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelSmall)
                 Text(project.name, style = MaterialTheme.typography.titleLarge)
                 Text(if (project.description.isBlank()) "No description" else project.description, maxLines = 1, style = MaterialTheme.typography.bodySmall)
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                    if (summary?.hasGit == true) Text("Git", style = MaterialTheme.typography.labelSmall)
-                    Text("${summary?.fileCount ?: "Unavailable"} files", style = MaterialTheme.typography.bodySmall)
-                    Text(summary?.totalBytes?.let(::formatBytes) ?: "Unavailable", style = MaterialTheme.typography.bodySmall)
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                        if (summary?.hasGit == true) Text("Git", style = MaterialTheme.typography.labelSmall)
+                        Text("${summary?.fileCount ?: "Unavailable"} files", style = MaterialTheme.typography.bodySmall)
+                        Text(summary?.totalBytes?.let(::formatBytes) ?: "Unavailable", style = MaterialTheme.typography.bodySmall)
+                    }
+                    Text(relativeLastOpened(project.lastOpenedAt), style = MaterialTheme.typography.labelSmall)
                 }
-                summary?.status?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelSmall) }
-                Text(relativeLastOpened(project.lastOpenedAt), style = MaterialTheme.typography.labelSmall)
             }
             Box {
                 IconButton(onClick = { onSelect(project.id); menuOpen = true }) { Icon(Icons.Default.MoreVert, contentDescription = "Project actions") }
@@ -397,7 +414,7 @@ private fun ProjectCard(
                     DropdownMenuItem(leadingIcon = { Icon(Icons.Default.ContentCopy, null) }, text = { Text("Copy & Duplicate") }, onClick = { menuOpen = false; onDuplicate(project.id) })
                     DropdownMenuItem(leadingIcon = { Icon(Icons.Default.Share, null) }, text = { Text("Export or Share") }, onClick = { menuOpen = false; onExport(project.id) })
                     DropdownMenuItem(leadingIcon = { Icon(Icons.Default.Code, null) }, text = { Text("Copy Storage Path") }, onClick = { menuOpen = false; onCopyPath(project.id) })
-                    DropdownMenuItem(leadingIcon = { Icon(Icons.Default.MergeType, null) }, text = { Text("Git Remote Details") }, onClick = { menuOpen = false; onDetails(project.id) })
+                    DropdownMenuItem(leadingIcon = { Icon(Icons.Default.MergeType, null) }, text = { Text("Copy Remote URLs") }, onClick = { menuOpen = false; onCopyRemoteUrls(project.id) })
                     HorizontalDivider()
                     DropdownMenuItem(leadingIcon = { Icon(Icons.Default.Code, null) }, text = { Text("Open in Editor") }, onClick = { menuOpen = false; onOpen(project.id) })
                     DropdownMenuItem(leadingIcon = { Icon(Icons.Default.MergeType, null) }, text = { Text("Open Git") }, onClick = { menuOpen = false; onFeedback("Open Git") })

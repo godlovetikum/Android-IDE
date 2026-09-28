@@ -235,15 +235,18 @@ fun IdeScreen(
                 onReplaceProjectContents = ideViewModel::replaceProjectContents,
                 onHideFileSearch         = ideViewModel::hideFileSearch,
                 onHideContentSearch      = ideViewModel::hideContentSearch,
-                onSearchFileSelect       = { uri ->
+                onSearchFileSelect       = { result ->
                     if (uiState.isContentSearchVisible) ideViewModel.hideContentSearch()
                     else ideViewModel.hideFileSearch()
-                    ideViewModel.openFile(uri)
+                    if (uiState.isContentSearchVisible) ideViewModel.openFileAtSearchResult(result)
+                    else ideViewModel.openFile(result.documentUri)
                     ideViewModel.navigateTo(AppScreen.EDITOR)
                     onCloseDrawer?.invoke()
-                    scope.launch {
-                        kotlinx.coroutines.delay(300)
-                        ideViewModel.sendEditorCommand(EditorOutbound.ExecuteCommand("focusEditor"))
+                    if (!uiState.isContentSearchVisible) {
+                        scope.launch {
+                            kotlinx.coroutines.delay(300)
+                            ideViewModel.sendEditorCommand(EditorOutbound.ExecuteCommand("focusEditor"))
+                        }
                     }
                 },
                 modifier                 = mod,
@@ -1311,6 +1314,31 @@ private fun FileOpDialogHost(
             onDiscard = { ideViewModel.confirmCloseTab(dialog.tabId) },
             onCancel  = ideViewModel::dismissFileOpDialog,
         )
+        is FileOpDialog.ReplaceAll -> AlertDialog(
+            onDismissRequest = { if (!dialog.isSubmitting) ideViewModel.dismissFileOpDialog() },
+            title = { Text("Replace project content?") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Replace all occurrences of \"${dialog.find}\" with \"${dialog.replacement}\"?")
+                    Text("${dialog.matches} match(es) across ${dialog.files} file(s) will be changed.")
+                    dialog.resultMessage?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                    if (dialog.isSubmitting) Row(verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(Modifier.padding(end = 8.dp), strokeWidth = 2.dp)
+                        Text("Replacing…")
+                    }
+                }
+            },
+            confirmButton = {
+                Button(onClick = ideViewModel::confirmReplaceProjectContents, enabled = !dialog.isSubmitting) {
+                    Text(if (dialog.isSubmitting) "Replacing…" else "Replace all")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = ideViewModel::dismissFileOpDialog, enabled = !dialog.isSubmitting) {
+                    Text(if (dialog.isSubmitting) "Please wait" else "Cancel")
+                }
+            },
+        )
         is FileOpDialog.SaveAs -> SaveAsDialog(
             suggestedName = dialog.suggestedName,
             onConfirm     = { ideViewModel.saveAsAtPath(it) },
@@ -1505,7 +1533,7 @@ private fun DuplicateDialog(
     onDismiss: () -> Unit,
     errorMessage: String? = null,
 ) {
-    var name by remember { mutableStateOf("copy_${node.displayName}") }
+    var name by remember { mutableStateOf("Copy of ${node.displayName}") }
     AlertDialog(
         onDismissRequest = onDismiss,
         title   = { Text("Duplicate") },

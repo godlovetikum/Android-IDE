@@ -745,21 +745,8 @@ class SafRepository(private val context: Context) {
         name.isNotBlank() && name != "." && name != ".." &&
             '/' !in name && '\\' !in name && !name.any(Char::isISOControl)
 
-    /**
-     * Files and folders share the same provider namespace, but folder creation
-     * deliberately permits a same-named file when that file has a real extension.
-     * A no-extension file such as `.env` remains a blocking entry.
-     */
-    private fun conflictsWithRequestedEntry(existing: FileNode, requestedMimeType: String): Boolean {
-        if (requestedMimeType != MIME_DIR) return true
-        if (existing.isDirectory) return true
-        return !hasFileExtension(existing.displayName)
-    }
-
-    private fun hasFileExtension(displayName: String): Boolean {
-        val dot = displayName.lastIndexOf('.')
-        return dot > 0 && dot < displayName.lastIndex
-    }
+    /** Every exact child-name collision is unsafe, regardless of file type. */
+    private fun conflictsWithRequestedEntry(existing: FileNode, requestedMimeType: String): Boolean = true
 
     // ── Copy ───────────────────────────────────────────────────────────────
 
@@ -1730,7 +1717,11 @@ class SafRepository(private val context: Context) {
             }.getOrDefault(false)
             when (documentPresence(documentUriString)) {
                 DocumentPresence.ABSENT -> return@withContext true
-                DocumentPresence.INACCESSIBLE -> if (directDelete) return@withContext false
+                // Some providers revoke the deleted document URI immediately.
+                // The delete request was accepted, so do not convert a completed
+                // mutation into a false failure merely because the old URI can no
+                // longer be queried.
+                DocumentPresence.INACCESSIBLE -> if (directDelete) return@withContext true
                 DocumentPresence.EXISTS -> Unit
             }
 

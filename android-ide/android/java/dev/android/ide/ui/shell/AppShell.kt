@@ -1,6 +1,8 @@
 package dev.android.ide.ui.shell
 
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -42,6 +44,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -63,6 +66,9 @@ import dev.android.ide.ui.screen.EditorSurface
 import dev.android.ide.ui.screen.ProjectsSurface
 import dev.android.ide.ui.screen.SettingsScreen
 import dev.android.ide.ui.screen.TerminalSurface
+import dev.android.ide.ui.screen.EditorPanel
+import dev.android.ide.ui.screen.EditorSidebar
+import dev.android.ide.viewmodel.model.FileNode
 import dev.android.ide.viewmodel.IdeViewModel
 import kotlinx.coroutines.launch
 
@@ -94,9 +100,42 @@ fun AppShell(
     var phaseFeedback by rememberSaveable { mutableStateOf<String?>(null) }
     var settingsSection by rememberSaveable { mutableStateOf<String?>(null) }
     var editorPanelRequest by rememberSaveable { mutableStateOf(0L) }
+    var sidebarSection by rememberSaveable { mutableStateOf(SidebarSection.NAVIGATION) }
+    var importTargetUri by rememberSaveable { mutableStateOf<String?>(null) }
+    var exportTargetUri by rememberSaveable { mutableStateOf<String?>(null) }
+    val importFilesLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        val target = importTargetUri
+        if (target != null && uris.isNotEmpty()) ideViewModel.importFiles(target, uris.map { it.toString() })
+        importTargetUri = null
+    }
+    val exportDirectoryLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
+        val target = exportTargetUri
+        if (uri != null && target != null) ideViewModel.exportDirectory(FileNode(target, target.substringAfterLast('/'), "vnd.android.document/directory"), uri.toString())
+        exportTargetUri = null
+    }
     val drawerState = androidx.compose.material3.rememberDrawerState(DrawerValue.Closed)
     val coroutineScope = rememberCoroutineScope()
     val surfaceStateHolder = rememberSaveableStateHolder()
+
+    LaunchedEffect(state.selectedProjectId, state.projects, state.surface) {
+        val editorProject = ideState.projectRootUri
+        val stillRegistered = editorProject != null && state.projects.any {
+            it.location.stableId == editorProject || it.location.userVisiblePath == editorProject
+        }
+        if (editorProject != null &&
+            (state.projects.isNotEmpty() || state.operationReport != null) &&
+            (state.selectedProjectId == null || !stillRegistered)
+        ) {
+            ideViewModel.resetWorkspaceAfterProjectRemoval()
+        }
+    }
+    LaunchedEffect(state.surface) {
+        sidebarSection = when (state.surface) {
+            Surface.EDITOR -> SidebarSection.EDITOR
+            Surface.TERMINAL -> SidebarSection.TERMINAL
+            else -> SidebarSection.NAVIGATION
+        }
+    }
 
     BackHandler(
         enabled = drawerState.isOpen || phaseFeedback != null || editorNavigationPrompt || state.operationInProgress ||
@@ -157,10 +196,12 @@ fun AppShell(
                 ContextualNavigation(
                     modifier = Modifier.fillMaxSize(),
                     state = state,
+                    section = sidebarSection,
                     appViewModel = viewModel,
                     ideViewModel = ideViewModel,
                     moreOpen = moreOpen,
                     onMore = { moreOpen = !moreOpen },
+                    onSectionChange = { sidebarSection = it },
                     onNavigate = ::navigate,
                     onOpenProject = { viewModel.openProject(it); coroutineScope.launch { drawerState.close() } },
                     onCreateProject = { onCreateProject(null); moreOpen = false; coroutineScope.launch { drawerState.close() } },
@@ -171,26 +212,15 @@ fun AppShell(
                     onSettingsSection = { section -> settingsSection = section; navigate(Surface.SETTINGS) },
                     onDismissDrawer = { coroutineScope.launch { drawerState.close() } },
                     onOpenEditorPanel = { editorPanelRequest += 1; coroutineScope.launch { drawerState.close() } },
+                    onImportFiles = { target -> importTargetUri = target; importFilesLauncher.launch(arrayOf("*/*")) },
+                    onExportDirectory = { node -> exportTargetUri = node.documentUri; exportDirectoryLauncher.launch("${node.displayName}.zip") },
+                    onExportProject = onExportProject,
                 )
             }
         },
     ) {
     Scaffold(
-        topBar = {
-            if (state.surface != Surface.EDITOR && state.surface != Surface.SETTINGS) {
-                TopAppBar(
-                    title = { Text(surfaceTitle(state.surface)) },
-                            navigationIcon = {
-                                IconButton(onClick = {
-                            coroutineScope.launch { if (drawerState.isOpen) drawerState.close() else drawerState.open() }
-                            if (drawerState.isOpen) moreOpen = false
-                        }) {
-                            Icon(Icons.Default.Menu, contentDescription = "Open navigation")
-                        }
-                    },
-                )
-            }
-        },
+        topBar = {},
     ) { padding ->
         surfaceStateHolder.SaveableStateProvider(state.surface.name) {
             surface(Modifier.padding(padding).fillMaxSize())
@@ -253,10 +283,12 @@ fun AppShell(
 private fun ContextualNavigation(
     modifier: Modifier,
     state: AppShellState,
+    section: SidebarSection,
     appViewModel: AppShellViewModel,
     ideViewModel: IdeViewModel,
     moreOpen: Boolean,
     onMore: () -> Unit,
+    onSectionChange: (SidebarSection) -> Unit,
     onNavigate: (Surface) -> Unit,
     onOpenProject: (String) -> Unit,
     onCreateProject: (String?) -> Unit,
@@ -267,8 +299,11 @@ private fun ContextualNavigation(
     onSettingsSection: (String) -> Unit,
     onDismissDrawer: () -> Unit,
     onOpenEditorPanel: () -> Unit,
+    onImportFiles: (String) -> Unit,
+    onExportDirectory: (FileNode) -> Unit,
+    onExportProject: (String) -> Unit,
 ) {
-    val navigationActive = state.surface in setOf(Surface.HOME, Surface.PROJECTS, Surface.EXTENSIONS, Surface.PROJECT_DETAILS)
+    val editorState by ideViewModel.uiState.collectAsState()
     LazyColumn(
         modifier = modifier.navigationBarsPadding().padding(horizontal = 12.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp),
@@ -276,51 +311,79 @@ private fun ContextualNavigation(
     ) {
         item {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                NavigationTopItem(Icons.Default.Home, "Navigation", navigationActive) { onNavigate(Surface.HOME) }
-                NavigationTopItem(Icons.Default.Code, "Editor", state.surface == Surface.EDITOR) { onNavigate(Surface.EDITOR) }
-                NavigationTopItem(Icons.Default.Terminal, "Terminal", state.surface == Surface.TERMINAL) { onNavigate(Surface.TERMINAL) }
-                NavigationTopItem(Icons.Default.Language, "Browser", state.surface == Surface.BROWSER) { onNavigate(Surface.BROWSER) }
-                NavigationTopItem(Icons.Default.MergeType, "Git", state.surface == Surface.GIT) { onNavigate(Surface.GIT) }
+                NavigationTopItem(Icons.Default.MoreHoriz, "Navigation", section == SidebarSection.NAVIGATION) { onSectionChange(SidebarSection.NAVIGATION) }
+                NavigationTopItem(Icons.Default.Code, "Editor", section == SidebarSection.EDITOR) { onSectionChange(SidebarSection.EDITOR) }
+                NavigationTopItem(Icons.Default.Terminal, "Terminal", section == SidebarSection.TERMINAL) { onSectionChange(SidebarSection.TERMINAL) }
+                NavigationTopItem(Icons.Default.Language, "Browser", section == SidebarSection.BROWSER) { onSectionChange(SidebarSection.BROWSER) }
+                NavigationTopItem(Icons.Default.MergeType, "Git", section == SidebarSection.GIT) { onSectionChange(SidebarSection.GIT) }
             }
         }
         item { HorizontalDivider(Modifier.padding(vertical = 8.dp)) }
-        when {
-            state.surface == Surface.PROJECTS -> {
-                item { Text("Project management", style = MaterialTheme.typography.labelLarge) }
-                item { NavigationItem(Icons.Default.Add, "Create blank project", false) { onCreateProject(null) } }
-                item { NavigationItem(Icons.Default.FolderOpen, "Import existing folder", false) { onImportFolder() } }
-                item { NavigationItem(Icons.Default.FolderOpen, "Import ZIP archive", false) { onImportZip() } }
-                item { NavigationItem(Icons.Default.MergeType, "Clone remote Git repository", false) { onCloneGit() } }
-                if (state.projects.isNotEmpty()) {
-                    item { Text("Recent projects", style = MaterialTheme.typography.labelLarge) }
-                    items(state.projects.take(5), key = { it.id }) { project -> ProjectContextItem(project, onOpenProject) }
+        when (section) {
+            SidebarSection.NAVIGATION -> {
+                item { Text("Navigation", style = MaterialTheme.typography.labelLarge) }
+                item {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        NavigationGridItem(Icons.Default.Home, "Home") { onNavigate(Surface.HOME) }
+                        NavigationGridItem(Icons.Default.FolderOpen, "Projects") { onNavigate(Surface.PROJECTS) }
+                    }
+                }
+                item {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        NavigationGridItem(Icons.Default.Extension, "Extensions") { onNavigate(Surface.EXTENSIONS) }
+                        NavigationGridItem(Icons.Default.Settings, "Settings") { onNavigate(Surface.SETTINGS) }
+                    }
+                }
+                item { Text("Projects", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(top = 10.dp)) }
+                items(state.projects.take(6), key = { it.id }) { project ->
+                    ProjectContextItem(project, onOpenProject)
+                }
+                item {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        NavigationGridItem(Icons.Default.Add, "Create") { onCreateProject(null); onDismissDrawer() }
+                        NavigationGridItem(Icons.Default.FolderOpen, "Import") { onImportFolder(); onDismissDrawer() }
+                    }
                 }
             }
-            navigationActive -> {
-                item { Text("Navigation", style = MaterialTheme.typography.labelLarge) }
-                item { NavigationItem(Icons.Default.Home, "Home", state.surface == Surface.HOME) { onNavigate(Surface.HOME) } }
-                item { NavigationItem(Icons.Default.FolderOpen, "Projects", state.surface == Surface.PROJECTS) { onNavigate(Surface.PROJECTS) } }
-                item { NavigationItem(Icons.Default.Extension, "Extensions", state.surface == Surface.EXTENSIONS) { onNavigate(Surface.EXTENSIONS) } }
-                item { NavigationItem(Icons.Default.Settings, "Settings", state.surface == Surface.SETTINGS) { onNavigate(Surface.SETTINGS) } }
+            SidebarSection.EDITOR -> {
+                item {
+                    val root = editorState.projectRootUri?.let { FileNode(it, editorState.projectName, "vnd.android.document/directory") }
+                    if (root == null) {
+                        Text("Open a project to view its files", style = MaterialTheme.typography.bodyMedium)
+                    } else {
+                        EditorSidebar(
+                            state = editorState,
+                            contentPanel = when {
+                                editorState.isContentSearchVisible -> EditorPanel.CONTENT_SEARCH
+                                editorState.isSearchVisible -> EditorPanel.FILENAME_SEARCH
+                                else -> EditorPanel.FILES
+                            },
+                            onPanelSelected = {},
+                            onFileSelected = { uri -> ideViewModel.openFile(uri); onDismissDrawer() },
+                            onSearchResultSelected = { result -> ideViewModel.openFileAtSearchResult(result); onDismissDrawer() },
+                            onToggleDirectory = ideViewModel::toggleDirectory,
+                            onRefresh = ideViewModel::refreshProject,
+                            onLocate = ideViewModel::revealActiveFile,
+                            onSearchFiles = ideViewModel::showFileSearch,
+                            onSearchContent = ideViewModel::showContentSearch,
+                            onHideFileSearch = ideViewModel::hideFileSearch,
+                            onHideContentSearch = ideViewModel::hideContentSearch,
+                            onImport = onImportFiles,
+                            onExportDirectory = onExportDirectory,
+                            onExportProject = { state.selectedProjectId?.let(onExportProject) },
+                            onShowDetails = { state.selectedProjectId?.let(appViewModel::showProjectDetails) },
+                            onDeleteProject = appViewModel::permanentlyDeleteSelectedProject,
+                            onRemoveProject = appViewModel::removeSelectedProject,
+                            onOpenSettings = { onNavigate(Surface.SETTINGS) },
+                            onFeedback = onFeedback,
+                            rootNode = root,
+                            ideViewModel = ideViewModel,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                }
             }
-            state.surface == Surface.EDITOR -> {
-                item { Text("Editor context", style = MaterialTheme.typography.labelLarge) }
-                item { NavigationItem(Icons.Default.FolderOpen, "Project file tree", true) { onOpenEditorPanel() } }
-                item { NavigationItem(Icons.Default.Search, "Search filenames", false) { ideViewModel.showFileSearch(); onDismissDrawer() } }
-                item { NavigationItem(Icons.Default.Source, "Search project contents", false) { ideViewModel.showContentSearch(); onDismissDrawer() } }
-                item { NavigationItem(Icons.Default.FolderOpen, "Locate current file", false) { ideViewModel.revealActiveFile(); onDismissDrawer() } }
-                item { NavigationItem(Icons.Default.Settings, "Editor settings", false) { onSettingsSection("Editor"); onDismissDrawer() } }
-            }
-            state.surface == Surface.SETTINGS -> {
-                item { Text("Settings categories", style = MaterialTheme.typography.labelLarge) }
-                item { NavigationItem(Icons.Default.Settings, "App Theme", false) { onSettingsSection("App Theme") } }
-                item { NavigationItem(Icons.Default.Code, "Editor", false) { onSettingsSection("Editor") } }
-                item { NavigationItem(Icons.Default.FolderOpen, "File Tree", false) { onSettingsSection("File Tree") } }
-                item { NavigationItem(Icons.Default.FolderOpen, "Project Storage", false) { onSettingsSection("Project Storage") } }
-                item { NavigationItem(Icons.Default.Terminal, "Controls", false) { onSettingsSection("Controls") } }
-                item { UnavailableSidebarFeature("Credentials and security", 8) }
-            }
-            state.surface == Surface.TERMINAL -> {
+            SidebarSection.TERMINAL -> {
                 item { Text("Terminal sessions", style = MaterialTheme.typography.labelLarge) }
                 item { NavigationItem(Icons.Default.Add, "New terminal session", false) { appViewModel.createTerminalSession(); onDismissDrawer() } }
                 state.terminalSessions.forEach { session ->
@@ -328,9 +391,8 @@ private fun ContextualNavigation(
                 }
                 item { NavigationItem(Icons.Default.Close, "Close all sessions", false) { appViewModel.closeAllTerminalSessions(); onDismissDrawer() } }
             }
-            state.surface == Surface.BROWSER -> item { UnavailableSidebarFeature("Browser", 5) }
-            state.surface == Surface.GIT -> item { UnavailableSidebarFeature("Git", 6) }
-            else -> item { UnavailableSidebarFeature(surfaceTitle(state.surface), placeholderPhase(surfaceTitle(state.surface))) }
+            SidebarSection.GIT -> item { UnavailableSidebarFeature("Git", 6) }
+            SidebarSection.BROWSER -> item { UnavailableSidebarFeature("Browser", 5) }
         }
     }
 }
@@ -355,6 +417,18 @@ private fun NavigationItem(icon: androidx.compose.ui.graphics.vector.ImageVector
         }
     }
 }
+
+@Composable
+private fun androidx.compose.foundation.layout.RowScope.NavigationGridItem(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, onClick: () -> Unit) {
+    TextButton(onClick = onClick, modifier = Modifier.weight(1f)) {
+        Column(horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Icon(icon, contentDescription = label)
+            Text(label, style = MaterialTheme.typography.labelSmall)
+        }
+    }
+}
+
+private enum class SidebarSection { NAVIGATION, EDITOR, TERMINAL, GIT, BROWSER }
 
 @Composable
 private fun NavigationTopItem(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, selected: Boolean, onClick: () -> Unit) {
@@ -395,9 +469,9 @@ private fun SurfaceHost(
 ) {
     val ideState by ideViewModel.uiState.collectAsState()
     when (state.surface) {
-        Surface.HOME -> HomeSurface(onNavigate = onNavigate, onExit = onRequestExit, onFeedback = onFeedback)
-        Surface.PROJECTS -> ProjectsSurface(state, viewModel, onCreateProject, onImportFolder, onImportZip, onCloneGit, onExportProject, onExportProjects, onDuplicateProject, onRelocateProject, onFeedback, modifier)
-        Surface.PROJECT_DETAILS -> ProjectDetailsSurface(state, viewModel, onExportProject, onDuplicateProject, onRelocateProject, modifier)
+        Surface.HOME -> HomeSurface(onNavigate = onNavigate, onOpenNavigation = onOpenNavigation, onExit = onRequestExit, onFeedback = onFeedback)
+        Surface.PROJECTS -> ProjectsSurface(state, viewModel, onCreateProject, onImportFolder, onImportZip, onCloneGit, onExportProject, onExportProjects, onDuplicateProject, onRelocateProject, viewModel::copyProjectRemoteUrls, onFeedback, onOpenNavigation, modifier)
+        Surface.PROJECT_DETAILS -> ProjectDetailsSurface(state, viewModel, onExportProject, onDuplicateProject, onRelocateProject, onOpenNavigation, modifier)
         Surface.EDITOR -> EditorSurface(
             shellState = state,
             shellViewModel = viewModel,
@@ -409,7 +483,7 @@ private fun SurfaceHost(
             onFeedback = onFeedback,
             modifier = modifier,
         )
-        Surface.TERMINAL -> TerminalSurface(state, viewModel, modifier)
+        Surface.TERMINAL -> TerminalSurface(state, viewModel, onOpenNavigation, modifier)
         Surface.SETTINGS -> SettingsScreen(
             uiState = ideState,
             ideViewModel = ideViewModel,
@@ -417,14 +491,18 @@ private fun SurfaceHost(
             scrollToSection = settingsSection,
             onScrollConsumed = onSettingsSectionConsumed,
         )
-        else -> DomainPlaceholderSurface(surfaceTitle(state.surface), modifier, onFeedback)
+        else -> DomainPlaceholderSurface(surfaceTitle(state.surface), modifier, onOpenNavigation, onFeedback)
     }
 }
 
 @Composable
-private fun DomainPlaceholderSurface(title: String, modifier: Modifier, onFeedback: (String) -> Unit) {
-    Column(modifier.padding(20.dp)) {
-        Text("$title not available. Coming soon (phase ${placeholderPhase(title)})", style = MaterialTheme.typography.bodyMedium)
+private fun DomainPlaceholderSurface(title: String, modifier: Modifier, onOpenNavigation: () -> Unit, onFeedback: (String) -> Unit) {
+    Column(modifier.fillMaxSize()) {
+        TopAppBar(
+            title = { Text(title) },
+            navigationIcon = { IconButton(onClick = onOpenNavigation) { Icon(Icons.Default.Menu, "Open sidebar") } },
+        )
+        Text("$title not available. Coming soon (phase ${placeholderPhase(title)})", modifier = Modifier.padding(20.dp), style = MaterialTheme.typography.bodyMedium)
     }
 }
 

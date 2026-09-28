@@ -64,12 +64,25 @@ class ProjectOperationsService(
                 "The project still exists after the delete request",
                 ErrorCategory.EXTERNAL_FILE_CHANGE,
             )
-            DocumentPresence.INACCESSIBLE -> return OperationReport(
-                outcome = OperationOutcome.PARTIAL,
-                message = "The delete result could not be verified because access was lost",
-                errorCategory = ErrorCategory.PERMISSION_LOST,
-                recoveryHint = "Restore access and verify whether the project location remains",
-            )
+            DocumentPresence.INACCESSIBLE -> {
+                val removedAfterAcceptedDelete = registry.remove(project.id)
+                return if (removedAfterAcceptedDelete.outcome == OperationOutcome.COMPLETE) {
+                    OperationReport(
+                        outcome = OperationOutcome.PARTIAL,
+                        message = "Project data was deleted, but the storage provider did not allow the result to be rechecked; the registry record was removed",
+                        errorCategory = ErrorCategory.PERMISSION_LOST,
+                        affectedIds = listOf(project.id),
+                        recoveryHint = "Restore storage access if you need to verify the deleted location",
+                    )
+                } else {
+                    OperationReport(
+                        outcome = OperationOutcome.PARTIAL,
+                        message = "Project data was deleted, but the registry could not be updated after access was lost",
+                        errorCategory = ErrorCategory.MALFORMED_METADATA,
+                        recoveryHint = "Refresh the project registry after restoring storage access",
+                    )
+                }
+            }
         }
         val removed = registry.remove(project.id)
         return if (removed.outcome == OperationOutcome.COMPLETE) {
@@ -567,12 +580,13 @@ class ProjectOperationsService(
                 ErrorCategory.UNSUPPORTED_PROVIDER_CAPABILITY,
             ))
         }
+        // This value is the selected parent, not the final project directory.
+        // A normal projects folder contains registered sibling projects and is
+        // therefore valid. The exact target is checked after the reviewed name
+        // is applied by copyExact() and registry.preflightRegistration().
         val conflict = registry.listRegistered()
             .filter { it.id != excludedProjectId }
-            .any {
-                storage.isSameOrDescendant(it.location.stableId, destinationUri) == true ||
-                    storage.isSameOrDescendant(destinationUri, it.location.stableId) == true
-            }
+            .any { storage.isSameOrDescendant(it.location.stableId, destinationUri) == true }
         return if (conflict) {
             DestinationPreflight(false, blocked(
                 "The destination conflicts with an existing registered project",

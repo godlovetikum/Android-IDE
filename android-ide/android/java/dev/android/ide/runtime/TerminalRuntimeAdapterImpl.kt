@@ -2,6 +2,8 @@ package dev.android.ide.runtime
 
 import android.content.Context
 import android.content.Intent
+import android.system.Os
+import android.system.OsConstants
 import androidx.core.content.ContextCompat
 import com.termux.terminal.TerminalSession
 import com.termux.terminal.TerminalSessionClient
@@ -42,6 +44,7 @@ class TerminalRuntimeAdapterImpl(context: Context) : TerminalRuntimeAdapter, Run
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val sessions = ConcurrentHashMap<String, LiveSession>()
     private val viewInvalidators = ConcurrentHashMap<String, () -> Unit>()
+    @Volatile private var explicitlyShuttingDown = false
     private val termuxPrefix get() = bundledInstaller.prefix()
     private val shell get() = File(termuxPrefix, "bin/sh")
     private val packageManager get() = File(termuxPrefix, "bin/pkg")
@@ -53,22 +56,20 @@ class TerminalRuntimeAdapterImpl(context: Context) : TerminalRuntimeAdapter, Run
         if (!termuxPrefix.exists() || !shell.canExecute()) {
             return OperationReport(
                 OperationOutcome.BLOCKED,
-                "The terminal runtime is unavailable. Initialize the approved runtime before opening a terminal.",
+                "Terminal is unavailable. Initialize Terminal before opening a command-line session.",
                 ErrorCategory.UNAVAILABLE_RUNTIME,
                 emptyList(),
-                "Keep the project registered and retry runtime initialization when the runtime is available.",
+                "Keep the project registered and retry Terminal initialization when Terminal is available.",
             )
         }
         runtimeHome.mkdirs()
-        sessionStore.readAll().filter { it.availability == SessionAvailability.AVAILABLE }.forEach {
-            sessionStore.upsert(it.copy(availability = SessionAvailability.UNAVAILABLE, terminationReason = "Terminal session was not reconnectable after restart"))
-        }
-        return OperationReport(OperationOutcome.COMPLETE, "Terminal runtime is available")
+        sessionStore.markAvailableUnavailable("This terminal session was interrupted and is unavailable; create a new session to continue")
+        return OperationReport(OperationOutcome.COMPLETE, "Terminal is available")
     }
 
     override suspend fun providerRootLocation(): ProjectLocation? =
         runtimeHome.takeIf { it.exists() }?.let {
-            ProjectLocation(it.canonicalPath, "Terminal runtime workspace", it.canonicalPath)
+            ProjectLocation(it.canonicalPath, "Terminal workspace", it.canonicalPath)
         }
 
     override suspend fun capabilities(): RuntimeCapabilities {
@@ -81,7 +82,7 @@ class TerminalRuntimeAdapterImpl(context: Context) : TerminalRuntimeAdapter, Run
             packageManagerAvailable = available && packageManager.canExecute(),
             executableFilesSupported = available,
             symlinksSupported = available,
-            explanation = if (available) null else "The approved terminal runtime files were not found",
+            explanation = if (available) null else "Terminal files were not found",
         )
     }
 
@@ -105,18 +106,27 @@ class TerminalRuntimeAdapterImpl(context: Context) : TerminalRuntimeAdapter, Run
     }
 
     override suspend fun inspectProjectAccess(project: ProjectIdentity): TerminalProjectAccess {
-        if (capabilities().availability != RuntimeAvailability.AVAILABLE) return TerminalProjectAccess(false, "The terminal runtime is unavailable")
+        if (capabilities().availability != RuntimeAvailability.AVAILABLE) return TerminalProjectAccess(false, "Terminal is unavailable")
         val path = project.location.userVisiblePath ?: return TerminalProjectAccess(false, "This project has no terminal working location")
+        // Android SAF locations are content URIs, not POSIX paths. They remain
+        // valid project locations, but cannot be passed as cwd to a native PTY.
+        // The session will start in the Terminal workspace instead of reporting
+        // the selected project as an invalid directory.
+        if (path.startsWith("content://")) {
+            return TerminalProjectAccess(true, "This project uses Android document storage, so the command-line terminal will open in its Terminal home workspace instead of the project folder")
+        }
         val directory = File(path)
         return TerminalProjectAccess(directory.isDirectory, "The selected project location is not an accessible folder".takeUnless { directory.isDirectory })
     }
 
-    override suspend fun workingDirectory(project: ProjectIdentity): String? = project.location.userVisiblePath?.takeIf { File(it).isDirectory }
+    override suspend fun workingDirectory(project: ProjectIdentity): String? = project.location.userVisiblePath?.takeIf {
+        !it.startsWith("content://") && File(it).isDirectory
+    }
 
     override suspend fun createSession(workingDirectory: String?, name: String): SessionDescriptor {
         val id = UUID.randomUUID().toString()
-        val sessionName = name.trim().ifBlank { "Terminal" }
-        if (!shell.canExecute()) return unavailableSession(id, sessionName, "Terminal runtime unavailable")
+        val sessionName = name.trim().ifBlank { "Untitled session" }
+        if (!shell.canExecute()) return unavailableSession(id, sessionName, "Terminal is unavailable")
         val directory = workingDirectory?.let(::File)?.takeIf { it.isDirectory } ?: runtimeHome
         return runCatching {
             val environment = arrayOf(
@@ -128,15 +138,22 @@ class TerminalRuntimeAdapterImpl(context: Context) : TerminalRuntimeAdapter, Run
             )
             val session = TerminalSession(shell.absolutePath, directory.absolutePath, arrayOf(shell.absolutePath), environment, TRANSCRIPT_ROWS, sessionClient)
             val descriptor = SessionDescriptor(id, "global", session.mHandle, sessionName, directory.absolutePath, Instant.now(), SessionAvailability.AVAILABLE)
+            ContextCompat.startForegroundService(appContext, Intent(appContext, TerminalForegroundService::class.java))
             sessions[id] = LiveSession(descriptor, session)
             sessionStore.upsert(descriptor)
-            ContextCompat.startForegroundService(appContext, Intent(appContext, TerminalForegroundService::class.java))
             descriptor
         }.getOrElse { error -> unavailableSession(id, sessionName, error.message ?: "Unable to start terminal session") }
     }
 
     /** Returns the live upstream session for the Android View bridge. */
-    fun terminalSession(sessionId: String): TerminalSession? = sessions[sessionId]?.session
+    fun terminalSession(sessionId: String): TerminalSession? {
+        val live = sessions[sessionId] ?: return null
+        if (!live.session.isRunning()) {
+            markUnavailable(sessionId, "The terminal process ended")
+            return null
+        }
+        return live.session
+    }
 
     fun bindTerminalView(sessionId: String, invalidate: () -> Unit) {
         viewInvalidators[sessionId] = invalidate
@@ -146,21 +163,35 @@ class TerminalRuntimeAdapterImpl(context: Context) : TerminalRuntimeAdapter, Run
         viewInvalidators.remove(sessionId)
     }
 
-    override suspend fun listSessions(): List<SessionDescriptor> =
-        (sessionStore.readAll() + sessions.values.map { it.descriptor }).distinctBy { it.id }.sortedBy { it.createdAt }
+    override suspend fun listSessions(): List<SessionDescriptor> {
+        sessions.values.filterNot { it.session.isRunning() }.forEach { markUnavailable(it.descriptor.id, "The terminal process ended") }
+        return (sessionStore.readAll() + sessions.values.map { it.descriptor }).distinctBy { it.id }.sortedBy { it.createdAt }
+    }
+
+    override suspend fun renameSession(sessionId: String, name: String): OperationReport {
+        val cleanName = name.trim()
+        if (cleanName.isBlank()) return OperationReport(OperationOutcome.BLOCKED, "Enter a session name", ErrorCategory.PROCESS_LOSS)
+        val live = sessions[sessionId]
+        val stored = sessionStore.readAll().firstOrNull { it.id == sessionId }
+        if (live == null && stored == null) return unavailable("The terminal session is unavailable")
+        val updated = (live?.descriptor ?: stored!!).copy(name = cleanName)
+        live?.descriptor = updated
+        sessionStore.upsert(updated)
+        return OperationReport(OperationOutcome.COMPLETE, "Terminal session renamed", affectedIds = listOf(sessionId))
+    }
 
     override suspend fun sendInput(sessionId: String, input: ByteArray): OperationReport {
-        val session = sessions[sessionId]?.session ?: return unavailable("The terminal session is unavailable")
+        val session = liveSession(sessionId)?.session ?: return unavailable("The terminal session is unavailable")
         return runCatching {
             session.write(input, 0, input.size)
             OperationReport(OperationOutcome.COMPLETE, "Input sent")
         }.getOrElse { OperationReport(OperationOutcome.FAILED, "Could not send terminal input", ErrorCategory.PROCESS_LOSS) }
     }
 
-    override suspend fun readOutput(sessionId: String): ByteArray? = sessions[sessionId]?.session?.let { snapshot(it).toByteArray(Charsets.UTF_8) }
+    override suspend fun readOutput(sessionId: String): ByteArray? = liveSession(sessionId)?.session?.let { snapshot(it).toByteArray(Charsets.UTF_8) }
 
     override suspend fun resize(sessionId: String, columns: Int, rows: Int): OperationReport {
-        val session = sessions[sessionId]?.session ?: return unavailable("The terminal session is unavailable")
+        val session = liveSession(sessionId)?.session ?: return unavailable("The terminal session is unavailable")
         if (columns <= 0 || rows <= 0) return OperationReport(OperationOutcome.BLOCKED, "The terminal size is invalid", ErrorCategory.PROCESS_LOSS)
         return runCatching {
             session.updateSize(columns, rows, CELL_WIDTH_PX, CELL_HEIGHT_PX)
@@ -169,34 +200,43 @@ class TerminalRuntimeAdapterImpl(context: Context) : TerminalRuntimeAdapter, Run
     }
 
     override suspend fun interrupt(sessionId: String): OperationReport {
-        val session = sessions[sessionId]?.session ?: return unavailable("The terminal session is unavailable")
+        val session = liveSession(sessionId)?.session ?: return unavailable("The terminal session is unavailable")
         session.write(byteArrayOf(3), 0, 1)
         return OperationReport(OperationOutcome.COMPLETE, "Terminal session interrupted")
     }
 
     override suspend fun listChildProcesses(sessionId: String): List<ChildProcessDescriptor> {
-        val live = sessions[sessionId] ?: return emptyList()
+        val live = liveSession(sessionId) ?: return emptyList()
         return runCatching {
-            ProcessBuilder("/system/bin/ps", "-o", "PID,PPID,ARGS").redirectErrorStream(true).start()
+            val shellPid = live.session.getPid().toLong()
+            ProcessBuilder("/system/bin/ps", "-o", "PID,PPID,PGID,ARGS").redirectErrorStream(true).start()
                 .inputStream.bufferedReader().readText().lineSequence().drop(1).mapNotNull { line ->
-                    val parts = line.trim().split(Regex("\\s+"), limit = 3)
+                    val parts = line.trim().split(Regex("\\s+"), limit = 4)
                     val pid = parts.getOrNull(0)?.toLongOrNull() ?: return@mapNotNull null
-                    val ppid = parts.getOrNull(1)?.toLongOrNull() ?: return@mapNotNull null
-                    if (ppid != live.session.getPid().toLong()) return@mapNotNull null
-                    ChildProcessDescriptor(pid.toString(), sessionId, parts.getOrNull(2).orEmpty(), pid, live.descriptor.workingDirectory, Instant.now(), SessionAvailability.AVAILABLE)
+                    val pgid = parts.getOrNull(2)?.toLongOrNull() ?: return@mapNotNull null
+                    if (pid == shellPid || pgid != shellPid) return@mapNotNull null
+                    ChildProcessDescriptor(pid.toString(), sessionId, parts.getOrNull(3).orEmpty(), pid, live.descriptor.workingDirectory, Instant.now(), SessionAvailability.AVAILABLE)
                 }.toList()
         }.getOrDefault(emptyList())
     }
 
-    override suspend fun terminateChildProcess(processId: String): OperationReport = runCatching {
-        val process = ProcessBuilder("/system/bin/kill", processId).start()
-        if (process.waitFor() == 0) OperationReport(OperationOutcome.COMPLETE, "Child process terminated")
-        else OperationReport(OperationOutcome.FAILED, "The child process could not be terminated", ErrorCategory.PROCESS_LOSS)
-    }.getOrElse { OperationReport(OperationOutcome.FAILED, "The child process could not be terminated", ErrorCategory.PROCESS_LOSS) }
+    override suspend fun terminateChildProcess(processId: String): OperationReport {
+        val targetPid = processId.toLongOrNull()?.takeIf { it > 0 }
+            ?: return OperationReport(OperationOutcome.BLOCKED, "The selected child process is invalid", ErrorCategory.PROCESS_LOSS)
+        val owner = sessions.values.firstOrNull { live ->
+            val shellPid = live.session.getPid().toLong()
+            shellPid > 0 && targetPid != shellPid && processGroup(targetPid) == shellPid
+        } ?: return OperationReport(OperationOutcome.BLOCKED, "That process is not owned by an active terminal session", ErrorCategory.PROCESS_LOSS)
+        val groupId = processGroup(targetPid) ?: return unavailable("The child process is no longer available")
+        return runCatching {
+            Os.kill(-groupId.toInt(), OsConstants.SIGTERM)
+            OperationReport(OperationOutcome.COMPLETE, "Owned child process group terminated")
+        }.getOrElse { OperationReport(OperationOutcome.FAILED, "The owned child process group could not be terminated", ErrorCategory.PROCESS_LOSS) }
+    }
 
     override suspend fun closeSession(sessionId: String): OperationReport {
         val live = sessions.remove(sessionId)
-        live?.session?.finishIfRunning()
+        live?.let(::terminateOwnedProcessGroup)
         sessionStore.readAll().firstOrNull { it.id == sessionId }?.let {
             sessionStore.upsert(it.copy(availability = SessionAvailability.EXPLICITLY_CLOSED, terminationReason = "Closed by user"))
         }
@@ -210,19 +250,51 @@ class TerminalRuntimeAdapterImpl(context: Context) : TerminalRuntimeAdapter, Run
         return OperationReport(OperationOutcome.COMPLETE, "All terminal sessions closed")
     }
 
-    fun outputSnapshot(sessionId: String): String = sessions[sessionId]?.session?.let(::snapshot).orEmpty()
+    fun outputSnapshot(sessionId: String): String = liveSession(sessionId)?.session?.let(::snapshot).orEmpty()
 
     fun shutdown() {
-        sessions.values.forEach {
-            it.session.finishIfRunning()
-            sessionStore.upsert(it.descriptor.copy(availability = SessionAvailability.INVALIDATED, terminationReason = "Terminal runtime boundary stopped"))
-        }
+        explicitlyShuttingDown = true
+        sessions.values.forEach(::terminateOwnedProcessGroup)
         sessions.clear()
         viewInvalidators.clear()
+        // Explicit application shutdown is the terminal exit boundary. Do not
+        // resurrect those live sessions on a later launch.
+        sessionStore.clear()
+        appContext.stopService(Intent(appContext, TerminalForegroundService::class.java))
         scope.cancel()
     }
 
     private fun snapshot(session: TerminalSession): String = session.getEmulator()?.getScreen()?.getTranscriptText().orEmpty()
+
+    private fun liveSession(sessionId: String): LiveSession? {
+        val live = sessions[sessionId]
+        if (live == null || !live.session.isRunning()) {
+            if (live != null) markUnavailable(sessionId, "The terminal process ended")
+            return null
+        }
+        return live
+    }
+
+    private fun markUnavailable(sessionId: String, reason: String) {
+        val live = sessions.remove(sessionId) ?: return
+        sessionStore.upsert(live.descriptor.copy(availability = SessionAvailability.UNAVAILABLE, terminationReason = reason))
+        viewInvalidators.remove(sessionId)?.invoke()
+    }
+
+    private fun processGroup(pid: Long): Long? = runCatching {
+        val stat = File("/proc/$pid/stat").readText()
+        val endOfCommand = stat.lastIndexOf(')')
+        if (endOfCommand < 0) return@runCatching null
+        stat.substring(endOfCommand + 2).trim().split(Regex("\\s+")).getOrNull(2)?.toLongOrNull()
+    }.getOrNull()
+
+    private fun terminateOwnedProcessGroup(live: LiveSession) {
+        val shellPid = live.session.getPid().toLong()
+        if (shellPid > 0 && processGroup(shellPid) == shellPid) {
+            runCatching { Os.kill(-shellPid.toInt(), OsConstants.SIGTERM) }
+        }
+        live.session.finishIfRunning()
+    }
 
     private suspend fun runCommand(command: List<String>, directory: File): OperationReport = runCatching {
         val process = ProcessBuilder(command).directory(directory).redirectErrorStream(true).start()
@@ -244,7 +316,25 @@ class TerminalRuntimeAdapterImpl(context: Context) : TerminalRuntimeAdapter, Run
             }
         }
         override fun onTitleChanged(changedSession: TerminalSession) = Unit
-        override fun onSessionFinished(finishedSession: TerminalSession) = Unit
+        override fun onSessionFinished(finishedSession: TerminalSession) {
+            val entry = sessions.entries.firstOrNull { it.value.session === finishedSession } ?: return
+            val id = entry.key
+            if (explicitlyShuttingDown) {
+                sessions.remove(id)
+                viewInvalidators.remove(id)?.invoke()
+                return
+            }
+            val descriptor = entry.value.descriptor.copy(
+                availability = SessionAvailability.UNAVAILABLE,
+                terminationReason = "The terminal process ended",
+            )
+            sessions.remove(id)
+            sessionStore.upsert(descriptor)
+            viewInvalidators.remove(id)?.invoke()
+            if (sessions.isEmpty()) {
+                appContext.stopService(Intent(appContext, TerminalForegroundService::class.java))
+            }
+        }
         override fun onCopyTextToClipboard(session: TerminalSession, text: String) = Unit
         override fun onPasteTextFromClipboard(session: TerminalSession) = Unit
         override fun onBell(session: TerminalSession) = Unit

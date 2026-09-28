@@ -26,7 +26,7 @@
 
 set -euo pipefail
 
-MONACO_VERSION="0.52.0"
+MONACO_VERSION="0.55.1"
 TARGET_DIR="android/assets/editor/vs"
 
 # ── Idempotency check ────────────────────────────────────────────────────────

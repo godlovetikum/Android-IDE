@@ -189,6 +189,13 @@ sealed class EditorOutbound {
      */
     data class SetCursorPosition(val line: Int, val column: Int) : EditorOutbound()
 
+    /** Select and reveal a content-search match in the active model. */
+    data class SelectMatch(
+        val line: Int = 1,
+        val column: Int = 1,
+        val length: Int = 0,
+    ) : EditorOutbound()
+
     /**
      * Restore the vertical scroll offset to [scrollTop] pixels.
      * Sent after LoadFile (and after SetCursorPosition) to re-establish the
@@ -244,6 +251,7 @@ sealed class EditorOutbound {
             is ShowReplace        -> put("type", "showReplace")
             is CloseSearch        -> put("type", "closeSearch")
             is SetCursorPosition  -> { put("type", "setCursorPosition"); put("line", msg.line); put("column", msg.column) }
+            is SelectMatch        -> { put("type", "selectMatch"); put("line", msg.line); put("column", msg.column); put("length", msg.length) }
             is SetScrollPosition  -> { put("type", "setScrollPosition"); put("scrollTop", msg.scrollTop) }
             is CloseAllModels     -> put("type", "closeAllModels")
         }

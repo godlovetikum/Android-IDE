@@ -17,7 +17,6 @@ class ProjectRepository(context: Context) {
         private const val PREFS = "project_registry"
         private const val KEY   = "projects"
         private const val CORRUPT_KEY = "projects_corrupt_backup"
-        private const val MAX   = 20      // max entries retained
     }
 
     private val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -34,7 +33,7 @@ class ProjectRepository(context: Context) {
      */
     fun upsert(project: Project) {
         val list = getAll().filterNot { it.stableLocationId == project.stableLocationId } + project
-        save(list.sortedWith(compareByDescending<Project> { it.lastOpenedMs }.thenByDescending { it.createdMs }).take(MAX))
+        save(list.sortedWith(compareByDescending<Project> { it.lastOpenedMs }.thenByDescending { it.createdMs }))
     }
 
     fun remove(stableLocationId: String): Boolean {

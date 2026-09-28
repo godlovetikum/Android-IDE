@@ -60,12 +60,7 @@ private fun reportVerdict(report: dev.android.ide.contracts.OperationReport?): A
 @Composable
 private fun AcquisitionInputs(content: @Composable () -> Unit) {
     Column(verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp)) {
-        Text("Your input", style = MaterialTheme.typography.titleSmall)
-        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
-            Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp)) {
-                content()
-            }
-        }
+        content()
     }
 }
 
@@ -79,20 +74,11 @@ private fun AcquisitionFeedback(verdict: AcquisitionVerdict, message: String, bu
     }
     Card(colors = CardDefaults.cardColors(containerColor = container)) {
         Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(4.dp)) {
-            Text("Android IDE", style = MaterialTheme.typography.labelSmall, color = content)
-            RowWithProgress(busy, content)
+            if (busy) {
+                CircularProgressIndicator(Modifier.padding(bottom = 4.dp), strokeWidth = 2.dp, color = content)
+            }
             Text(message, style = MaterialTheme.typography.bodyMedium, color = content)
         }
-    }
-}
-
-@Composable
-private fun RowWithProgress(busy: Boolean, color: androidx.compose.ui.graphics.Color) {
-    androidx.compose.foundation.layout.Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-        if (busy) {
-            CircularProgressIndicator(Modifier.padding(end = 8.dp), strokeWidth = 2.dp, color = color)
-        }
-        Text("Status", style = MaterialTheme.typography.labelMedium, color = color)
     }
 }
 
@@ -237,7 +223,7 @@ fun AppRoot(viewModel: AppShellViewModel, ideViewModel: IdeViewModel, onExit: ()
                 val project = shellState.projects.firstOrNull { it.id == projectId }
                 operationKind = ProjectOperationKind.DUPLICATE
                 operationProjectId = projectId
-                operationName = project?.name.orEmpty()
+                operationName = project?.name?.let { "Copy of $it" }.orEmpty()
                 operationDescription = project?.description.orEmpty()
                 operationDestination = null
             },
@@ -259,7 +245,7 @@ fun AppRoot(viewModel: AppShellViewModel, ideViewModel: IdeViewModel, onExit: ()
                 text = {
                     Column {
                         AcquisitionInputs {
-                            OutlinedTextField(createName, { createName = it }, label = { Text("Project name") }, supportingText = { Text("Use one folder name") }, isError = createName.isNotBlank() && !projectNameIsValid(createName), enabled = !shellState.operationInProgress, singleLine = true)
+                            OutlinedTextField(createName, { createName = it }, label = { Text("Project name") }, isError = createName.isNotBlank() && !projectNameIsValid(createName), enabled = !shellState.operationInProgress, singleLine = true)
                             OutlinedTextField(createDescription, { createDescription = it }, label = { Text("Description (optional)") }, enabled = !shellState.operationInProgress)
                             PickerResult("Storage location", createDestination)
                             Button(onClick = { createDestinationPicker.launch(null) }, enabled = !shellState.operationInProgress) { Text("Choose storage location") }
@@ -297,6 +283,7 @@ fun AppRoot(viewModel: AppShellViewModel, ideViewModel: IdeViewModel, onExit: ()
                             Text("Project name: $createName")
                             Text("Description: ${createDescription.ifBlank { "Not provided" }}")
                             PickerResult("Target storage location", createDestination)
+                            Text("Final project location: ${createDestination?.trimEnd('/')}/$createName")
                         }
                         AcquisitionFeedback(reportVerdict(shellState.operationReport) ?: AcquisitionVerdict.READY, shellState.operationReport?.message ?: "Ready to create after the destination conflict check", shellState.operationInProgress)
                     }
@@ -369,6 +356,7 @@ fun AppRoot(viewModel: AppShellViewModel, ideViewModel: IdeViewModel, onExit: ()
                             OutlinedTextField(zipName, { zipName = it }, label = { Text("Project name") }, enabled = !shellState.operationInProgress, singleLine = true)
                             OutlinedTextField(zipDescription, { zipDescription = it }, label = { Text("Description (optional)") }, enabled = !shellState.operationInProgress)
                             PickerResult("Storage location", zipDestination)
+                            Text("Final project location: ${zipDestination?.trimEnd('/')}/$zipName")
                             Button(onClick = { zipDestinationPicker.launch(null) }, enabled = !shellState.operationInProgress) { Text("Choose storage location") }
                         }
                         AcquisitionFeedback(reportVerdict(shellState.operationReport) ?: if (shellState.operationInProgress) AcquisitionVerdict.CHECKING else if (zipReady) AcquisitionVerdict.READY else AcquisitionVerdict.INPUT_REQUIRED, shellState.operationReport?.message ?: when {
@@ -435,11 +423,6 @@ fun AppRoot(viewModel: AppShellViewModel, ideViewModel: IdeViewModel, onExit: ()
                         }
                         PickerResult("Destination parent", operationDestination)
                         Button(onClick = { operationDestinationPicker.launch(null) }, enabled = !shellState.operationInProgress) { Text("Choose destination parent") }
-                        Text(if (kind == ProjectOperationKind.DUPLICATE) {
-                            "The original remains unchanged. The destination will be checked for conflicts and project containment before copying."
-                        } else {
-                            "The project is copied and verified before the original is removed. A failed cleanup is reported as partial."
-                        })
                         shellState.operationReport?.let { report -> Text(report.message, color = if (report.outcome == dev.android.ide.contracts.OperationOutcome.COMPLETE) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error) }
                         if (shellState.operationInProgress) { Row(verticalAlignment = Alignment.CenterVertically) { CircularProgressIndicator(Modifier.padding(end = 8.dp), strokeWidth = 2.dp); Text("Working…") } }
                     }
@@ -466,8 +449,8 @@ fun AppRoot(viewModel: AppShellViewModel, ideViewModel: IdeViewModel, onExit: ()
         shellState.acquiredProjectId?.let { projectId ->
             AlertDialog(
                 onDismissRequest = viewModel::dismissAcquisitionPrompt,
-                title = { Text("Project imported") },
-                text = { Text("The selected folder was registered successfully. Open it now?") },
+                title = { Text("Project ready") },
+                text = { Text("The project was acquired and registered successfully. Open it now?") },
                 confirmButton = {
                     Button(onClick = { viewModel.dismissAcquisitionPrompt(); viewModel.openProject(projectId) }) { Text("Open project") }
                 },
@@ -504,7 +487,7 @@ private fun PickerResult(label: String, rawValue: String?) {
         color = if (rawValue == null) colors.surfaceVariant else colors.primaryContainer,
     ) {
         Column(Modifier.fillMaxWidth().padding(12.dp)) {
-            Text(label.uppercase(), style = androidx.compose.material3.MaterialTheme.typography.labelSmall, color = colors.onSurfaceVariant)
+            Text(label, style = androidx.compose.material3.MaterialTheme.typography.labelSmall, color = colors.onSurfaceVariant)
             Text(
                 text = if (rawValue == null) "Not selected" else humanReadableStorageLocation(rawValue),
                 style = androidx.compose.material3.MaterialTheme.typography.bodyMedium,

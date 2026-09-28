@@ -14,6 +14,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -134,6 +135,14 @@ private fun EditorTabItem(
                 else -> Spacer(Modifier.width(0.dp))
             }
 
+            if (tab.isPinned) {
+                Icon(
+                    imageVector = Icons.Default.PushPin,
+                    contentDescription = "Pinned tab",
+                    tint = colors.accent,
+                    modifier = Modifier.size(13.dp),
+                )
+            }
             Text(
                 text     = tab.displayName,
                 style    = MaterialTheme.typography.labelMedium.copy(

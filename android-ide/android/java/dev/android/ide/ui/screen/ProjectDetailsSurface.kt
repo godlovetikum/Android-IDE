@@ -17,6 +17,17 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.filled.MergeType
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Terminal
+import androidx.compose.material.icons.filled.Language
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
@@ -43,6 +54,7 @@ fun ProjectDetailsSurface(
     onExportProject: (String) -> Unit,
     onDuplicateProject: (String) -> Unit,
     onRelocateProject: (String) -> Unit,
+    onOpenNavigation: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val project = state.projects.firstOrNull { it.id == state.selectedProjectId }
@@ -73,15 +85,16 @@ fun ProjectDetailsSurface(
             report.recoveryHint?.let { Text("Recovery: $it", color = MaterialTheme.colorScheme.error) }
         } ?: state.statusMessage?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            IconButton(onClick = onOpenNavigation) { Icon(Icons.Default.Menu, contentDescription = "Open sidebar") }
             Text(project?.name ?: "Project Details", style = MaterialTheme.typography.headlineMedium)
             IconButton(onClick = { menuOpen = true }) { Icon(Icons.Default.MoreVert, contentDescription = "Project actions") }
             DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                DropdownMenuItem(text = { Text("Refresh") }, enabled = !state.operationInProgress && !state.detailsLoading, onClick = { menuOpen = false; viewModel.refreshSelectedProjectDetails() })
-                DropdownMenuItem(text = { Text("Rename") }, enabled = !state.operationInProgress, onClick = { menuOpen = false; renameValue = project?.name.orEmpty(); renameVisible = true })
-                DropdownMenuItem(text = { Text("Change Location") }, enabled = !state.operationInProgress, onClick = { menuOpen = false; project?.id?.let(onRelocateProject) })
-                DropdownMenuItem(text = { Text("Copy & Duplicate") }, enabled = !state.operationInProgress, onClick = { menuOpen = false; project?.id?.let(onDuplicateProject) })
-                DropdownMenuItem(text = { Text("Export or Share") }, enabled = !state.operationInProgress, onClick = { menuOpen = false; project?.id?.let(onExportProject) })
-                DropdownMenuItem(text = { Text("Copy Storage Path") }, onClick = {
+                DropdownMenuItem(leadingIcon = { Icon(Icons.Default.Refresh, null) }, text = { Text("Refresh") }, enabled = !state.operationInProgress && !state.detailsLoading, onClick = { menuOpen = false; viewModel.refreshSelectedProjectDetails() })
+                DropdownMenuItem(leadingIcon = { Icon(Icons.Default.Edit, null) }, text = { Text("Rename") }, enabled = !state.operationInProgress, onClick = { menuOpen = false; renameValue = project?.name.orEmpty(); renameVisible = true })
+                DropdownMenuItem(leadingIcon = { Icon(Icons.Default.FolderOpen, null) }, text = { Text("Change Location") }, enabled = !state.operationInProgress, onClick = { menuOpen = false; project?.id?.let(onRelocateProject) })
+                DropdownMenuItem(leadingIcon = { Icon(Icons.Default.ContentCopy, null) }, text = { Text("Copy & Duplicate") }, enabled = !state.operationInProgress, onClick = { menuOpen = false; project?.id?.let(onDuplicateProject) })
+                DropdownMenuItem(leadingIcon = { Icon(Icons.Default.Share, null) }, text = { Text("Export or Share") }, enabled = !state.operationInProgress, onClick = { menuOpen = false; project?.id?.let(onExportProject) })
+                DropdownMenuItem(leadingIcon = { Icon(Icons.Default.Code, null) }, text = { Text("Copy Storage Path") }, onClick = {
                     menuOpen = false
                     val path = humanReadableStorageLocation(project?.location?.userVisiblePath ?: project?.location?.displayLabel)
                     if (path != null) {
@@ -94,7 +107,7 @@ fun ProjectDetailsSurface(
                         actionFeedback = "The project storage path is unavailable. Refresh project details and try again."
                     }
                 })
-                DropdownMenuItem(text = { Text("Copy Remote URLs") }, onClick = {
+                DropdownMenuItem(leadingIcon = { Icon(Icons.Default.MergeType, null) }, text = { Text("Copy Remote URLs") }, onClick = {
                     menuOpen = false
                     val git = state.projectDetails?.git
                     if (state.detailsLoading) {
@@ -114,13 +127,13 @@ fun ProjectDetailsSurface(
                         }
                     }
                 })
-                DropdownMenuItem(text = { Text("Open in Editor") }, onClick = { menuOpen = false; viewModel.navigate(Surface.EDITOR) })
-                DropdownMenuItem(text = { Text("Open Git") }, onClick = { menuOpen = false; viewModel.navigate(Surface.GIT) })
-                DropdownMenuItem(text = { Text("Open Terminal") }, onClick = { menuOpen = false; viewModel.navigate(Surface.TERMINAL) })
-                DropdownMenuItem(text = { Text("Open Browser or Preview") }, onClick = { menuOpen = false; viewModel.navigate(Surface.BROWSER) })
+                DropdownMenuItem(leadingIcon = { Icon(Icons.Default.Code, null) }, text = { Text("Open in Editor") }, onClick = { menuOpen = false; viewModel.navigate(Surface.EDITOR) })
+                DropdownMenuItem(leadingIcon = { Icon(Icons.Default.MergeType, null) }, text = { Text("Open Git") }, onClick = { menuOpen = false; viewModel.navigate(Surface.GIT) })
+                DropdownMenuItem(leadingIcon = { Icon(Icons.Default.Terminal, null) }, text = { Text("Open Terminal") }, onClick = { menuOpen = false; viewModel.navigate(Surface.TERMINAL) })
+                DropdownMenuItem(leadingIcon = { Icon(Icons.Default.Language, null) }, text = { Text("Open Browser or Preview") }, onClick = { menuOpen = false; viewModel.navigate(Surface.BROWSER) })
                 HorizontalDivider()
-                DropdownMenuItem(text = { Text("Remove from Registry", color = MaterialTheme.colorScheme.secondary) }, enabled = !state.operationInProgress, onClick = { menuOpen = false; confirmRemove = true })
-                DropdownMenuItem(text = { Text("Permanently Delete", color = MaterialTheme.colorScheme.error) }, enabled = !state.operationInProgress, onClick = { menuOpen = false; deleteCode = Random.nextInt(100, 1000).toString(); enteredDeleteCode = ""; confirmDelete = true })
+                DropdownMenuItem(leadingIcon = { Icon(Icons.Default.Delete, null, tint = MaterialTheme.colorScheme.secondary) }, text = { Text("Remove from Registry", color = MaterialTheme.colorScheme.secondary) }, enabled = !state.operationInProgress, onClick = { menuOpen = false; confirmRemove = true })
+                DropdownMenuItem(leadingIcon = { Icon(Icons.Default.Delete, null, tint = MaterialTheme.colorScheme.error) }, text = { Text("Permanently Delete", color = MaterialTheme.colorScheme.error) }, enabled = !state.operationInProgress, onClick = { menuOpen = false; deleteCode = Random.nextInt(100, 1000).toString(); enteredDeleteCode = ""; confirmDelete = true })
             }
         }
         if (confirmRemove) {

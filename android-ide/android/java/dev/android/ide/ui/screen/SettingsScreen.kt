@@ -1,5 +1,11 @@
 package dev.android.ide.ui.screen
 
+import android.content.Intent
+import android.provider.Settings
+import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -53,6 +59,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.LocalContext
 import dev.android.ide.data.model.AppTheme
 import dev.android.ide.data.model.EditorSettings
 import dev.android.ide.data.model.VolumeKeyMode
@@ -65,7 +72,8 @@ enum class SettingsCategory(val title: String, val description: String, val icon
     EDITOR("Editor", "Editor appearance, code behavior, keyboard, and file tree", Icons.Default.Code),
     PROJECTS("Projects", "Project creation and storage preferences", Icons.Default.FolderOpen),
     GIT("Git", "Repository identity, history, and source control", Icons.Default.MergeType),
-    CREDENTIALS_SECURITY("Credentials & Security", "Account credentials, permissions, and protected data", Icons.Default.Lock),
+    CREDENTIALS("Credentials", "Git accounts, tokens, and secure sign-in data", Icons.Default.Lock),
+    SECURITY("Security", "Storage access, Android permissions, and protected data", Icons.Default.Lock),
     TERMINAL("Terminal", "Terminal runtime and session preferences", Icons.Default.Terminal),
     BROWSER("Browser", "Browser preview and web-project preferences", Icons.Default.Language),
     EXTENSIONS("Extensions", "Language tools and editor extensions", Icons.Default.Extension),
@@ -84,12 +92,21 @@ fun SettingsScreen(
         SettingsCategory.values().firstOrNull { it.name == name }
     }
 
+    BackHandler(enabled = selectedCategory != null) {
+        selectedCategoryName = null
+    }
+
     LaunchedEffect(scrollToSection) {
         val requested = scrollToSection ?: return@LaunchedEffect
         val category = when (requested) {
             "App Theme", "UI Font Size" -> SettingsCategory.GENERAL
             "Editor Theme", "Editor", "Controls", "File Tree" -> SettingsCategory.EDITOR
             "Project Storage" -> SettingsCategory.PROJECTS
+            "Permissions", "Folder Access", "Android App Permissions" -> SettingsCategory.SECURITY
+            "Credentials", "Manage Credentials" -> SettingsCategory.CREDENTIALS
+            "Terminal" -> SettingsCategory.TERMINAL
+            "Browser" -> SettingsCategory.BROWSER
+            "Git" -> SettingsCategory.GIT
             else -> null
         }
         if (category != null) selectedCategoryName = category.name
@@ -196,11 +213,64 @@ private fun SettingsCategoryContent(
             SettingsCategory.EDITOR -> item { EditorSettingsContent(uiState, s, ideViewModel) }
             SettingsCategory.PROJECTS -> item { ProjectsSettingsContent() }
             SettingsCategory.GIT,
-            SettingsCategory.CREDENTIALS_SECURITY,
             SettingsCategory.TERMINAL,
             SettingsCategory.BROWSER,
             SettingsCategory.EXTENSIONS -> item { DomainPlaceholder(category) }
+            SettingsCategory.CREDENTIALS -> item { DomainPlaceholder(category) }
+            SettingsCategory.SECURITY -> item { StorageAccessSettings() }
         }
+    }
+}
+
+@Composable
+private fun StorageAccessSettings() {
+    val context = LocalContext.current
+    val resolver = context.contentResolver
+    var grantedCount by rememberSaveable {
+        mutableStateOf(resolver.persistedUriPermissions.count { it.isReadPermission || it.isWritePermission })
+    }
+    var permissionMessage by rememberSaveable { mutableStateOf<String?>(null) }
+    val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        if (uri != null) {
+            val result = runCatching {
+                resolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+                )
+            }
+            result.onSuccess {
+                grantedCount = resolver.persistedUriPermissions.count { it.isReadPermission || it.isWritePermission }
+                permissionMessage = "Folder access saved"
+            }.onFailure {
+                permissionMessage = "Android did not grant access to that folder"
+            }
+        } else {
+            permissionMessage = "Folder access was not changed"
+        }
+    }
+    SettingsCard {
+        Text("Project folder access", style = MaterialTheme.typography.titleSmall)
+        Text(
+            "Android IDE uses Android’s folder access permission for project files. Grant access to a folder when Android asks, and the permission remains available after the app is reopened.",
+            style = MaterialTheme.typography.bodySmall,
+            color = LocalIdeColors.current.textSecondary,
+        )
+        Text("$grantedCount saved folder permission(s)", style = MaterialTheme.typography.bodyMedium)
+        OutlinedButton(onClick = { folderPicker.launch(null) }) { Text("Grant folder access") }
+        permissionMessage?.let { Text(it, color = LocalIdeColors.current.textSecondary, style = MaterialTheme.typography.bodySmall) }
+    }
+    SettingsCard {
+        Text("Android app permissions", style = MaterialTheme.typography.titleSmall)
+        Text(
+            "Notifications and other Android-managed permissions are controlled by the system settings for this app.",
+            style = MaterialTheme.typography.bodySmall,
+            color = LocalIdeColors.current.textSecondary,
+        )
+        OutlinedButton(onClick = {
+            context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                data = android.net.Uri.parse("package:${context.packageName}")
+            })
+        }) { Text("Open Android app settings") }
     }
 }
 
@@ -230,28 +300,29 @@ private fun GeneralSettings(uiState: IdeUiState, s: EditorSettings, ideViewModel
         )
         TextButton(onClick = { ideViewModel.setEditorSettings(s.copy(uiFontScale = 1f)) }, enabled = s.uiFontScale != 1f) { Text("Reset") }
     }
-    SettingsCard {
-        Text("Editor theme", style = MaterialTheme.typography.titleSmall)
-        Column(Modifier.selectableGroup()) {
-            EditorThemeOption("Dark", "dark", s.editorTheme, s, ideViewModel)
-            EditorThemeOption("Light", "light", s.editorTheme, s, ideViewModel)
-            EditorThemeOption("Follow app theme", "system", s.editorTheme, s, ideViewModel)
-        }
-    }
-    SettingsCard {
-        VisibilitySettingRow("Document information row", "Show line, column, spacing, language, and encoding below the editor.", s.showStatusBar, { ideViewModel.setEditorSettings(s.copy(showStatusBar = it)) })
-    }
 }
 
 @Composable
 private fun EditorSettingsContent(uiState: IdeUiState, s: EditorSettings, ideViewModel: IdeViewModel) {
     val colors = LocalIdeColors.current
     SettingsCard {
+        Text("Editor appearance", style = MaterialTheme.typography.titleSmall)
+        Column(Modifier.selectableGroup()) {
+            EditorThemeOption("Dark", "dark", s.editorTheme, s, ideViewModel)
+            EditorThemeOption("Light", "light", s.editorTheme, s, ideViewModel)
+            EditorThemeOption("Follow app theme", "system", s.editorTheme, s, ideViewModel)
+        }
+        HorizontalDivider(color = colors.separator)
         SettingStepper("Code font size", "${s.fontSize} sp", {
             if (s.fontSize > 10) ideViewModel.setEditorSettings(s.copy(fontSize = s.fontSize - 1))
         }, {
             if (s.fontSize < 28) ideViewModel.setEditorSettings(s.copy(fontSize = s.fontSize + 1))
         })
+        HorizontalDivider(color = colors.separator)
+        VisibilitySettingRow("Document information row", "Show line, column, spacing, language, and encoding below the editor.", s.showStatusBar, { ideViewModel.setEditorSettings(s.copy(showStatusBar = it)) })
+    }
+    SettingsCard {
+        Text("Editing behavior", style = MaterialTheme.typography.titleSmall)
         HorizontalDivider(color = colors.separator)
         Text("Tab size", style = MaterialTheme.typography.bodyMedium)
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) { listOf(2, 4, 8).forEach { size -> FilterChip(s.tabSize == size, { ideViewModel.setEditorSettings(s.copy(tabSize = size)) }, label = { Text("$size") }) } }
@@ -282,6 +353,7 @@ private fun EditorSettingsContent(uiState: IdeUiState, s: EditorSettings, ideVie
 @Composable
 private fun KeyboardSettingsContent(uiState: IdeUiState, s: EditorSettings, ideViewModel: IdeViewModel) {
     SettingsCard {
+        Text("Keyboard and input", style = MaterialTheme.typography.titleSmall)
         VisibilitySettingRow("Keyboard toolbar", "Show cursor, selection, and editing controls above the keyboard.", s.showKeyboardToolbar, { ideViewModel.setEditorSettings(s.copy(showKeyboardToolbar = it)) })
         HorizontalDivider()
         VisibilitySettingRow("Symbol bar", "Show one-tap common character shortcuts above the keyboard.", s.showSymbolBar, { ideViewModel.setEditorSettings(s.copy(showSymbolBar = it)) })
@@ -298,6 +370,7 @@ private fun KeyboardSettingsContent(uiState: IdeUiState, s: EditorSettings, ideV
 @Composable
 private fun FileTreeSettingsContent(s: EditorSettings, ideViewModel: IdeViewModel) {
     SettingsCard {
+        Text("File tree", style = MaterialTheme.typography.titleSmall)
         VisibilitySettingRow("Hide .git folder", "Keep repository internals out of the file tree.", s.hideGitFolder, { ideViewModel.setEditorSettings(s.copy(hideGitFolder = it)) })
         HorizontalDivider()
         VisibilitySettingRow("Hide workspace metadata", "Keep Android IDE workspace metadata out of the file tree.", s.hideProjectMetadataFolder, { ideViewModel.setEditorSettings(s.copy(hideProjectMetadataFolder = it)) })

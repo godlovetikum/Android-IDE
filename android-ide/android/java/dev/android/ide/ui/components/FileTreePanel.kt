@@ -33,6 +33,7 @@ import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.CreateNewFolder
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Image
@@ -108,7 +109,7 @@ fun FileTreePanel(
     onReplaceProjectContents: (String, String) -> Unit,
     onHideFileSearch: () -> Unit,
     onHideContentSearch: () -> Unit,
-    onSearchFileSelect: (String) -> Unit,
+    onSearchFileSelect: (FileSearchResult) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalIdeColors.current
@@ -304,14 +305,14 @@ fun FileTreePanel(
 @Composable
 private fun SearchResultRow(
     result: FileSearchResult,
-    onSelect: (String) -> Unit,
+    onSelect: (FileSearchResult) -> Unit,
 ) {
     val colors = LocalIdeColors.current
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .fillMaxWidth()
-            .combinedClickable(onClick = { onSelect(result.documentUri) })
+            .combinedClickable(onClick = { onSelect(result) })
             .padding(horizontal = 12.dp, vertical = 8.dp),
     ) {
         FileTypeBadge(result.displayName, muted = false, accent = false)
@@ -473,7 +474,7 @@ private fun FileTreeRow(
     onImportFilesAt: (FileNode) -> Unit,
     onExportDirectory: (FileNode) -> Unit,
     onCopyPath: (String) -> Unit,
-    onSelect: (String) -> Unit,
+    onSelect: (FileSearchResult) -> Unit,
     onShowDuplicateDialog: (FileNode) -> Unit,
 ) {
     val colors   = LocalIdeColors.current
@@ -582,23 +583,33 @@ private fun FileTreeRow(
                 if (node.isDirectory) {
                     // ── Folder menu ──────────────────────────────────────
                     DropdownMenuItem(
+                        leadingIcon = { Icon(Icons.Default.Article, null) },
                         text    = { Text("New File") },
                         onClick = { menuOpen = false; onShowCreateFileDialog(node) },
                     )
                     DropdownMenuItem(
+                        leadingIcon = { Icon(Icons.Default.CreateNewFolder, null) },
                         text    = { Text("New Folder") },
                         onClick = { menuOpen = false; onShowCreateFolderDialog(node) },
                     )
                     DropdownMenuItem(
+                        leadingIcon = { Icon(Icons.Default.FolderOpen, null) },
                         text    = { Text("Import Files") },
                         onClick = { menuOpen = false; onImportFilesAt(node) },
                     )
+                    DropdownMenuItem(
+                        leadingIcon = { Icon(Icons.Default.Code, null) },
+                        text    = { Text("Duplicate") },
+                        onClick = { menuOpen = false; onShowDuplicateDialog(node) },
+                    )
                     HorizontalDivider()
                     DropdownMenuItem(
+                        leadingIcon = { Icon(Icons.Default.Edit, null) },
                         text    = { Text("Rename") },
                         onClick = { menuOpen = false; onShowRenameDialog(node) },
                     )
                     DropdownMenuItem(
+                        leadingIcon = { Icon(Icons.Default.Code, null) },
                         text    = { Text("Copy Path") },
                         onClick = { menuOpen = false; onCopyPath(node.documentUri) },
                     )
@@ -608,10 +619,12 @@ private fun FileTreeRow(
                     )
                     HorizontalDivider()
                     DropdownMenuItem(
+                        leadingIcon = { Icon(Icons.Default.Code, null) },
                         text    = { Text("Copy") },
                         onClick = { menuOpen = false; onCopyNode(node) },
                     )
                     DropdownMenuItem(
+                        leadingIcon = { Icon(Icons.Default.Code, null) },
                         text    = { Text("Cut") },
                         onClick = { menuOpen = false; onCutNode(node) },
                     )
@@ -631,44 +644,53 @@ private fun FileTreeRow(
                     }
                     HorizontalDivider()
                     DropdownMenuItem(
+                        leadingIcon = { Icon(Icons.Default.Close, null, tint = LocalIdeColors.current.error) },
                         text    = { Text("Delete", color = LocalIdeColors.current.error) },
                         onClick = { menuOpen = false; onShowDeleteDialog(node) },
                     )
                     HorizontalDivider()
                     DropdownMenuItem(
+                        leadingIcon = { Icon(Icons.Default.CheckBox, null) },
                         text    = { Text("Select") },
                         onClick = { menuOpen = false; onSelect(node.documentUri) },
                     )
                 } else {
                     // ── File menu ────────────────────────────────────────
                     DropdownMenuItem(
+                        leadingIcon = { Icon(Icons.Default.Edit, null) },
                         text    = { Text("Rename") },
                         onClick = { menuOpen = false; onShowRenameDialog(node) },
                     )
                     DropdownMenuItem(
+                        leadingIcon = { Icon(Icons.Default.Code, null) },
                         text    = { Text("Duplicate") },
                         onClick = { menuOpen = false; onShowDuplicateDialog(node) },
                     )
                     DropdownMenuItem(
+                        leadingIcon = { Icon(Icons.Default.Code, null) },
                         text    = { Text("Copy Path") },
                         onClick = { menuOpen = false; onCopyPath(node.documentUri) },
                     )
                     HorizontalDivider()
                     DropdownMenuItem(
+                        leadingIcon = { Icon(Icons.Default.Code, null) },
                         text    = { Text("Copy") },
                         onClick = { menuOpen = false; onCopyNode(node) },
                     )
                     DropdownMenuItem(
+                        leadingIcon = { Icon(Icons.Default.Code, null) },
                         text    = { Text("Cut") },
                         onClick = { menuOpen = false; onCutNode(node) },
                     )
                     HorizontalDivider()
                     DropdownMenuItem(
+                        leadingIcon = { Icon(Icons.Default.Close, null, tint = LocalIdeColors.current.error) },
                         text    = { Text("Delete", color = LocalIdeColors.current.error) },
                         onClick = { menuOpen = false; onShowDeleteDialog(node) },
                     )
                     HorizontalDivider()
                     DropdownMenuItem(
+                        leadingIcon = { Icon(Icons.Default.CheckBox, null) },
                         text    = { Text("Select") },
                         onClick = { menuOpen = false; onSelect(node.documentUri) },
                     )

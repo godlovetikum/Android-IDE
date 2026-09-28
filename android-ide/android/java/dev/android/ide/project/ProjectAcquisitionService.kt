@@ -89,8 +89,84 @@ class ProjectAcquisitionService(
         val written = metadata.writeIdentity(identity)
         if (written.outcome != OperationOutcome.COMPLETE) {
             return cleanupCreatedRoot(rootUri, written.copy(
-                message = "The new project identity could not be written; no project was registered",
+                message = "The project identity could not be written; no project was registered",
             ))
+        }
+        val packageName = cleanName.lowercase().replace(Regex("[^a-z0-9-]"), "-")
+        val templates = listOf(
+            "package.json" to """{
+  "name": "$packageName",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": { "start": "node index.js" },
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
+}
+""",
+            "README.md" to """# $cleanName
+
+${description.trim().ifEmpty { "This project was created with Android IDE." }}
+
+## Attribution
+
+This project was created with [Android IDE](https://github.com/godlovetikum/Android-IDE).
+
+- **Author:** [godlovetikum](https://github.com/godlovetikum)
+- **Android IDE repository:** https://github.com/godlovetikum/Android-IDE
+
+## Getting started
+
+Install dependencies:
+
+```bash
+npm install
+```
+
+Start the project:
+
+```bash
+npm start
+```
+
+## Project
+
+The project entry point is `index.js`. Update this README with the purpose, setup requirements, and deployment instructions for the application as it evolves.
+""",
+            ".gitignore" to """node_modules/
+dist/
+build/
+.DS_Store
+""",
+        )
+        for ((fileName, content) in templates) {
+            val created = storage.createFileWithExactName(
+                rootUri,
+                fileName,
+                when (fileName) {
+                    "README.md" -> "text/markdown"
+                    "package.json" -> "application/json"
+                    else -> "text/plain"
+                },
+            )
+            val fileUri = (created as? ExactCreateResult.Created)?.documentUri
+                ?: return cleanupCreatedRoot(
+                    rootUri,
+                    blocked("The starter file $fileName could not be created; no project was registered", ErrorCategory.PERMISSION_LOST),
+                )
+            if (!storage.writeDocument(fileUri, content.toByteArray(Charsets.UTF_8))) {
+                return cleanupCreatedRoot(
+                    rootUri,
+                    blocked("The starter file $fileName could not be written; no project was registered", ErrorCategory.PERMISSION_LOST),
+                )
+            }
+            if (storage.readDocument(fileUri)?.toString(Charsets.UTF_8) != content) {
+                return cleanupCreatedRoot(
+                    rootUri,
+                    blocked("The starter file $fileName could not be verified; no project was registered", ErrorCategory.PERMISSION_LOST),
+                )
+            }
         }
         val verified = storage.inspectProjectStorage(identity.location)
         if (verified.state != CapabilityState.SUPPORTED) {
@@ -395,15 +471,17 @@ class ProjectAcquisitionService(
     ): dev.android.ide.contracts.MutationPreflight {
         registry.listRegistered().forEach { project ->
             val destinationInsideProject = storage.isSameOrDescendant(project.location.stableId, destinationParentUri)
-            val projectInsideDestination = storage.isSameOrDescendant(destinationParentUri, project.location.stableId)
-            if (destinationInsideProject == null || projectInsideDestination == null) {
+            if (destinationInsideProject == null) {
                 return dev.android.ide.contracts.MutationPreflight(
                     allowed = false,
                     message = "The selected destination cannot be verified against registered project ${project.name}",
                     errorCategory = ErrorCategory.PERMISSION_LOST,
                 )
             }
-            if (destinationInsideProject || projectInsideDestination) {
+            // The selected value is a parent folder. It may contain registered
+            // sibling projects; the final requested child name is checked by
+            // exact creation and registration containment after review.
+            if (destinationInsideProject) {
                 return dev.android.ide.contracts.MutationPreflight(
                     allowed = false,
                     message = "The selected destination overlaps registered project ${project.name}",

@@ -26,7 +26,7 @@ class RuntimeSessionStore(context: Context) {
                             id = item.getString("id"),
                             ownerScope = item.getString("ownerScope"),
                             backendId = item.optString("backendId").ifBlank { null },
-                            name = item.optString("name", "Terminal").ifBlank { "Terminal" },
+                            name = item.optString("name", "Untitled session").ifBlank { "Untitled session" },
                             workingDirectory = item.optString("workingDirectory").ifBlank { null },
                             createdAt = Instant.parse(item.getString("createdAt")),
                             availability = SessionAvailability.valueOf(item.getString("availability")),
@@ -61,6 +61,23 @@ class RuntimeSessionStore(context: Context) {
 
     fun remove(sessionId: String): Boolean =
         writeAll(readAll().filterNot { it.id == sessionId })
+
+    /** Preserve descriptors for recovery, but never claim a stored PTY is still live. */
+    fun markAvailableUnavailable(reason: String): List<SessionDescriptor> {
+        val current = readAll()
+        val updated = current.map { session ->
+            if (session.availability == SessionAvailability.AVAILABLE) {
+                session.copy(availability = SessionAvailability.UNAVAILABLE, terminationReason = reason)
+            } else {
+                session
+            }
+        }
+        if (updated != current) writeAll(updated)
+        return updated
+    }
+
+    /** Explicit application shutdown is the only boundary that discards descriptors. */
+    fun clear(): Boolean = writeAll(emptyList())
 
     private companion object {
         const val SCOPE = "terminal"

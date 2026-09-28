@@ -10,6 +10,8 @@ import android.os.IBinder
 
 /** Visible lifecycle boundary for long-running terminal work. */
 class TerminalForegroundService : Service() {
+    private val sessionStore by lazy { RuntimeSessionStore(applicationContext) }
+
     override fun onCreate() {
         super.onCreate()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -20,7 +22,14 @@ class TerminalForegroundService : Service() {
         startForeground(NOTIFICATION_ID, notification())
     }
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_NOT_STICKY
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
+
+    override fun onDestroy() {
+        // A service/process stop is not an explicit user close. Keep descriptors
+        // so the next launch can show sessions as unavailable/recoverable.
+        sessionStore.markAvailableUnavailable("The terminal service stopped; this session is unavailable")
+        super.onDestroy()
+    }
 
     override fun onBind(intent: Intent?): IBinder? = null
 

@@ -36,7 +36,8 @@ sealed class FileOpDialog {
 
     /**
      * Duplicate dialog for [node].
-     * Pre-fills the name field with "copy_<displayName>". [errorMessage] is shown inline when non-null.
+     * The UI pre-fills the name field with a user-facing "Copy of <displayName>" suggestion.
+     * [errorMessage] is shown inline when non-null.
      */
     data class Duplicate(val node: FileNode, val errorMessage: String? = null, val isSubmitting: Boolean = false) : FileOpDialog()
 
@@ -48,6 +49,16 @@ sealed class FileOpDialog {
      * unsaved changes. Options: Save and close, Discard and close, Cancel.
      */
     data class UnsavedClose(val tabId: String, val displayName: String) : FileOpDialog()
+
+    /** Preview/confirmation and progress state for a project-wide replacement. */
+    data class ReplaceAll(
+        val find: String,
+        val replacement: String,
+        val files: Int,
+        val matches: Int,
+        val isSubmitting: Boolean = false,
+        val resultMessage: String? = null,
+    ) : FileOpDialog()
 
     /**
      * for saving the active file's content.  The [suggestedName] pre-fills the

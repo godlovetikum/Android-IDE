@@ -109,7 +109,7 @@ data class SessionDescriptor(
     val id: String,
     val ownerScope: String,
     val backendId: String? = null,
-    val name: String = "Terminal",
+    val name: String = "Untitled session",
     val workingDirectory: String? = null,
     val createdAt: Instant,
     val availability: SessionAvailability,
@@ -248,8 +248,9 @@ interface TerminalRuntimeAdapter {
     /** Per-project terminal suitability; failure never affects project registration or editor access. */
     suspend fun inspectProjectAccess(project: ProjectIdentity): TerminalProjectAccess
     suspend fun workingDirectory(project: ProjectIdentity): String?
-    suspend fun createSession(workingDirectory: String?, name: String = "Terminal"): SessionDescriptor
+    suspend fun createSession(workingDirectory: String?, name: String = ""): SessionDescriptor
     suspend fun listSessions(): List<SessionDescriptor>
+    suspend fun renameSession(sessionId: String, name: String): OperationReport
     suspend fun capabilities(): RuntimeCapabilities
     suspend fun sendInput(sessionId: String, input: ByteArray): OperationReport
     suspend fun readOutput(sessionId: String): ByteArray?

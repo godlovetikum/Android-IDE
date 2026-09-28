@@ -13,6 +13,7 @@
  *   { type: "executeCommand",   command }
  *   { type: "insertText",       text }
  *   { type: "setEditorOptions", tabSize?, wordWrap?, lineNumbers?, fontSize? }
+ *   { type: "selectMatch", line, column, length }
  *   { type: "showFind" }
  *   { type: "showReplace" }
  *
@@ -22,7 +23,7 @@
  *   { type: "cursorMoved",    line, column }
  *   { type: "fileSaved",      path }
  *
- * Monaco version: 0.52.0 (bundled — see scripts/fetch-monaco.sh).
+ * Monaco version: 0.55.1 (bundled — see scripts/fetch-monaco.sh).
  * The require.config paths entry "vs" resolves to the local vs/ directory.
  * No network requests are made at runtime.
  *
@@ -495,6 +496,27 @@ window.androidIDE = {
         if (editor && msg.line != null && msg.column != null) {
           editor.setPosition({ lineNumber: msg.line, column: msg.column });
           editor.revealPositionInCenter({ lineNumber: msg.line, column: msg.column });
+        }
+        break;
+
+      case 'selectMatch':
+        if (editor) {
+          var matchModel = editor.getModel();
+          if (!matchModel) break;
+          var matchLine = Number(msg.line);
+          var matchColumn = Number(msg.column);
+          var matchLength = Number(msg.length);
+          if (!isFinite(matchLine) || matchLine < 1) matchLine = 1;
+          if (!isFinite(matchColumn) || matchColumn < 1) matchColumn = 1;
+          if (!isFinite(matchLength) || matchLength < 0) matchLength = 0;
+          matchLine = Math.min(Math.floor(matchLine), matchModel.getLineCount());
+          var maxColumn = matchModel.getLineMaxColumn(matchLine);
+          matchColumn = Math.min(Math.floor(matchColumn), maxColumn);
+          var matchEndColumn = Math.min(matchColumn + Math.floor(matchLength), maxColumn);
+          var matchRange = new monaco.Range(matchLine, matchColumn, matchLine, matchEndColumn);
+          editor.setSelection(matchRange);
+          editor.revealRangeInCenter(matchRange);
+          editor.focus();
         }
         break;
 

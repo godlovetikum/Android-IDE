@@ -75,6 +75,7 @@ import dev.android.ide.ui.theme.LocalIdeColors
 import dev.android.ide.viewmodel.IdeViewModel
 import dev.android.ide.viewmodel.model.EditorTab
 import dev.android.ide.viewmodel.model.FileNode
+import dev.android.ide.viewmodel.model.FileSearchResult
 import dev.android.ide.viewmodel.model.FileOpDialog
 import dev.android.ide.viewmodel.model.IdeUiState
 import dev.android.ide.viewmodel.model.findNode
@@ -96,20 +97,6 @@ fun EditorSurface(
     modifier: Modifier = Modifier,
 ) {
     val state by ideViewModel.uiState.collectAsState()
-    val isWide = LocalConfiguration.current.screenWidthDp >= 600
-    val focusManager = LocalFocusManager.current
-    val keyboardController = LocalSoftwareKeyboardController.current
-    var panelVisible by rememberSaveable { mutableStateOf(true) }
-    var contentPanel by rememberSaveable { mutableStateOf(EditorPanel.FILES) }
-    var importTargetUri by remember { mutableStateOf<String?>(null) }
-    val rootNode = remember(state.projectRootUri, state.projectName) {
-        state.projectRootUri?.let { FileNode(it, state.projectName, DIRECTORY_MIME) }
-    }
-    val importFiles = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
-        val target = importTargetUri
-        if (target != null && uris.isNotEmpty()) ideViewModel.importFiles(target, uris.map(Uri::toString))
-        importTargetUri = null
-    }
     val exportZip = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
         val dialog = state.fileOpDialog as? FileOpDialog.Export
         if (uri != null && dialog != null) ideViewModel.exportDirectory(dialog.node, uri.toString())
@@ -119,21 +106,6 @@ fun EditorSurface(
     LaunchedEffect(project?.id, project?.location?.stableId) {
         project?.location?.stableId?.let(ideViewModel::openProject)
     }
-
-    LaunchedEffect(state.isSearchVisible, state.isContentSearchVisible) {
-        if (state.isSearchVisible || state.isContentSearchVisible) panelVisible = true
-    }
-    LaunchedEffect(editorPanelRequest) {
-        if (editorPanelRequest > 0L) panelVisible = true
-    }
-    LaunchedEffect(panelVisible) {
-        if (panelVisible) {
-            keyboardController?.hide()
-            focusManager.clearFocus(force = true)
-        }
-    }
-
-    BackHandler(enabled = panelVisible && !isWide) { panelVisible = false }
 
     if (state.projectRootUri == null && !shellState.restoring) {
         EditorEmptyState(
@@ -145,50 +117,16 @@ fun EditorSurface(
         return
     }
 
-    Row(modifier.fillMaxSize().background(LocalIdeColors.current.background)) {
-        if (panelVisible) {
-            EditorSidebar(
-                state = state,
-                contentPanel = contentPanel,
-                onPanelSelected = { contentPanel = it },
-                onFileSelected = { uri -> ideViewModel.openFile(uri); if (!isWide) panelVisible = false },
-                onToggleDirectory = ideViewModel::toggleDirectory,
-                onRefresh = ideViewModel::refreshProject,
-                onLocate = ideViewModel::revealActiveFile,
-                onSearchFiles = ideViewModel::showFileSearch,
-                onSearchContent = { contentPanel = EditorPanel.CONTENT_SEARCH; ideViewModel.showContentSearch() },
-                onHideFileSearch = ideViewModel::hideFileSearch,
-                onHideContentSearch = ideViewModel::hideContentSearch,
-                onImport = { uri -> importTargetUri = uri; importFiles.launch(arrayOf("*/*")) },
-                onExportProject = { shellState.selectedProjectId?.let(onExportProject) },
-                onShowDetails = { shellState.selectedProjectId?.let(shellViewModel::showProjectDetails) },
-                onDeleteProject = shellViewModel::permanentlyDeleteSelectedProject,
-                onRemoveProject = shellViewModel::removeSelectedProject,
-                onOpenSettings = onOpenSettings,
-                onFeedback = onFeedback,
-                rootNode = rootNode,
-                ideViewModel = ideViewModel,
-                modifier = Modifier.widthIn(max = if (isWide) 360.dp else 390.dp).fillMaxHeight(),
-            )
-            if (isWide) HorizontalDivider(Modifier.width(1.dp).fillMaxHeight())
-        }
-        EditorWorkspace(
-            state = state,
-            ideViewModel = ideViewModel,
-            fileTree = state.fileTree,
-            onOpenGlobalNavigation = onOpenGlobalNavigation,
-            onOpenSettings = onOpenSettings,
-            onTogglePanel = {
-                if (!panelVisible) {
-                    keyboardController?.hide()
-                    focusManager.clearFocus(force = true)
-                }
-                panelVisible = !panelVisible
-            },
-            onFeedback = onFeedback,
-            modifier = Modifier.weight(1f).fillMaxHeight(),
-        )
-    }
+    EditorWorkspace(
+        state = state,
+        ideViewModel = ideViewModel,
+        fileTree = state.fileTree,
+        onOpenGlobalNavigation = onOpenGlobalNavigation,
+        onOpenSettings = onOpenSettings,
+        onTogglePanel = onOpenGlobalNavigation,
+        onFeedback = onFeedback,
+        modifier = modifier.fillMaxSize().background(LocalIdeColors.current.background),
+    )
     if (state.fileMutationLoading) {
         Box(
             Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.28f)).clickable { },
@@ -209,14 +147,15 @@ fun EditorSurface(
     EditorDialogHost(state, ideViewModel, onChooseExportDestination = { dialog -> exportZip.launch("${dialog.node.displayName}.zip") })
 }
 
-private enum class EditorPanel { FILES, FILENAME_SEARCH, CONTENT_SEARCH }
+enum class EditorPanel { FILES, FILENAME_SEARCH, CONTENT_SEARCH }
 
 @Composable
-private fun EditorSidebar(
+fun EditorSidebar(
     state: IdeUiState,
     contentPanel: EditorPanel,
     onPanelSelected: (EditorPanel) -> Unit,
     onFileSelected: (String) -> Unit,
+    onSearchResultSelected: (FileSearchResult) -> Unit,
     onToggleDirectory: (String) -> Unit,
     onRefresh: () -> Unit,
     onLocate: () -> Unit,
@@ -225,6 +164,7 @@ private fun EditorSidebar(
     onHideFileSearch: () -> Unit,
     onHideContentSearch: () -> Unit,
     onImport: (String) -> Unit,
+    onExportDirectory: (FileNode) -> Unit,
     onExportProject: () -> Unit,
     onShowDetails: () -> Unit,
     onDeleteProject: () -> Unit,
@@ -244,7 +184,15 @@ private fun EditorSidebar(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text("Files", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(end = 6.dp))
-            IconButton(onClick = { onPanelSelected(EditorPanel.FILENAME_SEARCH); onSearchFiles() }) { Icon(Icons.Default.Search, "Find files") }
+            IconButton(onClick = {
+                if (state.isSearchVisible) {
+                    onHideFileSearch()
+                    onPanelSelected(EditorPanel.FILES)
+                } else {
+                    onPanelSelected(EditorPanel.FILENAME_SEARCH)
+                    onSearchFiles()
+                }
+            }) { Icon(Icons.Default.Search, if (state.isSearchVisible) "Hide filename search" else "Find files") }
             IconButton(onClick = onLocate) { Icon(Icons.Default.MyLocation, "Locate current file") }
             IconButton(onClick = { ideViewModel.showCreateFileDialog(root) }) { Icon(Icons.Default.Description, "New file") }
             IconButton(onClick = { ideViewModel.showCreateFolderDialog(root) }) { Icon(Icons.Default.CreateNewFolder, "New folder") }
@@ -291,7 +239,7 @@ private fun EditorSidebar(
                 onCutNode = ideViewModel::cutFileNode,
                 onPasteInto = ideViewModel::pasteFileNode,
                 onImportFilesAt = { onImport(it.documentUri) },
-                onExportDirectory = ideViewModel::exportDirectory,
+                onExportDirectory = onExportDirectory,
                 onNewFileAtRoot = { ideViewModel.showCreateFileDialog(root) },
                 onNewFolderAtRoot = { ideViewModel.showCreateFolderDialog(root) },
                 onImportFilesAtRoot = { onImport(root.documentUri) },
@@ -309,7 +257,7 @@ private fun EditorSidebar(
                 onReplaceProjectContents = ideViewModel::replaceProjectContents,
                 onHideFileSearch = onHideFileSearch,
                 onHideContentSearch = onHideContentSearch,
-                onSearchFileSelect = onFileSelected,
+                onSearchFileSelect = { result -> onFileSelected(result.documentUri) },
                 modifier = Modifier.weight(1f),
             )
             EditorPanel.FILENAME_SEARCH -> FileTreePanel(
@@ -321,12 +269,12 @@ private fun EditorSidebar(
                 contentSearchQuery = state.contentSearchQuery, contentSearchResults = state.contentSearchResults, onFileClick = onFileSelected, onFileDoubleClick = ideViewModel::openFilePermanent,
                 onDirToggle = onToggleDirectory, onShowRenameDialog = ideViewModel::showRenameDialog, onShowDeleteDialog = ideViewModel::showDeleteDialog,
                 onShowCreateFileDialog = ideViewModel::showCreateFileDialog, onShowCreateFolderDialog = ideViewModel::showCreateFolderDialog, onShowDuplicateDialog = ideViewModel::showDuplicateDialog,
-                onCopyNode = ideViewModel::copyFileNode, onCutNode = ideViewModel::cutFileNode, onPasteInto = ideViewModel::pasteFileNode, onImportFilesAt = { onImport(it.documentUri) }, onExportDirectory = ideViewModel::exportDirectory,
+                onCopyNode = ideViewModel::copyFileNode, onCutNode = ideViewModel::cutFileNode, onPasteInto = ideViewModel::pasteFileNode, onImportFilesAt = { onImport(it.documentUri) }, onExportDirectory = onExportDirectory,
                 onNewFileAtRoot = { ideViewModel.showCreateFileDialog(root) }, onNewFolderAtRoot = { ideViewModel.showCreateFolderDialog(root) }, onImportFilesAtRoot = { onImport(root.documentUri) }, onExportProject = onExportProject,
                 onRefresh = onRefresh, onShowProjectDetails = onShowDetails, onDeleteProject = onDeleteProject, onRemoveProject = onRemoveProject, onPasteAtRoot = { ideViewModel.pasteFileNode(root) }, onCopyPath = ideViewModel::copyPathToClipboard,
                 onToggleNodeSelection = ideViewModel::toggleNodeSelection, onExitSelectionMode = ideViewModel::exitSelectionMode, onSearchQueryChange = ideViewModel::searchFiles, onContentSearchQueryChange = ideViewModel::searchProjectContents,
                 onReplaceProjectContents = ideViewModel::replaceProjectContents,
-                onHideFileSearch = { onHideFileSearch(); onPanelSelected(EditorPanel.FILES) }, onHideContentSearch = onHideContentSearch, onSearchFileSelect = onFileSelected, modifier = Modifier.weight(1f),
+                onHideFileSearch = { onHideFileSearch(); onPanelSelected(EditorPanel.FILES) }, onHideContentSearch = onHideContentSearch, onSearchFileSelect = { result -> onFileSelected(result.documentUri) }, modifier = Modifier.weight(1f),
             )
             EditorPanel.CONTENT_SEARCH -> FileTreePanel(
                 nodes = state.fileTree, clipboardItems = state.clipboardItems, clipboardIsCut = state.clipboardIsCut,
@@ -337,12 +285,12 @@ private fun EditorSidebar(
                 contentSearchQuery = state.contentSearchQuery, contentSearchResults = state.contentSearchResults, onFileClick = onFileSelected, onFileDoubleClick = ideViewModel::openFilePermanent,
                 onDirToggle = onToggleDirectory, onShowRenameDialog = ideViewModel::showRenameDialog, onShowDeleteDialog = ideViewModel::showDeleteDialog,
                 onShowCreateFileDialog = ideViewModel::showCreateFileDialog, onShowCreateFolderDialog = ideViewModel::showCreateFolderDialog, onShowDuplicateDialog = ideViewModel::showDuplicateDialog,
-                onCopyNode = ideViewModel::copyFileNode, onCutNode = ideViewModel::cutFileNode, onPasteInto = ideViewModel::pasteFileNode, onImportFilesAt = { onImport(it.documentUri) }, onExportDirectory = ideViewModel::exportDirectory,
+                onCopyNode = ideViewModel::copyFileNode, onCutNode = ideViewModel::cutFileNode, onPasteInto = ideViewModel::pasteFileNode, onImportFilesAt = { onImport(it.documentUri) }, onExportDirectory = onExportDirectory,
                 onNewFileAtRoot = { ideViewModel.showCreateFileDialog(root) }, onNewFolderAtRoot = { ideViewModel.showCreateFolderDialog(root) }, onImportFilesAtRoot = { onImport(root.documentUri) }, onExportProject = onExportProject,
                 onRefresh = onRefresh, onShowProjectDetails = onShowDetails, onDeleteProject = onDeleteProject, onRemoveProject = onRemoveProject, onPasteAtRoot = { ideViewModel.pasteFileNode(root) }, onCopyPath = ideViewModel::copyPathToClipboard,
                 onToggleNodeSelection = ideViewModel::toggleNodeSelection, onExitSelectionMode = ideViewModel::exitSelectionMode, onSearchQueryChange = ideViewModel::searchFiles, onContentSearchQueryChange = ideViewModel::searchProjectContents,
                 onReplaceProjectContents = ideViewModel::replaceProjectContents,
-                onHideFileSearch = onHideFileSearch, onHideContentSearch = { onHideContentSearch(); onPanelSelected(EditorPanel.FILES) }, onSearchFileSelect = onFileSelected, modifier = Modifier.weight(1f),
+                onHideFileSearch = onHideFileSearch, onHideContentSearch = { onHideContentSearch(); onPanelSelected(EditorPanel.FILES) }, onSearchFileSelect = onSearchResultSelected, modifier = Modifier.weight(1f),
             )
         }
     }
@@ -374,13 +322,32 @@ private fun EditorWorkspace(
         EditorTopBar(
             state = state, activeTab = activeTab, fileTree = fileTree,
             onOpenGlobalNavigation = onOpenGlobalNavigation, onTogglePanel = onTogglePanel,
-            onFind = ideViewModel::showEditorFind,
+            onFind = {
+                ideViewModel.showEditorFind()
+                ideViewModel.sendEditorCommand(EditorOutbound.ShowFind)
+            },
             onSave = ideViewModel::saveActiveFile,
             onMore = { moreOpen = true },
             onOpenFile = ideViewModel::openFile,
             onFeedback = onFeedback,
             onOpenSettings = onOpenSettings,
         )
+        if (state.isEditorSearchVisible) {
+            Row(
+                Modifier.fillMaxWidth().background(colors.surface).padding(horizontal = 8.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("Find", style = MaterialTheme.typography.labelMedium, color = colors.textSecondary)
+                TextButton(onClick = { ideViewModel.sendEditorCommand(EditorOutbound.ShowReplace) }) {
+                    Text("Replace")
+                }
+                Spacer(Modifier.weight(1f))
+                TextButton(onClick = {
+                    ideViewModel.sendEditorCommand(EditorOutbound.CloseSearch)
+                    ideViewModel.dismissEditorSearch()
+                }) { Text("Close") }
+            }
+        }
         if (state.openTabs.isNotEmpty()) {
             EditorTabBar(
                 tabs = state.openTabs, onTabSelected = ideViewModel::selectTab, onTabCloseSafe = ideViewModel::closeTabSafe,
@@ -487,11 +454,11 @@ private fun EditorDialogHost(state: IdeUiState, ideViewModel: IdeViewModel, onCh
             AlertDialog(onDismissRequest = { if (!dialog.isSubmitting) ideViewModel.dismissFileOpDialog() }, title = { Text("Delete ${dialog.node.displayName}?") }, text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { Text("Project path: $path") ; Text("This permanently removes the selected item and its contents. This action cannot be undone.") ; dialog.errorMessage?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }; if (dialog.isSubmitting) Row(verticalAlignment = Alignment.CenterVertically) { CircularProgressIndicator(Modifier.padding(end = 8.dp), strokeWidth = 2.dp); Text("Deleting…") } } }, confirmButton = { TextButton(onClick = { ideViewModel.deleteNode(dialog.node, dialog.selectedNodes) }, enabled = !dialog.isSubmitting) { Text(if (dialog.isSubmitting) "Deleting…" else if (dialog.errorMessage != null) "Retry delete" else "Delete") } }, dismissButton = { TextButton(onClick = ideViewModel::dismissFileOpDialog, enabled = !dialog.isSubmitting) { Text(if (dialog.isSubmitting) "Please wait" else "Cancel") } })
         }
         is FileOpDialog.UnsavedClose -> AlertDialog(onDismissRequest = ideViewModel::dismissFileOpDialog, title = { Text("Unsaved changes") }, text = { Text("${dialog.displayName} has unsaved changes. Choose how to close it.") }, confirmButton = { TextButton(onClick = { ideViewModel.saveAndCloseTab(dialog.tabId) }) { Text("Save and close") } }, dismissButton = { Row { TextButton(onClick = { ideViewModel.confirmCloseTab(dialog.tabId) }) { Text("Discard") }; TextButton(onClick = ideViewModel::dismissFileOpDialog) { Text("Cancel") } } })
-        is FileOpDialog.Rename -> EditorTextDialog("Rename ${dialog.node.displayName}", "New name or project-relative path", dialog.node.displayName, dialog.errorMessage, ideViewModel::dismissFileOpDialog, dialog.isSubmitting) { ideViewModel.renameNode(dialog.node, it) }
-        is FileOpDialog.Duplicate -> EditorTextDialog("Duplicate ${dialog.node.displayName}", "New name", "copy_${dialog.node.displayName}", dialog.errorMessage, ideViewModel::dismissFileOpDialog, dialog.isSubmitting) { ideViewModel.duplicateFile(dialog.node, it) }
+        is FileOpDialog.Rename -> EditorTextDialog("Rename ${dialog.node.displayName}", "New name or path", dialog.node.displayName, dialog.errorMessage, ideViewModel::dismissFileOpDialog, dialog.isSubmitting) { ideViewModel.renameNode(dialog.node, it) }
+        is FileOpDialog.Duplicate -> EditorTextDialog("Duplicate ${dialog.node.displayName}", "New name or path", "Copy of ${dialog.node.displayName}", dialog.errorMessage, ideViewModel::dismissFileOpDialog, dialog.isSubmitting) { ideViewModel.duplicateFile(dialog.node, it) }
         is FileOpDialog.Export -> AlertDialog(onDismissRequest = { if (!dialog.isSubmitting) ideViewModel.dismissFileOpDialog() }, title = { Text("Export ${dialog.node.displayName}") }, text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { Text("The selected ${if (dialog.node.isDirectory) "folder" else "file"} will be exported as a ZIP without changing the source.") ; dialog.resultMessage?.let { Text(it, color = if (dialog.failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary) }; if (dialog.isSubmitting) Row(verticalAlignment = Alignment.CenterVertically) { CircularProgressIndicator(Modifier.padding(end = 8.dp), strokeWidth = 2.dp); Text("Exporting…") } } }, confirmButton = { Button(onClick = { onChooseExportDestination(dialog) }, enabled = !dialog.isSubmitting) { Text(if (dialog.failed) "Retry export" else "Choose export location") } }, dismissButton = { TextButton(onClick = ideViewModel::dismissFileOpDialog, enabled = !dialog.isSubmitting) { Text(if (dialog.isSubmitting) "Please wait" else "Cancel") } })
-        is FileOpDialog.CreateFile -> EditorTextDialog("Create file", "File name or relative path", "", dialog.errorMessage, ideViewModel::dismissFileOpDialog, dialog.isSubmitting) { ideViewModel.createFileInDirectory(dialog.parentNode, it) }
-        is FileOpDialog.CreateFolder -> EditorTextDialog("Create folder", "Folder name or relative path", "", dialog.errorMessage, ideViewModel::dismissFileOpDialog, dialog.isSubmitting) { ideViewModel.createFolderInDirectory(dialog.parentNode, it) }
+        is FileOpDialog.CreateFile -> EditorTextDialog("Create file", "File path", "", dialog.errorMessage, ideViewModel::dismissFileOpDialog, dialog.isSubmitting) { ideViewModel.createFileInDirectory(dialog.parentNode, it) }
+        is FileOpDialog.CreateFolder -> EditorTextDialog("Create folder", "Folder path", "", dialog.errorMessage, ideViewModel::dismissFileOpDialog, dialog.isSubmitting) { ideViewModel.createFolderInDirectory(dialog.parentNode, it) }
         is FileOpDialog.SaveAs -> EditorTextDialog("Save As", "Project-relative path", dialog.suggestedName, null, ideViewModel::dismissFileOpDialog) { ideViewModel.saveAsAtPath(it) }
         null -> Unit
     }
@@ -503,7 +470,7 @@ private fun EditorTextDialog(title: String, label: String, initial: String, erro
     AlertDialog(
         onDismissRequest = { if (!submitting) onDismiss() },
         title = { Text(title) },
-        text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { Text("Input", style = MaterialTheme.typography.labelMedium); OutlinedTextField(value, { value = it }, label = { Text(label) }, enabled = !submitting, singleLine = true); if (error != null) Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall); if (submitting) Row(verticalAlignment = Alignment.CenterVertically) { CircularProgressIndicator(Modifier.padding(end = 8.dp), strokeWidth = 2.dp); Text("Working…") } } },
+        text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { OutlinedTextField(value, { value = it }, label = { Text(label) }, supportingText = { Text("Relative to the selected project folder, or an absolute path inside it.") }, enabled = !submitting, singleLine = true); if (error != null) Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall); if (submitting) Row(verticalAlignment = Alignment.CenterVertically) { CircularProgressIndicator(Modifier.padding(end = 8.dp), strokeWidth = 2.dp); Text("Working…") } } },
         confirmButton = { Button(onClick = { if (value.isNotBlank()) onConfirm(value.trim()) }, enabled = value.isNotBlank() && !submitting) { Text(if (submitting) "Working…" else "Confirm") } },
         dismissButton = { TextButton(onClick = onDismiss, enabled = !submitting) { Text("Cancel") } },
     )

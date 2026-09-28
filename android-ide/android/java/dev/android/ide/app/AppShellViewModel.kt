@@ -3,6 +3,8 @@
 package dev.android.ide.app
 
 import android.app.Application
+import android.content.ClipData
+import android.content.ClipboardManager
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dev.android.ide.data.ProjectRepository
@@ -133,15 +135,15 @@ class AppShellViewModel(application: Application) : AndroidViewModel(application
             _state.update {
                 it.copy(
                     terminalSessions = sessions,
-                    selectedTerminalSessionId = it.selectedTerminalSessionId?.takeIf { id -> sessions.any { session -> session.id == id } }
-                        ?: sessions.firstOrNull()?.id,
+                    selectedTerminalSessionId = it.selectedTerminalSessionId?.takeIf { id -> sessions.any { session -> session.id == id && session.availability == SessionAvailability.AVAILABLE } }
+                        ?: sessions.firstOrNull { session -> session.availability == SessionAvailability.AVAILABLE }?.id,
                     runtimeCapabilities = terminalRuntime.capabilities(),
                 )
             }
         }
     }
 
-    fun createTerminalSession(workingDirectory: String? = null, name: String = "Terminal") {
+    fun createTerminalSession(workingDirectory: String? = null, name: String = "") {
         viewModelScope.launch {
             val selected = _state.value.selectedProjectId
             val project = _state.value.projects.firstOrNull { it.id == selected }
@@ -152,9 +154,15 @@ class AppShellViewModel(application: Application) : AndroidViewModel(application
             }
             val session = terminalRuntime.createSession(
                 workingDirectory ?: project?.let { terminalRuntime.workingDirectory(it) },
-                name.trim().ifBlank { "Terminal" },
+                name.trim().ifBlank { "Untitled session" },
             )
-            _state.update { it.copy(selectedTerminalSessionId = session.id, terminalFeedback = null) }
+            val locationNotice = access?.explanation?.let { explanation ->
+                OperationReport(
+                    dev.android.ide.contracts.OperationOutcome.COMPLETE,
+                    "Terminal opened in its command-line home workspace instead of the project folder. $explanation",
+                )
+            }
+            _state.update { it.copy(selectedTerminalSessionId = session.id, terminalFeedback = locationNotice) }
             refreshTerminalSessions()
         }
     }
@@ -196,6 +204,8 @@ class AppShellViewModel(application: Application) : AndroidViewModel(application
     fun unbindTerminalView(sessionId: String) = terminalRuntime.unbindTerminalView(sessionId)
 
     fun selectTerminalSession(sessionId: String) {
+        val session = _state.value.terminalSessions.firstOrNull { it.id == sessionId } ?: return
+        if (session.availability != SessionAvailability.AVAILABLE) return
         _state.update { it.copy(selectedTerminalSessionId = sessionId, terminalOutput = terminalRuntime.outputSnapshot(sessionId)) }
     }
 
@@ -231,6 +241,14 @@ class AppShellViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
+    fun renameTerminalSession(sessionId: String, name: String) {
+        viewModelScope.launch {
+            val report = terminalRuntime.renameSession(sessionId, name)
+            _state.update { it.copy(terminalFeedback = report) }
+            if (report.outcome == dev.android.ide.contracts.OperationOutcome.COMPLETE) refreshTerminalSessions()
+        }
+    }
+
     fun closeAllTerminalSessions() {
         viewModelScope.launch {
             _state.update { it.copy(terminalFeedback = terminalRuntime.closeAllSessions()) }
@@ -239,12 +257,36 @@ class AppShellViewModel(application: Application) : AndroidViewModel(application
     }
 
     override fun onCleared() {
-        terminalRuntime.shutdown()
         super.onCleared()
     }
 
     fun reportStatus(message: String) {
         _state.update { it.copy(statusMessage = message, operationReport = null) }
+    }
+
+    fun copyProjectRemoteUrls(projectId: String) {
+        viewModelScope.launch {
+            _state.update { it.copy(detailsLoading = true, statusMessage = null) }
+            when (val result = detailsService.load(projectId)) {
+                is ProjectDetailsResult.Loaded -> {
+                    val remotes = result.details.git?.remotes.orEmpty()
+                    val clipboard = getApplication<Application>().getSystemService(ClipboardManager::class.java)
+                    if (remotes.isEmpty()) {
+                        reportStatus("No Git remote URLs are configured for this project")
+                    } else if (clipboard == null) {
+                        reportStatus("The system clipboard is unavailable")
+                    } else {
+                        val text = remotes.joinToString("\n") { remote ->
+                            "${remote.name}\t${remote.url.substringBefore('?').substringBefore('#')}"
+                        }
+                        clipboard.setPrimaryClip(ClipData.newPlainText("Git remote URLs", text))
+                        reportStatus("Copied ${remotes.size} Git remote URL(s)")
+                    }
+                }
+                is ProjectDetailsResult.Unavailable -> reportStatus(result.reason)
+            }
+            _state.update { it.copy(detailsLoading = false) }
+        }
     }
 
     fun clearOperationFeedback() {
@@ -392,6 +434,7 @@ class AppShellViewModel(application: Application) : AndroidViewModel(application
 
     fun exit(onComplete: () -> Unit) {
         viewModelScope.launch {
+            terminalRuntime.shutdown()
             lifecycle.onExplicitExit()
             onComplete()
         }
@@ -498,7 +541,14 @@ class AppShellViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch {
             _state.update { it.copy(operationInProgress = true, statusMessage = null, operationReport = null) }
             val report = acquisition.createBlankProject(destinationParentUri, name, description)
-            _state.update { it.copy(operationInProgress = false, statusMessage = report.message, operationReport = report) }
+            _state.update {
+                it.copy(
+                    operationInProgress = false,
+                    statusMessage = report.message,
+                    operationReport = report,
+                    acquiredProjectId = report.affectedIds.firstOrNull().takeIf { report.outcome == dev.android.ide.contracts.OperationOutcome.COMPLETE },
+                )
+            }
             refreshProjects()
         }
     }
@@ -507,7 +557,14 @@ class AppShellViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch {
             _state.update { it.copy(operationInProgress = true, statusMessage = null, operationReport = null) }
             val report = acquisition.importExistingFolder(projectRootUri, name, description)
-            _state.update { it.copy(operationInProgress = false, statusMessage = report.message, operationReport = report, acquiredProjectId = report.affectedIds.firstOrNull()) }
+            _state.update {
+                it.copy(
+                    operationInProgress = false,
+                    statusMessage = report.message,
+                    operationReport = report,
+                    acquiredProjectId = report.affectedIds.firstOrNull().takeIf { report.outcome == dev.android.ide.contracts.OperationOutcome.COMPLETE },
+                )
+            }
             refreshProjects()
         }
     }
@@ -525,7 +582,14 @@ class AppShellViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch {
             _state.update { it.copy(operationInProgress = true, statusMessage = null, operationReport = null) }
             val report = acquisition.importZip(archiveUri, destinationParentUri, name, description)
-            _state.update { it.copy(operationInProgress = false, statusMessage = report.message, operationReport = report) }
+            _state.update {
+                it.copy(
+                    operationInProgress = false,
+                    statusMessage = report.message,
+                    operationReport = report,
+                    acquiredProjectId = report.affectedIds.firstOrNull().takeIf { report.outcome == dev.android.ide.contracts.OperationOutcome.COMPLETE },
+                )
+            }
             refreshProjects()
         }
     }
