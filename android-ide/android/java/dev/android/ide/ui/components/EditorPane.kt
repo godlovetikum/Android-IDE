@@ -31,11 +31,11 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
-import androidx.compose.foundation.pointerInput
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
@@ -278,6 +278,7 @@ fun EditorPane(
         if (isEditorReady) editorBridge.send(editorWebView, EditorOutbound.ForceLayout)
     }
 
+    Column(modifier = modifier.fillMaxSize()) {
         editorView(Modifier.weight(1f).fillMaxWidth())
 
         // Symbol shortcut bar — shown above keyboard toolbar when a tab is active
@@ -555,18 +556,21 @@ private fun ToolbarIconButton(
                 }
                 .pointerInput(enabled, repeatable, commandId) {
                     if (!enabled || !repeatable) return@pointerInput
-                    awaitPointerEventScope {
-                        while (true) {
-                            awaitFirstDown(requireUnconsumed = false)
-                            val repeatJob = launch {
-                                delay(ViewConfiguration.getLongPressTimeout().toLong())
-                                while (true) {
-                                    performAction()
-                                    delay(70L)
+                    kotlinx.coroutines.coroutineScope {
+                        val gestureScope = this
+                        awaitPointerEventScope {
+                            while (true) {
+                                awaitFirstDown(requireUnconsumed = false)
+                                val repeatJob = gestureScope.launch {
+                                    delay(ViewConfiguration.getLongPressTimeout().toLong())
+                                    while (true) {
+                                        performAction()
+                                        delay(70L)
+                                    }
                                 }
+                                waitForUpOrCancellation()
+                                repeatJob.cancel()
                             }
-                            waitForUpOrCancellation()
-                            repeatJob.cancel()
                         }
                     }
                 },

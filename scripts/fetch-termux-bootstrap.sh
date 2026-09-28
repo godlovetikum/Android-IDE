@@ -10,8 +10,10 @@ set -euo pipefail
 ABI="${1:-${TERMUX_ABI:-arm64-v8a}}"
 TAG="bootstrap-2026.09.13-r1+apt.android-7"
 BASE_URL="https://github.com/termux/termux-packages/releases/download/${TAG}"
-OUT_DIR="$(cd "$(dirname "$0")/../android-ide/android/assets/termux" && pwd)"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+OUT_DIR="$SCRIPT_DIR/../android-ide/android/assets/termux"
 mkdir -p "$OUT_DIR"
+OUT_DIR="$(cd -- "$OUT_DIR" && pwd)"
 
 case "$ABI" in
   arm64-v8a) ASSET="bootstrap-aarch64.zip"; SHA="dbf2805613ff2ace0b233c3b349e080bb0ff358f4ad64f4cca5966b27b93e7ee" ;;

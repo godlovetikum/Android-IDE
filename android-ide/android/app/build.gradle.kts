@@ -58,15 +58,6 @@ android {
         }
     }
 
-    splits {
-        abi {
-            isEnable = true
-            reset()
-            include(termuxAbi.get())
-            isUniversalApk = false
-        }
-    }
-
     externalNativeBuild {
         ndkBuild {
             path = file("src/main/cpp/termux-pty/Android.mk")

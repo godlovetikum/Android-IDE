@@ -232,6 +232,7 @@ fun IdeScreen(
                 onExitSelectionMode      = ideViewModel::exitSelectionMode,
                 onSearchQueryChange      = ideViewModel::searchFiles,
                 onContentSearchQueryChange = ideViewModel::searchProjectContents,
+                onReplaceProjectContents = ideViewModel::replaceProjectContents,
                 onHideFileSearch         = ideViewModel::hideFileSearch,
                 onHideContentSearch      = ideViewModel::hideContentSearch,
                 onSearchFileSelect       = { uri ->
@@ -509,7 +510,11 @@ fun IdeScreen(
     }
 
     // ── Dialogs ────────────────────────────────────────────────────────────
-    FileOpDialogHost(dialog = uiState.fileOpDialog, ideViewModel = ideViewModel)
+    FileOpDialogHost(
+        dialog = uiState.fileOpDialog,
+        ideViewModel = ideViewModel,
+        onChooseExportDestination = onExportDirectory,
+    )
 
     if (uiState.showExitConfirmation) {
         ExitConfirmDialog(
@@ -1236,6 +1241,7 @@ private fun IdeTopBar(
 private fun FileOpDialogHost(
     dialog: FileOpDialog?,
     ideViewModel: IdeViewModel,
+    onChooseExportDestination: (FileNode) -> Unit,
 ) {
     when (dialog) {
         is FileOpDialog.BinaryOpenError -> BinaryOpenErrorDialog(
@@ -1274,6 +1280,30 @@ private fun FileOpDialogHost(
             onConfirm    = { ideViewModel.duplicateFile(dialog.node, it) },
             onDismiss    = ideViewModel::dismissFileOpDialog,
             errorMessage = dialog.errorMessage,
+        )
+        is FileOpDialog.Export -> AlertDialog(
+            onDismissRequest = { if (!dialog.isSubmitting) ideViewModel.dismissFileOpDialog() },
+            title = { Text("Export ${dialog.node.displayName}") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Export this ${if (dialog.node.isDirectory) "folder" else "file"} as a ZIP without changing the source.")
+                    dialog.resultMessage?.let { Text(it, color = if (dialog.failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary) }
+                    if (dialog.isSubmitting) Row(verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(Modifier.padding(end = 8.dp), strokeWidth = 2.dp)
+                        Text("Exporting…")
+                    }
+                }
+            },
+            confirmButton = {
+                Button(onClick = { onChooseExportDestination(dialog.node) }, enabled = !dialog.isSubmitting) {
+                    Text(if (dialog.failed) "Retry export" else "Choose export location")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = ideViewModel::dismissFileOpDialog, enabled = !dialog.isSubmitting) {
+                    Text(if (dialog.isSubmitting) "Please wait" else "Cancel")
+                }
+            },
         )
         is FileOpDialog.UnsavedClose -> UnsavedCloseDialog(
             fileName  = dialog.displayName,

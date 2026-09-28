@@ -55,6 +55,7 @@ class TerminalRuntimeAdapterImpl(context: Context) : TerminalRuntimeAdapter, Run
                 OperationOutcome.BLOCKED,
                 "The terminal runtime is unavailable. Initialize the approved runtime before opening a terminal.",
                 ErrorCategory.UNAVAILABLE_RUNTIME,
+                emptyList(),
                 "Keep the project registered and retry runtime initialization when the runtime is available.",
             )
         }

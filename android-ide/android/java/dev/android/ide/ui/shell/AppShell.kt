@@ -157,6 +157,7 @@ fun AppShell(
                 ContextualNavigation(
                     modifier = Modifier.fillMaxSize(),
                     state = state,
+                    appViewModel = viewModel,
                     ideViewModel = ideViewModel,
                     moreOpen = moreOpen,
                     onMore = { moreOpen = !moreOpen },
@@ -252,6 +253,7 @@ fun AppShell(
 private fun ContextualNavigation(
     modifier: Modifier,
     state: AppShellState,
+    appViewModel: AppShellViewModel,
     ideViewModel: IdeViewModel,
     moreOpen: Boolean,
     onMore: () -> Unit,
@@ -320,11 +322,11 @@ private fun ContextualNavigation(
             }
             state.surface == Surface.TERMINAL -> {
                 item { Text("Terminal sessions", style = MaterialTheme.typography.labelLarge) }
-                item { NavigationItem(Icons.Default.Add, "New terminal session", false) { viewModel.createTerminalSession(); onDismissDrawer() } }
+                item { NavigationItem(Icons.Default.Add, "New terminal session", false) { appViewModel.createTerminalSession(); onDismissDrawer() } }
                 state.terminalSessions.forEach { session ->
-                    item { NavigationItem(Icons.Default.Terminal, session.workingDirectory ?: "Session ${session.id.take(6)}", session.id == state.selectedTerminalSessionId) { viewModel.selectTerminalSession(session.id); onDismissDrawer() } }
+                    item { NavigationItem(Icons.Default.Terminal, session.workingDirectory ?: "Session ${session.id.take(6)}", session.id == state.selectedTerminalSessionId) { appViewModel.selectTerminalSession(session.id); onDismissDrawer() } }
                 }
-                item { NavigationItem(Icons.Default.Close, "Close all sessions", false) { viewModel.closeAllTerminalSessions(); onDismissDrawer() } }
+                item { NavigationItem(Icons.Default.Close, "Close all sessions", false) { appViewModel.closeAllTerminalSessions(); onDismissDrawer() } }
             }
             state.surface == Surface.BROWSER -> item { UnavailableSidebarFeature("Browser", 5) }
             state.surface == Surface.GIT -> item { UnavailableSidebarFeature("Git", 6) }

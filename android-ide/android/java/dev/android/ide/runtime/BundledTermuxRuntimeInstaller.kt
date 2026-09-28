@@ -23,7 +23,7 @@ class BundledTermuxRuntimeInstaller(private val context: Context) {
             else -> null
         } ?: return unavailable("This device architecture is not supported by the bundled terminal runtime")
         val marker = File(prefix, ".android-ide-bootstrap-2026.09.13-r1-apt.android-7")
-        if (!marker.exists()) {
+        return if (!marker.exists()) {
             val assetPath = "termux/bootstrap-$assetName.zip"
             val staging = File(context.filesDir, "termux-prefix.staging")
             staging.deleteRecursively()
