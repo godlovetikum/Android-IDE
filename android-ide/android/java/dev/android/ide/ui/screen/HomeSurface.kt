@@ -164,7 +164,7 @@ private fun HomeDestination(destination: HomeDestinationData, modifier: Modifier
                     destination.icon,
                     contentDescription = destination.title,
                     tint = if (destination.enabled) accent else colors.textSecondary,
-                    modifier = Modifier.size((maxWidth * 0.30f).coerceIn(48.dp, 72.dp)),
+                    modifier = Modifier.size((this@BoxWithConstraints.maxWidth * 0.30f).coerceIn(48.dp, 72.dp)),
                 )
             }
             Text(

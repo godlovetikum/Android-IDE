@@ -76,6 +76,7 @@ import dev.android.ide.viewmodel.model.FileNode
 import dev.android.ide.viewmodel.model.FileSearchResult
 import dev.android.ide.viewmodel.model.ancestorsOf
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun FileTreePanel(
     // ── Data ──────────────────────────────────────────────────────────────
@@ -273,8 +274,8 @@ fun FileTreePanel(
                                 }
                             }
                             resultGroups.forEach { (documentUri, matches) ->
+                                val expanded = documentUri in expandedUris
                                 item(key = "file:$documentUri") {
-                                    val expanded = documentUri in expandedUris
                                     Row(
                                         modifier = Modifier
                                             .fillMaxWidth()

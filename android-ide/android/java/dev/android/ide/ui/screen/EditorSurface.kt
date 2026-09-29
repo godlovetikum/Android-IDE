@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -597,7 +598,7 @@ private fun EditorDialogHost(state: IdeUiState, ideViewModel: IdeViewModel, onCh
             dismissButton = {
                 TextButton(onClick = ideViewModel::dismissFileOpDialog, enabled = !dialog.isSubmitting) {
                     Text(if (dialog.isSubmitting) "Please wait" else "Cancel")
-                },
+                }
             },
         )
         is FileOpDialog.ReplaceFile -> AlertDialog(
