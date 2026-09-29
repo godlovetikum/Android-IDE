@@ -101,6 +101,7 @@ fun EditorPane(
     hasEditorSelection: Boolean = false,
     showKeyboardToolbar: Boolean = true,
     showSymbolBar: Boolean = true,
+    keyboardToolbarOrder: List<String> = EditorSettings.DEFAULT_KEYBOARD_TOOLBAR_ORDER,
     tabCursorPositions: Map<String, Pair<Int, Int>> = emptyMap(),
     tabScrollPositions: Map<String, Int> = emptyMap(),
     modifier: Modifier = Modifier,
@@ -295,6 +296,16 @@ fun EditorPane(
                 onExecuteCommand     = onExecuteCommand,
                 onPasteFromClipboard = onPasteFromClipboard,
                 hasEditorSelection   = hasEditorSelection,
+                actionOrder          = keyboardToolbarOrder,
+                onToggleKeyboard     = { shouldShow ->
+                    editorWebView.requestFocus()
+                    val inputMethodManager = context.getSystemService(InputMethodManager::class.java)
+                    if (shouldShow) {
+                        inputMethodManager?.showSoftInput(editorWebView, InputMethodManager.SHOW_IMPLICIT)
+                    } else {
+                        inputMethodManager?.hideSoftInputFromWindow(editorWebView.windowToken, 0)
+                    }
+                },
             )
         }
     }
@@ -369,6 +380,7 @@ private fun SymbolBar(
 // ── Keyboard toolbar — 2-page HorizontalPager (no horizontal scroll) ──────────
 
 private data class KeyboardAction(
+    val id: String,
     val icon: ImageVector,
     val label: String,
     val commandId: String?,            // null for special Kotlin-side actions
@@ -379,14 +391,14 @@ private data class KeyboardAction(
 
 // Page 1: navigation + indent/outdent + undo/redo (8 actions)
 private val TOOLBAR_PAGE_1 = listOf(
-    KeyboardAction(Icons.Default.FormatIndentIncrease, "Indent",       "smartIndent"),
-    KeyboardAction(Icons.Default.FormatIndentDecrease, "Outdent",      "smartOutdent"),
-    KeyboardAction(Icons.Default.KeyboardArrowUp,      "Cursor Up",    "cursorUp"),
-    KeyboardAction(Icons.Default.KeyboardArrowDown,    "Cursor Down",  "cursorDown"),
-    KeyboardAction(Icons.Default.KeyboardArrowLeft,    "Cursor Left",  "cursorLeft"),
-    KeyboardAction(Icons.Default.KeyboardArrowRight,   "Cursor Right", "cursorRight"),
-    KeyboardAction(Icons.Default.Undo,                 "Undo",         "undo"),
-    KeyboardAction(Icons.Default.Redo,                 "Redo",         "redo"),
+    KeyboardAction("indent", Icons.Default.FormatIndentIncrease, "Indent",       "smartIndent"),
+    KeyboardAction("outdent", Icons.Default.FormatIndentDecrease, "Outdent",      "smartOutdent"),
+    KeyboardAction("cursorUp", Icons.Default.KeyboardArrowUp,      "Cursor Up",    "cursorUp"),
+    KeyboardAction("cursorDown", Icons.Default.KeyboardArrowDown,    "Cursor Down",  "cursorDown"),
+    KeyboardAction("cursorLeft", Icons.Default.KeyboardArrowLeft,    "Cursor Left",  "cursorLeft"),
+    KeyboardAction("cursorRight", Icons.Default.KeyboardArrowRight,   "Cursor Right", "cursorRight"),
+    KeyboardAction("undo", Icons.Default.Undo,                 "Undo",         "undo"),
+    KeyboardAction("redo", Icons.Default.Redo,                 "Redo",         "redo"),
 )
 
 // Page 2: clipboard + selection + keyboard toggle (5 actions)
@@ -394,40 +406,40 @@ private val TOOLBAR_PAGE_1 = listOf(
 // The old editor.action.clipboardCutAction / clipboardCopyAction use the browser
 // Clipboard API which is gated behind a user-permission prompt and fails silently.
 private val TOOLBAR_PAGE_2 = listOf(
-    KeyboardAction(Icons.Default.ContentCut,    "Cut",              "requestCut", requiresSelection = true),
-    KeyboardAction(Icons.Default.ContentCopy,   "Copy",             "requestCopy", requiresSelection = true),
-    KeyboardAction(Icons.Default.ContentPaste,  "Paste",            null, isPaste = true),
-    KeyboardAction(Icons.Default.SelectAll,     "Select All",       "editor.action.selectAll"),
-    KeyboardAction(Icons.Default.Keyboard,      "Toggle Keyboard",  null, isKeyboardToggle = true),
+    KeyboardAction("cut", Icons.Default.ContentCut,    "Cut",              "requestCut", requiresSelection = true),
+    KeyboardAction("copy", Icons.Default.ContentCopy,   "Copy",             "requestCopy", requiresSelection = true),
+    KeyboardAction("paste", Icons.Default.ContentPaste,  "Paste",            null, isPaste = true),
+    KeyboardAction("selectAll", Icons.Default.SelectAll,     "Select All",       "editor.action.selectAll"),
+    KeyboardAction("keyboardToggle", Icons.Default.Keyboard,      "Toggle Keyboard",  null, isKeyboardToggle = true),
 )
 
 private val TOOLBAR_PAGE_3 = listOf(
-    KeyboardAction(Icons.Default.KeyboardArrowLeft,  "Select Left",       "cursorLeftSelect"),
-    KeyboardAction(Icons.Default.KeyboardArrowRight, "Select Right",      "cursorRightSelect"),
-    KeyboardAction(Icons.Default.KeyboardArrowUp,    "Select Up",         "cursorUpSelect"),
-    KeyboardAction(Icons.Default.KeyboardArrowDown,  "Select Down",       "cursorDownSelect"),
-    KeyboardAction(Icons.Default.KeyboardArrowLeft,  "Select Word Left",  "cursorWordLeftSelect"),
-    KeyboardAction(Icons.Default.KeyboardArrowRight, "Select Word Right", "cursorWordRightSelect"),
-    KeyboardAction(Icons.Default.KeyboardArrowLeft,  "Select to Start",   "cursorHomeSelect"),
-    KeyboardAction(Icons.Default.KeyboardArrowRight, "Select to End",     "cursorEndSelect"),
+    KeyboardAction("selectLeft", Icons.Default.KeyboardArrowLeft,  "Select Left",       "cursorLeftSelect"),
+    KeyboardAction("selectRight", Icons.Default.KeyboardArrowRight, "Select Right",      "cursorRightSelect"),
+    KeyboardAction("selectUp", Icons.Default.KeyboardArrowUp,    "Select Up",         "cursorUpSelect"),
+    KeyboardAction("selectDown", Icons.Default.KeyboardArrowDown,  "Select Down",        "cursorDownSelect"),
+    KeyboardAction("selectWordLeft", Icons.Default.KeyboardArrowLeft,  "Select Word Left",  "cursorWordLeftSelect"),
+    KeyboardAction("selectWordRight", Icons.Default.KeyboardArrowRight, "Select Word Right", "cursorWordRightSelect"),
+    KeyboardAction("selectToStart", Icons.Default.KeyboardArrowLeft,  "Select to Start",   "cursorHomeSelect"),
+    KeyboardAction("selectToEnd", Icons.Default.KeyboardArrowRight, "Select to End",     "cursorEndSelect"),
 )
 
 // Developer actions remain on a dedicated page so the primary navigation and
 // clipboard controls stay stable and easy to reach on a phone.
 private val TOOLBAR_PAGE_4 = listOf(
-    KeyboardAction(Icons.Default.FormatIndentIncrease, "Format Document", "editor.action.formatDocument"),
-    KeyboardAction(Icons.Default.ContentCopy, "Comment / Uncomment", "editor.action.commentLine"),
-    KeyboardAction(Icons.Default.ContentCopy, "Duplicate Line", "editor.action.duplicateSelection"),
-    KeyboardAction(Icons.Default.KeyboardArrowUp, "Move Line Up", "editor.action.moveLinesUpAction"),
-    KeyboardAction(Icons.Default.KeyboardArrowDown, "Move Line Down", "editor.action.moveLinesDownAction"),
-    KeyboardAction(Icons.Default.KeyboardArrowUp, "Fold", "editor.action.fold"),
-    KeyboardAction(Icons.Default.KeyboardArrowDown, "Unfold", "editor.action.unfold"),
+    KeyboardAction("formatDocument", Icons.Default.FormatIndentIncrease, "Format Document", "editor.action.formatDocument"),
+    KeyboardAction("commentLine", Icons.Default.ContentCopy, "Comment / Uncomment", "editor.action.commentLine"),
+    KeyboardAction("duplicateLine", Icons.Default.ContentCopy, "Duplicate Line", "editor.action.duplicateSelection"),
+    KeyboardAction("moveLineUp", Icons.Default.KeyboardArrowUp, "Move Line Up", "editor.action.moveLinesUpAction"),
+    KeyboardAction("moveLineDown", Icons.Default.KeyboardArrowDown, "Move Line Down", "editor.action.moveLinesDownAction"),
+    KeyboardAction("fold", Icons.Default.KeyboardArrowUp, "Fold", "editor.action.fold"),
+    KeyboardAction("unfold", Icons.Default.KeyboardArrowDown, "Unfold", "editor.action.unfold"),
 )
 
 private val TOOLBAR_PAGE_5 = listOf(
-    KeyboardAction(Icons.Default.KeyboardArrowUp, "Previous Match", "editor.action.previousMatchFindAction"),
-    KeyboardAction(Icons.Default.KeyboardArrowDown, "Next Match", "editor.action.nextMatchFindAction"),
-    KeyboardAction(Icons.Default.KeyboardArrowLeft, "Close Find", "closeSearch"),
+    KeyboardAction("previousMatch", Icons.Default.KeyboardArrowUp, "Previous Match", "editor.action.previousMatchFindAction"),
+    KeyboardAction("nextMatch", Icons.Default.KeyboardArrowDown, "Next Match", "editor.action.nextMatchFindAction"),
+    KeyboardAction("closeSearch", Icons.Default.KeyboardArrowLeft, "Close Find", "closeSearch"),
 )
 
 private val TOOLBAR_PAGES = listOf(TOOLBAR_PAGE_1, TOOLBAR_PAGE_2, TOOLBAR_PAGE_3, TOOLBAR_PAGE_4, TOOLBAR_PAGE_5)
@@ -439,9 +451,16 @@ private fun KeyboardToolbar(
     onExecuteCommand: (String) -> Unit,
     onPasteFromClipboard: () -> Unit,
     hasEditorSelection: Boolean,
+    actionOrder: List<String>,
+    onToggleKeyboard: (Boolean) -> Unit,
 ) {
     val colors     = LocalIdeColors.current
-    val pagerState = rememberPagerState(pageCount = { TOOLBAR_PAGES.size })
+    val actionCatalog = TOOLBAR_PAGES.flatten().associateBy { it.id }
+    val orderedActions = (actionOrder + EditorSettings.DEFAULT_KEYBOARD_TOOLBAR_ORDER)
+        .distinct()
+        .mapNotNull(actionCatalog::get)
+    val pages = orderedActions.chunked(8)
+    val pagerState = rememberPagerState(pageCount = { pages.size.coerceAtLeast(1) })
     // used previously goes out of sync when the system dismisses the keyboard (Back
     // button, predictive-back gesture, navigation) without our code knowing.
     val density         = LocalDensity.current
@@ -460,7 +479,7 @@ private fun KeyboardToolbar(
                 verticalAlignment     = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceEvenly,
             ) {
-                TOOLBAR_PAGES[pageIndex].forEach { action ->
+                pages.getOrElse(pageIndex) { emptyList() }.forEach { action ->
                     ToolbarIconButton(
                         // (tap hides it) and the Keyboard icon when hidden (tap shows it).
                         // Previous code had the logic inverted.
@@ -476,12 +495,7 @@ private fun KeyboardToolbar(
                         onPaste          = onPasteFromClipboard,
                         onCustomClick    = if (action.isKeyboardToggle) {
                             {
-                                if (keyboardShowing) {
-                                    onExecuteCommand("blurEditor")
-                                } else {
-                                    onExecuteCommand("focusEditor")
-                                }
-                                // automatically after the IME transition completes.
+                                onToggleKeyboard(!keyboardShowing)
                             }
                         } else null,
                     )
@@ -494,7 +508,7 @@ private fun KeyboardToolbar(
             horizontalArrangement = Arrangement.Center,
             verticalAlignment     = Alignment.CenterVertically,
         ) {
-            repeat(TOOLBAR_PAGES.size) { idx ->
+            repeat(pages.size) { idx ->
                 val selected = pagerState.currentPage == idx
                 Box(
                     modifier = Modifier

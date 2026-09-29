@@ -48,6 +48,7 @@ import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
@@ -71,6 +72,7 @@ import dev.android.ide.app.AppShellState
 import dev.android.ide.app.AppShellViewModel
 import dev.android.ide.contracts.ProjectIdentity
 import dev.android.ide.contracts.CapabilityState
+import dev.android.ide.ui.ProjectActionsMenu
 import java.time.Duration
 import java.time.Instant
 import kotlin.random.Random
@@ -146,7 +148,10 @@ fun ProjectsSurface(
             }
             Text("Projects", style = MaterialTheme.typography.titleLarge)
             Spacer(Modifier.weight(1f))
-            IconButton(onClick = viewModel::refreshProjectList, enabled = !listBusy) {
+            if (state.refreshingProjects) {
+                CircularProgressIndicator(Modifier.padding(horizontal = 8.dp), strokeWidth = 2.dp)
+            }
+            IconButton(onClick = viewModel::refreshProjectList, enabled = !listBusy && !state.refreshingProjects) {
                 Icon(Icons.Default.Refresh, contentDescription = "Refresh projects")
             }
             Box {
@@ -273,6 +278,7 @@ fun ProjectsSurface(
                     ProjectCard(
                         project = project,
                         summary = state.projectSummaries[project.id],
+                        summaryLoading = !state.projectSummaries.containsKey(project.id),
                         onOpen = viewModel::openProject,
                         onDetails = viewModel::showProjectDetails,
                         onSelect = viewModel::selectProject,
@@ -359,6 +365,7 @@ private enum class ProjectFilter(val label: String) {
 private fun ProjectCard(
     project: ProjectIdentity,
     summary: dev.android.ide.app.ProjectSummary?,
+    summaryLoading: Boolean,
     onOpen: (String) -> Unit,
     onDetails: (String) -> Unit,
     onSelect: (String) -> Unit,
@@ -388,44 +395,70 @@ private fun ProjectCard(
             onClick = { if (selected) onToggleSelection(project.id) else onOpen(project.id) },
             onLongClick = { onToggleSelection(project.id) },
         ),
-        colors = CardDefaults.cardColors(
-            containerColor = if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surface,
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
         ),
+        colors = CardDefaults.cardColors(
+            containerColor = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = if (selected) 5.dp else 2.dp),
     ) {
         Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.Top) {
             Column(Modifier.weight(1f)) {
-                Text(project.name, style = MaterialTheme.typography.titleLarge)
+                Text(project.name, style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.primary)
                 Text(if (project.description.isBlank()) "No description" else project.description, maxLines = 1, style = MaterialTheme.typography.bodySmall)
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                        if (summary?.hasGit == true) Text("Git", style = MaterialTheme.typography.labelSmall)
-                        Text("${summary?.fileCount ?: "Unavailable"} files", style = MaterialTheme.typography.bodySmall)
-                        Text(summary?.totalBytes?.let(::formatBytes) ?: "Unavailable", style = MaterialTheme.typography.bodySmall)
+                        if (summaryLoading) {
+                            Text("Files loading…", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text("Size loading…", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        } else {
+                            summary?.fileCount?.let { Text("$it files", style = MaterialTheme.typography.bodySmall) }
+                                ?: Text("Files unavailable", style = MaterialTheme.typography.bodySmall)
+                            summary?.totalBytes?.let { Text(formatBytes(it), style = MaterialTheme.typography.bodySmall) }
+                                ?: Text("Size unavailable", style = MaterialTheme.typography.bodySmall)
+                        }
                     }
                     Text(relativeLastOpened(project.lastOpenedAt), style = MaterialTheme.typography.labelSmall)
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    if (!summaryLoading && summary?.hasGit == true) {
+                        ProjectBadge("Git", MaterialTheme.colorScheme.primaryContainer, MaterialTheme.colorScheme.primary)
+                    }
+                    if (!summaryLoading) {
+                        projectAttentionLabel(project, summary)?.let { (label, container, content) ->
+                            ProjectBadge(label, container, content)
+                        }
+                    }
                 }
             }
             Box {
                 IconButton(onClick = { onSelect(project.id); menuOpen = true }) { Icon(Icons.Default.MoreVert, contentDescription = "Project actions") }
-                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                    DropdownMenuItem(leadingIcon = { Icon(Icons.Default.Info, null) }, text = { Text("Project details") }, onClick = { menuOpen = false; onDetails(project.id) })
-                    DropdownMenuItem(leadingIcon = { Icon(Icons.Default.Refresh, null) }, text = { Text("Refresh") }, onClick = { menuOpen = false; onSelect(project.id); onRefresh() })
-                    DropdownMenuItem(leadingIcon = { Icon(Icons.Default.Edit, null) }, text = { Text("Rename") }, onClick = { menuOpen = false; renameValue = project.name; renameVisible = true })
-                    DropdownMenuItem(leadingIcon = { Icon(Icons.Default.FolderOpen, null) }, text = { Text("Change Location") }, onClick = { menuOpen = false; onRelocate(project.id) })
-                    DropdownMenuItem(leadingIcon = { Icon(Icons.Default.ContentCopy, null) }, text = { Text("Copy & Duplicate") }, onClick = { menuOpen = false; onDuplicate(project.id) })
-                    DropdownMenuItem(leadingIcon = { Icon(Icons.Default.Share, null) }, text = { Text("Export or Share") }, onClick = { menuOpen = false; onExport(project.id) })
-                    DropdownMenuItem(leadingIcon = { Icon(Icons.Default.Code, null) }, text = { Text("Copy Storage Path") }, onClick = { menuOpen = false; onCopyPath(project.id) })
-                    DropdownMenuItem(leadingIcon = { Icon(Icons.Default.MergeType, null) }, text = { Text("Copy Remote URLs") }, onClick = { menuOpen = false; onCopyRemoteUrls(project.id) })
-                    HorizontalDivider()
-                    DropdownMenuItem(leadingIcon = { Icon(Icons.Default.Code, null) }, text = { Text("Open in Editor") }, onClick = { menuOpen = false; onOpen(project.id) })
-                    DropdownMenuItem(leadingIcon = { Icon(Icons.Default.MergeType, null) }, text = { Text("Open Git") }, onClick = { menuOpen = false; onFeedback("Open Git") })
-                    DropdownMenuItem(leadingIcon = { Icon(Icons.Default.Terminal, null) }, text = { Text("Open Terminal") }, onClick = { menuOpen = false; onFeedback("Open Terminal") })
-                    DropdownMenuItem(leadingIcon = { Icon(Icons.Default.FolderOpen, null) }, text = { Text("Open Browser or Preview") }, onClick = { menuOpen = false; onFeedback("Open Browser or Preview") })
-                    HorizontalDivider()
-                    DropdownMenuItem(leadingIcon = { Icon(Icons.Default.Delete, null) }, text = { Text("Remove from Registry", color = MaterialTheme.colorScheme.secondary) }, onClick = { menuOpen = false; onSelect(project.id); confirmRemove = true })
-                    DropdownMenuItem(leadingIcon = { Icon(Icons.Default.Delete, null, tint = MaterialTheme.colorScheme.error) }, text = { Text("Permanently Delete", color = MaterialTheme.colorScheme.error) }, onClick = { menuOpen = false; onSelect(project.id); deleteCode = Random.nextInt(100, 1000).toString(); enteredDeleteCode = ""; confirmDelete = true })
-                }
+                ProjectActionsMenu(
+                    expanded = menuOpen,
+                    onDismiss = { menuOpen = false },
+                    onDetails = { onDetails(project.id) },
+                    onRefresh = { onSelect(project.id); onRefresh() },
+                    onChangeDisplayName = { renameValue = project.name; renameVisible = true },
+                    onChangeLocation = { onRelocate(project.id) },
+                    onDuplicate = { onDuplicate(project.id) },
+                    onExport = { onExport(project.id) },
+                    onCopyPath = { onCopyPath(project.id) },
+                    onCopyRemoteUrls = { onCopyRemoteUrls(project.id) },
+                    onOpenEditor = { onOpen(project.id) },
+                    onOpenGit = { onFeedback("Git is coming soon") },
+                    onOpenTerminal = { onFeedback("Opening terminal is coming soon") },
+                    onOpenBrowser = { onFeedback("Browser preview is coming soon") },
+                    onRemoveFromRegistry = { onSelect(project.id); confirmRemove = true },
+                    onDeletePermanently = {
+                        onSelect(project.id)
+                        deleteCode = Random.nextInt(100, 1000).toString()
+                        enteredDeleteCode = ""
+                        confirmDelete = true
+                    },
+                )
             }
         }
         if (confirmRemove) {
@@ -458,15 +491,55 @@ private fun ProjectCard(
         if (renameVisible) {
             AlertDialog(
                 onDismissRequest = { renameVisible = false },
-                title = { Text("Rename project") },
+                title = { Text("Change project display name") },
                 text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { OutlinedTextField(renameValue, { renameValue = it }, label = { Text("Project name") }, singleLine = true, enabled = !operationInProgress); if (operationInProgress) Row(verticalAlignment = Alignment.CenterVertically) { CircularProgressIndicator(Modifier.padding(end = 8.dp), strokeWidth = 2.dp); Text("Renaming…") } } },
                 confirmButton = {
-                    Button(onClick = { onSelect(project.id); onRename(renameValue) }, enabled = renameValue.isNotBlank() && !operationInProgress) { Text(if (operationInProgress) "Renaming…" else "Rename") }
+                    Button(onClick = { onSelect(project.id); onRename(renameValue) }, enabled = renameValue.isNotBlank() && !operationInProgress) { Text(if (operationInProgress) "Saving…" else "Save") }
                 },
                 dismissButton = { TextButton(onClick = { renameVisible = false }, enabled = !operationInProgress) { Text(if (operationInProgress) "Please wait" else "Cancel") } },
             )
         }
         }
+    }
+}
+
+@Composable
+private fun ProjectBadge(
+    label: String,
+    container: androidx.compose.ui.graphics.Color,
+    content: androidx.compose.ui.graphics.Color,
+) {
+    Surface(
+        color = container,
+        contentColor = content,
+        shape = MaterialTheme.shapes.small,
+        tonalElevation = 1.dp,
+    ) {
+        Text(label, modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp), style = MaterialTheme.typography.labelSmall)
+    }
+}
+
+@Composable
+private fun projectAttentionLabel(
+    project: ProjectIdentity,
+    summary: dev.android.ide.app.ProjectSummary?,
+): Triple<String, androidx.compose.ui.graphics.Color, androidx.compose.ui.graphics.Color>? {
+    val status = summary?.status
+    return when {
+        project.location.capabilityState == CapabilityState.PERMISSION_LOST -> Triple("Permission needed", MaterialTheme.colorScheme.errorContainer, MaterialTheme.colorScheme.onErrorContainer)
+        project.location.capabilityState == CapabilityState.UNSUPPORTED -> Triple("Provider unsupported", MaterialTheme.colorScheme.errorContainer, MaterialTheme.colorScheme.onErrorContainer)
+        project.location.capabilityState == CapabilityState.UNAVAILABLE -> Triple("Location unavailable", MaterialTheme.colorScheme.errorContainer, MaterialTheme.colorScheme.onErrorContainer)
+        status != null -> {
+        val shortLabel = when {
+            status.contains("permission", ignoreCase = true) -> "Permission needed"
+            status.contains("unsupported", ignoreCase = true) -> "Provider unsupported"
+            status.contains("unavailable", ignoreCase = true) -> "Location unavailable"
+            status.contains("inspect", ignoreCase = true) -> "Inspection needed"
+            else -> "Needs attention"
+        }
+        Triple(shortLabel, MaterialTheme.colorScheme.errorContainer, MaterialTheme.colorScheme.onErrorContainer)
+        }
+        else -> null
     }
 }
 

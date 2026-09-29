@@ -46,6 +46,8 @@ data class EditorSettings(
     val showKeyboardToolbar: Boolean = true,
     /** Show the symbol shortcut bar above the keyboard toolbar. */
     val showSymbolBar: Boolean       = true,
+    /** Ordered keyboard-toolbar action IDs; unknown or missing IDs use defaults. */
+    val keyboardToolbarOrder: List<String> = DEFAULT_KEYBOARD_TOOLBAR_ORDER,
     /** Show the optional document-information row below the editor. */
     val showStatusBar: Boolean       = true,
     // ── File tree ───────────────────────────────────────────────────────────
@@ -67,6 +69,13 @@ data class EditorSettings(
 ) {
     companion object {
         val DEFAULT_SYMBOLS = listOf("<", ">", "/", "=", "(", ")", "{", "}", "[", "]", "\"", "`")
+        val DEFAULT_KEYBOARD_TOOLBAR_ORDER = listOf(
+            "indent", "outdent", "cursorUp", "cursorDown", "cursorLeft", "cursorRight", "undo", "redo",
+            "cut", "copy", "paste", "selectAll", "keyboardToggle",
+            "selectLeft", "selectRight", "selectUp", "selectDown", "selectWordLeft", "selectWordRight", "selectToStart", "selectToEnd",
+            "formatDocument", "commentLine", "duplicateLine", "moveLineUp", "moveLineDown", "fold", "unfold",
+            "previousMatch", "nextMatch", "closeSearch",
+        )
         const val UI_FONT_SCALE_MIN = 0.75f
         const val UI_FONT_SCALE_MAX = 1.50f
         const val UI_FONT_SCALE_STEP = 0.05f

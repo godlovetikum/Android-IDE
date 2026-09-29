@@ -44,6 +44,7 @@ import dev.android.ide.app.AppShellState
 import dev.android.ide.app.AppShellViewModel
 import dev.android.ide.contracts.CapabilityState
 import dev.android.ide.contracts.Surface
+import dev.android.ide.ui.ProjectActionsMenu
 import java.net.URI
 import kotlin.random.Random
 
@@ -88,14 +89,16 @@ fun ProjectDetailsSurface(
             IconButton(onClick = onOpenNavigation) { Icon(Icons.Default.Menu, contentDescription = "Open sidebar") }
             Text(project?.name ?: "Project Details", style = MaterialTheme.typography.headlineMedium)
             IconButton(onClick = { menuOpen = true }) { Icon(Icons.Default.MoreVert, contentDescription = "Project actions") }
-            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                DropdownMenuItem(leadingIcon = { Icon(Icons.Default.Refresh, null) }, text = { Text("Refresh") }, enabled = !state.operationInProgress && !state.detailsLoading, onClick = { menuOpen = false; viewModel.refreshSelectedProjectDetails() })
-                DropdownMenuItem(leadingIcon = { Icon(Icons.Default.Edit, null) }, text = { Text("Rename") }, enabled = !state.operationInProgress, onClick = { menuOpen = false; renameValue = project?.name.orEmpty(); renameVisible = true })
-                DropdownMenuItem(leadingIcon = { Icon(Icons.Default.FolderOpen, null) }, text = { Text("Change Location") }, enabled = !state.operationInProgress, onClick = { menuOpen = false; project?.id?.let(onRelocateProject) })
-                DropdownMenuItem(leadingIcon = { Icon(Icons.Default.ContentCopy, null) }, text = { Text("Copy & Duplicate") }, enabled = !state.operationInProgress, onClick = { menuOpen = false; project?.id?.let(onDuplicateProject) })
-                DropdownMenuItem(leadingIcon = { Icon(Icons.Default.Share, null) }, text = { Text("Export or Share") }, enabled = !state.operationInProgress, onClick = { menuOpen = false; project?.id?.let(onExportProject) })
-                DropdownMenuItem(leadingIcon = { Icon(Icons.Default.Code, null) }, text = { Text("Copy Storage Path") }, onClick = {
-                    menuOpen = false
+            ProjectActionsMenu(
+                expanded = menuOpen,
+                onDismiss = { menuOpen = false },
+                enabled = !state.operationInProgress,
+                onRefresh = { viewModel.refreshSelectedProjectDetails() },
+                onChangeDisplayName = { renameValue = project?.name.orEmpty(); renameVisible = true },
+                onChangeLocation = { project?.id?.let(onRelocateProject) },
+                onDuplicate = { project?.id?.let(onDuplicateProject) },
+                onExport = { project?.id?.let(onExportProject) },
+                onCopyPath = {
                     val path = humanReadableStorageLocation(project?.location?.userVisiblePath ?: project?.location?.displayLabel)
                     if (path != null) {
                         val clipboard = context.getSystemService(ClipboardManager::class.java)
@@ -106,9 +109,8 @@ fun ProjectDetailsSurface(
                     } else {
                         actionFeedback = "The project storage path is unavailable. Refresh project details and try again."
                     }
-                })
-                DropdownMenuItem(leadingIcon = { Icon(Icons.Default.MergeType, null) }, text = { Text("Copy Remote URLs") }, onClick = {
-                    menuOpen = false
+                },
+                onCopyRemoteUrls = {
                     val git = state.projectDetails?.git
                     if (state.detailsLoading) {
                         actionFeedback = "Git details are still loading. Refresh the project details and try again."
@@ -126,15 +128,18 @@ fun ProjectDetailsSurface(
                             actionFeedback = "Copied ${git.remotes.size} Git remote URL(s). Embedded URL credentials and query parameters were omitted."
                         }
                     }
-                })
-                DropdownMenuItem(leadingIcon = { Icon(Icons.Default.Code, null) }, text = { Text("Open in Editor") }, onClick = { menuOpen = false; viewModel.navigate(Surface.EDITOR) })
-                DropdownMenuItem(leadingIcon = { Icon(Icons.Default.MergeType, null) }, text = { Text("Open Git") }, onClick = { menuOpen = false; viewModel.navigate(Surface.GIT) })
-                DropdownMenuItem(leadingIcon = { Icon(Icons.Default.Terminal, null) }, text = { Text("Open Terminal") }, onClick = { menuOpen = false; viewModel.navigate(Surface.TERMINAL) })
-                DropdownMenuItem(leadingIcon = { Icon(Icons.Default.Language, null) }, text = { Text("Open Browser or Preview") }, onClick = { menuOpen = false; viewModel.navigate(Surface.BROWSER) })
-                HorizontalDivider()
-                DropdownMenuItem(leadingIcon = { Icon(Icons.Default.Delete, null, tint = MaterialTheme.colorScheme.secondary) }, text = { Text("Remove from Registry", color = MaterialTheme.colorScheme.secondary) }, enabled = !state.operationInProgress, onClick = { menuOpen = false; confirmRemove = true })
-                DropdownMenuItem(leadingIcon = { Icon(Icons.Default.Delete, null, tint = MaterialTheme.colorScheme.error) }, text = { Text("Permanently Delete", color = MaterialTheme.colorScheme.error) }, enabled = !state.operationInProgress, onClick = { menuOpen = false; deleteCode = Random.nextInt(100, 1000).toString(); enteredDeleteCode = ""; confirmDelete = true })
-            }
+                },
+                onOpenEditor = { viewModel.navigate(Surface.EDITOR) },
+                onOpenGit = { viewModel.navigate(Surface.GIT) },
+                onOpenTerminal = { viewModel.navigate(Surface.TERMINAL) },
+                onOpenBrowser = { viewModel.navigate(Surface.BROWSER) },
+                onRemoveFromRegistry = { confirmRemove = true },
+                onDeletePermanently = {
+                    deleteCode = Random.nextInt(100, 1000).toString()
+                    enteredDeleteCode = ""
+                    confirmDelete = true
+                },
+            )
         }
         if (confirmRemove) {
             AlertDialog(
@@ -148,9 +153,9 @@ fun ProjectDetailsSurface(
         if (renameVisible) {
             AlertDialog(
                 onDismissRequest = { if (!state.operationInProgress) renameVisible = false },
-                title = { Text("Rename project") },
+                title = { Text("Change project display name") },
                 text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { androidx.compose.material3.OutlinedTextField(renameValue, { renameValue = it }, label = { Text("Project name") }, enabled = !state.operationInProgress, singleLine = true); if (state.operationReport != null) Text(state.operationReport.message, color = if (state.operationReport.outcome == dev.android.ide.contracts.OperationOutcome.COMPLETE) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error) } },
-                confirmButton = { TextButton(onClick = { viewModel.renameSelectedProject(renameValue) }, enabled = renameValue.isNotBlank() && !state.operationInProgress) { if (state.operationInProgress) CircularProgressIndicator(Modifier.padding(end = 8.dp), strokeWidth = 2.dp); Text(if (state.operationInProgress) "Renaming…" else "Rename") } },
+                confirmButton = { TextButton(onClick = { viewModel.renameSelectedProject(renameValue) }, enabled = renameValue.isNotBlank() && !state.operationInProgress) { if (state.operationInProgress) CircularProgressIndicator(Modifier.padding(end = 8.dp), strokeWidth = 2.dp); Text(if (state.operationInProgress) "Saving…" else "Save") } },
                 dismissButton = { TextButton(onClick = { renameVisible = false }, enabled = !state.operationInProgress) { Text(if (state.operationInProgress) "Please wait" else "Cancel") } },
             )
         }
@@ -182,23 +187,67 @@ fun ProjectDetailsSurface(
                 dismissButton = { TextButton(onClick = { confirmDelete = false }, enabled = !state.operationInProgress) { Text(if (state.operationInProgress) "Please wait" else "Cancel") } },
             )
         }
-        Text(project?.description?.ifBlank { "No description" } ?: "No project selected")
-        Text(humanReadableStorageLocation(project?.location?.userVisiblePath ?: project?.location?.displayLabel))
+        DetailSection("Identity") {
+            DetailLine("Name", project?.name ?: "No project selected")
+            DetailLine("Description", project?.description?.ifBlank { "No description" } ?: "No description")
+            project?.let { DetailLine("Metadata", metadataLabel(it.location.capabilityState)) }
+        }
         state.projectDetails?.let { details ->
-            DetailLine("Files", details.fileCount.toString())
-            DetailLine("Folders", details.folderCount.toString())
-            DetailLine("Size", formatBytes(details.totalBytes))
-            DetailLine("Provider", details.storageProvider)
-            DetailLine("Project storage", availabilityLabel(details.storageCapabilities.state))
-            DetailLine("Read / update", capabilityLabel(details.storageCapabilities.readable && details.storageCapabilities.writable))
-            DetailLine("Create", capabilityLabel(details.storageCapabilities.canCreate))
-            DetailLine("Rename", capabilityLabel(details.storageCapabilities.canRename))
-            DetailLine("Delete", capabilityLabel(details.storageCapabilities.canDelete))
-            DetailLine("Change observation", capabilityLabel(details.storageCapabilities.canObserveChanges))
-            details.git?.currentBranch?.let { DetailLine("Git branch", it) }
-        } ?: Text("Details are being inspected or are unavailable.")
+            DetailSection("Location") {
+                DetailLine("Storage path", humanReadableStorageLocation(details.storagePath))
+                DetailLine("Provider", details.storageProvider)
+                DetailLine("Availability", availabilityLabel(details.storageCapabilities.state))
+                details.storageCapabilities.explanation?.takeIf { it.isNotBlank() }?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+            }
+            DetailSection("Contents") {
+                DetailLine("Files", details.fileCount.toString())
+                DetailLine("Folders", details.folderCount.toString())
+                DetailLine("Size", formatBytes(details.totalBytes))
+                DetailLine("Created", formatTimestamp(details.creationTimeMs))
+                details.lastModifiedTimeMs?.let { DetailLine("Last modified", formatTimestamp(it)) }
+                details.languageBytes.entries.sortedByDescending { it.value }.take(4).forEach { (language, bytes) ->
+                    DetailLine(language, formatBytes(bytes))
+                }
+            }
+            DetailSection("Capabilities") {
+                DetailLine("Read / update", capabilityLabel(details.storageCapabilities.readable && details.storageCapabilities.writable))
+                DetailLine("Create", capabilityLabel(details.storageCapabilities.canCreate))
+                DetailLine("Rename", capabilityLabel(details.storageCapabilities.canRename))
+                DetailLine("Delete", capabilityLabel(details.storageCapabilities.canDelete))
+                DetailLine("Change observation", capabilityLabel(details.storageCapabilities.canObserveChanges))
+            }
+            details.git?.let { git ->
+                DetailSection("Git") {
+                    git.currentBranch?.let { DetailLine("Branch", it) }
+                    if (git.branches.isNotEmpty()) DetailLine("Branches", git.branches.size.toString())
+                    git.remotes.take(3).forEach { remote -> DetailLine(remote.name, safeClipboardRemote(remote.url)) }
+                }
+            }
+        } ?: Text("Loading project details…", color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
+
+@Composable
+private fun DetailSection(title: String, content: @Composable () -> Unit) {
+    Column(
+        Modifier.fillMaxWidth().padding(top = 4.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Text(title, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
+        content()
+    }
+}
+
+private fun metadataLabel(state: CapabilityState): String = when (state) {
+    CapabilityState.SUPPORTED -> "Available"
+    CapabilityState.NOT_YET_CHECKED -> "Loading…"
+    CapabilityState.PERMISSION_LOST -> "Needs attention"
+    CapabilityState.UNSUPPORTED -> "Provider unsupported"
+    CapabilityState.UNAVAILABLE -> "Unavailable"
+}
+
+private fun formatTimestamp(value: Long): String =
+    java.time.Instant.ofEpochMilli(value).toString().replace("T", " ").substringBefore('.')
 
 private fun safeClipboardRemote(rawUrl: String): String {
     val withoutQueryOrFragment = rawUrl.trim().substringBefore('?').substringBefore('#')

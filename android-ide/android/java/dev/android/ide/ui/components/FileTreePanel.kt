@@ -21,6 +21,7 @@ package dev.android.ide.ui.components
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
@@ -33,11 +34,13 @@ import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.CreateNewFolder
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.InsertDriveFile
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
@@ -54,6 +57,7 @@ import dev.android.ide.editor.FileIconKind
 import dev.android.ide.ui.theme.LocalIdeColors
 import dev.android.ide.viewmodel.model.FileNode
 import dev.android.ide.viewmodel.model.FileSearchResult
+import dev.android.ide.viewmodel.model.ancestorsOf
 
 @Composable
 fun FileTreePanel(
@@ -201,6 +205,9 @@ fun FileTreePanel(
         else -> {
             val filteredNodes = if (hideGitFolder) nodes.filterNot { it.displayName == ".git" } else nodes
             val flatNodes = flattenTree(filteredNodes)
+            val activeAncestorUris = activeTabDocumentUri
+                ?.let { nodes.ancestorsOf(it).orEmpty().map(FileNode::documentUri).toSet() }
+                .orEmpty()
             LaunchedEffect(locateRequestToken, locateTargetUri, flatNodes) {
                 val targetIndex = locateTargetUri?.let { uri ->
                     flatNodes.indexOfFirst { it.first.documentUri == uri }
@@ -250,6 +257,7 @@ fun FileTreePanel(
                     item {
                         RootProjectNode(
                             projectName    = projectName,
+                            isActivePath   = activeTabDocumentUri != null,
                             clipboardItems = clipboardItems,
                             onNewFile      = onNewFileAtRoot,
                             onNewFolder    = onNewFolderAtRoot,
@@ -273,8 +281,9 @@ fun FileTreePanel(
                         node                     = node,
                         depth                    = depth,
                         clipboardItems           = clipboardItems,
-                        clipboardIsCut           = clipboardIsCut,
+                        clipboardIsCut            = clipboardIsCut,
                         isActive                 = node.documentUri == activeTabDocumentUri,
+                        isActiveAncestor         = node.documentUri in activeAncestorUris,
                         isSelected               = node.documentUri in selectedUris,
                         isMultiSelectMode        = isMultiSelectMode,
                         onFileClick              = onFileClick,
@@ -357,6 +366,7 @@ private fun SearchResultRow(
 @Composable
 private fun RootProjectNode(
     projectName: String,
+    isActivePath: Boolean,
     clipboardItems: List<FileNode>,
     onNewFile: () -> Unit,
     onNewFolder: () -> Unit,
@@ -374,19 +384,20 @@ private fun RootProjectNode(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .fillMaxWidth()
+            .background(if (isActivePath) colors.activeHighlight.copy(alpha = 0.22f) else Color.Transparent)
             .padding(start = 8.dp, end = 0.dp, top = 4.dp, bottom = 4.dp),
     ) {
         Icon(
             imageVector        = Icons.Default.FolderOpen,
             contentDescription = null,
-            tint               = colors.accentLight,
+            tint               = if (isActivePath) colors.accent else colors.accentLight,
             modifier           = Modifier.size(16.dp),
         )
         Spacer(Modifier.width(6.dp))
         Text(
             text     = projectName,
             style    = MaterialTheme.typography.labelMedium,
-            color    = colors.textPrimary,
+            color    = if (isActivePath) colors.accent else colors.textPrimary,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
@@ -400,51 +411,19 @@ private fun RootProjectNode(
                     modifier           = Modifier.size(14.dp),
                 )
             }
-            DropdownMenu(
-                expanded         = menuOpen,
-                onDismissRequest = { menuOpen = false },
-            ) {
-                DropdownMenuItem(
-                    text    = { Text("New File") },
-                    onClick = { menuOpen = false; onNewFile() },
-                )
-                DropdownMenuItem(
-                    text    = { Text("New Folder") },
-                    onClick = { menuOpen = false; onNewFolder() },
-                )
-                DropdownMenuItem(
-                    text    = { Text("Import Files") },
-                    onClick = { menuOpen = false; onImportFiles() },
-                )
-                if (clipboardItems.isNotEmpty()) {
-                    val count = clipboardItems.size
-                    DropdownMenuItem(
-                        text = {
-                            if (count == 1) Text("Paste \u201c${clipboardItems[0].displayName}\u201d here")
-                            else Text("Paste $count items here")
-                        },
-                        onClick = { menuOpen = false; onPasteAtRoot() },
-                    )
-                }
-                HorizontalDivider()
-                DropdownMenuItem(
-                    text    = { Text("Export Project\u2026") },
-                    onClick = { menuOpen = false; onExport() },
-                )
-                HorizontalDivider()
-                DropdownMenuItem(
-                    text    = { Text("Project details") },
-                    onClick = { menuOpen = false; onShowDetails() },
-                )
-                DropdownMenuItem(
-                    text    = { Text("Delete permanently") },
-                    onClick = { menuOpen = false; onDelete() },
-                )
-                DropdownMenuItem(
-                    text    = { Text("Remove from registry", color = LocalIdeColors.current.error) },
-                    onClick = { menuOpen = false; onRemove() },
-                )
-            }
+            EditorProjectActionsMenu(
+                expanded = menuOpen,
+                onDismiss = { menuOpen = false },
+                onNewFile = onNewFile,
+                onNewFolder = onNewFolder,
+                onImportFiles = onImportFiles,
+                onExportProject = onExport,
+                onRefresh = onRefresh,
+                onShowDetails = onShowDetails,
+                onDeleteProject = onDelete,
+                onRemoveProject = onRemove,
+                onPasteAtRoot = onPasteAtRoot.takeIf { clipboardItems.isNotEmpty() },
+            )
         }
     }
 }
@@ -459,6 +438,7 @@ private fun FileTreeRow(
     clipboardItems: List<FileNode>,
     clipboardIsCut: Boolean,
     isActive: Boolean,
+    isActiveAncestor: Boolean,
     isSelected: Boolean,
     isMultiSelectMode: Boolean,
     onFileClick: (String) -> Unit,
@@ -486,6 +466,7 @@ private fun FileTreeRow(
     val rowBackground = when {
         isSelected     -> colors.activeHighlight
         isActive       -> colors.activeHighlight.copy(alpha = 0.6f)
+        isActiveAncestor -> colors.activeHighlight.copy(alpha = 0.22f)
         else           -> Color.Transparent
     }
 
@@ -505,15 +486,19 @@ private fun FileTreeRow(
                 },
                 onLongClick = { menuOpen = true },
             )
-            // Files and folders at the same depth share one identical base
-            // indentation; their icon slots must not imply a false hierarchy.
-            .padding(
-                start  = (8 + depth * 16).dp,
-                end    = 0.dp,
-                top    = 3.dp,
-                bottom = 3.dp,
-            ),
+            .padding(end = 0.dp, top = 3.dp, bottom = 3.dp),
     ) {
+        repeat(depth) { level ->
+            Canvas(Modifier.width(16.dp).height(36.dp)) {
+                drawLine(
+                    color = if (isActive || isActiveAncestor) colors.accent.copy(alpha = 0.7f) else colors.separator,
+                    start = androidx.compose.ui.geometry.Offset(size.width / 2f, 0f),
+                    end = androidx.compose.ui.geometry.Offset(size.width / 2f, size.height),
+                    strokeWidth = if ((isActive || isActiveAncestor) && level == depth - 1) 2.dp.toPx() else 1.dp.toPx(),
+                )
+            }
+        }
+
         // Multi-select checkbox
         if (isMultiSelectMode) {
             Icon(
@@ -553,6 +538,7 @@ private fun FileTreeRow(
             color = when {
                 isInClipboard && clipboardIsCut -> colors.textDisabled
                 isActive                        -> colors.accent
+                isActiveAncestor                -> colors.accent
                 else                            -> colors.textPrimary
             },
             maxLines = 1,
@@ -710,15 +696,15 @@ private fun FileTreeRow(
 @Composable
 private fun FileTypeBadge(displayName: String, muted: Boolean, accent: Boolean) {
     val kind = EditorLanguageRegistry.iconKindForFileName(displayName)
-    val label = when (kind) {
-        FileIconKind.HTML -> "HTML"
-        FileIconKind.CSS -> "CSS"
-        FileIconKind.JAVASCRIPT -> "JS"
-        FileIconKind.TYPESCRIPT -> "TS"
-        FileIconKind.IMAGE -> "IMG"
-        FileIconKind.TEXT -> "TXT"
-        FileIconKind.CODE -> "CODE"
-        FileIconKind.GENERIC -> "FILE"
+    val icon = when (kind) {
+        FileIconKind.IMAGE -> Icons.Default.Image
+        FileIconKind.TEXT -> Icons.Default.Article
+        FileIconKind.HTML,
+        FileIconKind.CSS,
+        FileIconKind.JAVASCRIPT,
+        FileIconKind.TYPESCRIPT,
+        FileIconKind.CODE -> Icons.Default.Code
+        FileIconKind.GENERIC -> Icons.Default.InsertDriveFile
     }
     val color = when (kind) {
         FileIconKind.HTML -> Color(0xFFE44D26)
@@ -730,13 +716,27 @@ private fun FileTypeBadge(displayName: String, muted: Boolean, accent: Boolean) 
         FileIconKind.CODE -> Color(0xFF4F8CC9)
         FileIconKind.GENERIC -> Color(0xFF6B7280)
     }
-    Surface(
+        Surface(
         color = color.copy(alpha = if (muted) 0.28f else if (accent) 0.55f else 0.9f),
         shape = MaterialTheme.shapes.extraSmall,
-        modifier = Modifier.width(30.dp).height(18.dp),
+        modifier = Modifier.size(24.dp),
     ) {
         Box(contentAlignment = Alignment.Center) {
-            Text(label, style = MaterialTheme.typography.labelSmall, color = if (kind == FileIconKind.JAVASCRIPT) Color.Black else Color.White, maxLines = 1)
+            Icon(
+                imageVector = icon,
+                contentDescription = when (kind) {
+                    FileIconKind.HTML -> "HTML file"
+                    FileIconKind.CSS -> "CSS file"
+                    FileIconKind.JAVASCRIPT -> "JavaScript file"
+                    FileIconKind.TYPESCRIPT -> "TypeScript file"
+                    FileIconKind.IMAGE -> "Image file"
+                    FileIconKind.TEXT -> "Text file"
+                    FileIconKind.CODE -> "Code file"
+                    FileIconKind.GENERIC -> "File"
+                },
+                tint = if (kind == FileIconKind.JAVASCRIPT) Color.Black else Color.White,
+                modifier = Modifier.size(16.dp),
+            )
         }
     }
 }

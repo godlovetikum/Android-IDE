@@ -58,6 +58,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalContext
 import dev.android.ide.data.model.AppTheme
@@ -364,7 +366,75 @@ private fun KeyboardSettingsContent(uiState: IdeUiState, s: EditorSettings, ideV
             VolumeKeyOption("Cursor vertical (↑ / ↓)", VolumeKeyMode.VERTICAL, uiState.volumeKeyMode, ideViewModel)
             VolumeKeyOption("Disabled (system volume)", VolumeKeyMode.DISABLED, uiState.volumeKeyMode, ideViewModel)
         }
+        HorizontalDivider()
+        Text("Keyboard shortcut order", style = MaterialTheme.typography.bodyMedium)
+        Text("Choose the order used by the editor toolbar. Actions are grouped into pages automatically.", style = MaterialTheme.typography.bodySmall, color = LocalIdeColors.current.textSecondary)
+        s.keyboardToolbarOrder.forEachIndexed { index, actionId ->
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text("${index + 1}. ${keyboardToolbarLabel(actionId)}", Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+                TextButton(
+                    onClick = {
+                        if (index > 0) {
+                            val order = s.keyboardToolbarOrder.toMutableList()
+                            order[index] = order[index - 1].also { order[index - 1] = order[index] }
+                            ideViewModel.setEditorSettings(s.copy(keyboardToolbarOrder = order))
+                        }
+                    },
+                    enabled = index > 0,
+                    modifier = Modifier.semantics { contentDescription = "Move ${keyboardToolbarLabel(actionId)} up" },
+                ) { Text("↑") }
+                TextButton(
+                    onClick = {
+                        if (index < s.keyboardToolbarOrder.lastIndex) {
+                            val order = s.keyboardToolbarOrder.toMutableList()
+                            order[index] = order[index + 1].also { order[index + 1] = order[index] }
+                            ideViewModel.setEditorSettings(s.copy(keyboardToolbarOrder = order))
+                        }
+                    },
+                    enabled = index < s.keyboardToolbarOrder.lastIndex,
+                    modifier = Modifier.semantics { contentDescription = "Move ${keyboardToolbarLabel(actionId)} down" },
+                ) { Text("↓") }
+            }
+        }
+        TextButton(onClick = { ideViewModel.setEditorSettings(s.copy(keyboardToolbarOrder = EditorSettings.DEFAULT_KEYBOARD_TOOLBAR_ORDER)) }) {
+            Text("Reset keyboard shortcut order")
+        }
     }
+}
+
+private fun keyboardToolbarLabel(id: String): String = when (id) {
+    "indent" -> "Indent"
+    "outdent" -> "Outdent"
+    "cursorUp" -> "Cursor up"
+    "cursorDown" -> "Cursor down"
+    "cursorLeft" -> "Cursor left"
+    "cursorRight" -> "Cursor right"
+    "undo" -> "Undo"
+    "redo" -> "Redo"
+    "cut" -> "Cut"
+    "copy" -> "Copy"
+    "paste" -> "Paste"
+    "selectAll" -> "Select all"
+    "keyboardToggle" -> "Toggle keyboard"
+    "selectLeft" -> "Select left"
+    "selectRight" -> "Select right"
+    "selectUp" -> "Select up"
+    "selectDown" -> "Select down"
+    "selectWordLeft" -> "Select word left"
+    "selectWordRight" -> "Select word right"
+    "selectToStart" -> "Select to start"
+    "selectToEnd" -> "Select to end"
+    "formatDocument" -> "Format document"
+    "commentLine" -> "Comment or uncomment"
+    "duplicateLine" -> "Duplicate line"
+    "moveLineUp" -> "Move line up"
+    "moveLineDown" -> "Move line down"
+    "fold" -> "Fold"
+    "unfold" -> "Unfold"
+    "previousMatch" -> "Previous match"
+    "nextMatch" -> "Next match"
+    "closeSearch" -> "Close find"
+    else -> id
 }
 
 @Composable

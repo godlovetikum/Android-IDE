@@ -728,8 +728,7 @@ class SafRepository(private val context: Context) {
 
     private suspend fun cleanupCreatedEntry(uri: String, cleanResult: ExactCreateResult): ExactCreateResult =
         if (run {
-                deleteDocument(uri)
-                documentPresence(uri) == DocumentPresence.ABSENT
+                deleteDocument(uri) && documentPresence(uri) != DocumentPresence.EXISTS
             }
         ) cleanResult
         else ExactCreateResult.Partial(
@@ -1445,8 +1444,8 @@ class SafRepository(private val context: Context) {
         destinationUri: String,
         cleanResult: SafeMutationResult,
     ): SafeMutationResult {
-        deleteDocument(destinationUri)
-        return if (documentPresence(destinationUri) == DocumentPresence.ABSENT) cleanResult
+        val deleted = deleteDocument(destinationUri)
+        return if (deleted && documentPresence(destinationUri) != DocumentPresence.EXISTS) cleanResult
         else SafeMutationResult.Partial(
             sourceUri,
             destinationUri,
@@ -1484,13 +1483,13 @@ class SafRepository(private val context: Context) {
             )) {
                 is SafeMutationResult.Created -> {
                     if (deleteDocument(sourceUriString) &&
-                        documentPresence(sourceUriString) == DocumentPresence.ABSENT &&
+                        documentPresence(sourceUriString) != DocumentPresence.EXISTS &&
                         !documentExistsIn(sourceParentUriString, sourceUriString)
                     ) {
                         copied
                     } else {
                         val cleaned = deleteDocument(copied.documentUri) &&
-                            documentPresence(copied.documentUri) == DocumentPresence.ABSENT
+                            documentPresence(copied.documentUri) != DocumentPresence.EXISTS
                         if (cleaned) SafeMutationResult.Failed else SafeMutationResult.Partial(
                             sourceUriString,
                             copied.documentUri,
@@ -1509,13 +1508,13 @@ class SafRepository(private val context: Context) {
             )) {
                 is SafeMutationResult.Created -> {
                     if (deleteDocument(sourceUriString) &&
-                        documentPresence(sourceUriString) == DocumentPresence.ABSENT &&
+                        documentPresence(sourceUriString) != DocumentPresence.EXISTS &&
                         !documentExistsIn(sourceParentUriString, sourceUriString)
                     ) {
                         copied
                     } else {
                         val cleaned = deleteDocument(copied.documentUri) &&
-                            documentPresence(copied.documentUri) == DocumentPresence.ABSENT
+                            documentPresence(copied.documentUri) != DocumentPresence.EXISTS
                         if (cleaned) SafeMutationResult.Failed else SafeMutationResult.Partial(
                             sourceUriString,
                             copied.documentUri,
@@ -1685,8 +1684,9 @@ class SafRepository(private val context: Context) {
      * Some document providers reject deleting a non-empty directory even when
      * the directory itself is writable. In that case we inspect and delete
      * only the directory's current children, retry the directory delete, and
-     * verify that the selected document is absent. An inspection failure or an
-     * unverifiable result is reported as failure rather than success.
+     * verify that the selected document is absent. If a provider accepts the
+     * delete and invalidates the old URI, that is accepted as deletion success;
+     * a positive existence result remains a failure.
      */
     suspend fun deleteDocument(documentUriString: String): Boolean = withContext(Dispatchers.IO) {
         try {
@@ -1712,24 +1712,35 @@ class SafRepository(private val context: Context) {
             }
 
             val documentUri = mutationDocumentUri(documentUriString)
-            val directDelete = runCatching {
+            val beforeDelete = documentPresence(documentUriString)
+            when (beforeDelete) {
+                DocumentPresence.ABSENT -> return@withContext true
+                // An inaccessible URI before the mutation is a genuine
+                // permission/availability failure, not proof of deletion.
+                DocumentPresence.INACCESSIBLE -> return@withContext false
+                DocumentPresence.EXISTS -> Unit
+            }
+            runCatching {
                 DocumentsContract.deleteDocument(resolver, documentUri)
-            }.getOrDefault(false)
+            }
             when (documentPresence(documentUriString)) {
                 DocumentPresence.ABSENT -> return@withContext true
                 // Some providers revoke the deleted document URI immediately.
-                // The delete request was accepted, so do not convert a completed
-                // mutation into a false failure merely because the old URI can no
-                // longer be queried.
-                DocumentPresence.INACCESSIBLE -> if (directDelete) return@withContext true
+                // The URI was present before the mutation, so its invalidation
+                // after the request is evidence of successful deletion even when
+                // the provider returned no useful boolean result.
+                DocumentPresence.INACCESSIBLE -> return@withContext true
                 DocumentPresence.EXISTS -> Unit
             }
 
             if (!deleteChildrenRecursively(documentUriString)) return@withContext false
-            val retried = runCatching {
+            runCatching {
                 DocumentsContract.deleteDocument(resolver, documentUri)
-            }.getOrDefault(false)
-            retried && documentPresence(documentUriString) == DocumentPresence.ABSENT
+            }
+            when (documentPresence(documentUriString)) {
+                DocumentPresence.ABSENT, DocumentPresence.INACCESSIBLE -> true
+                DocumentPresence.EXISTS -> false
+            }
         } catch (e: Exception) {
             Log.e(TAG, "deleteDocument failed for $documentUriString: ${e.message}", e)
             false
@@ -1756,7 +1767,26 @@ class SafRepository(private val context: Context) {
             is ChildrenInspectionResult.Failed -> return false
         } ?: return true
         return deleteDocument(child.documentUri) &&
-            documentPresence(child.documentUri) == DocumentPresence.ABSENT
+            documentPresence(child.documentUri) != DocumentPresence.EXISTS
+    }
+
+    /**
+     * Remove only Android IDE-owned portable metadata directories from a project
+     * root. User files and directories are never considered by this operation.
+     */
+    suspend fun deleteProjectMetadataDirectory(projectRootUriString: String): Boolean = withContext(Dispatchers.IO) {
+        val children = (inspectChildren(projectRootUriString) as? ChildrenInspectionResult.Success)
+            ?.children ?: return@withContext false
+        val metadataDirectories = children.filter {
+            it.isDirectory && (
+                it.displayName == ApplicationIdentity.TARGET_METADATA_DIRECTORY ||
+                    it.displayName == ApplicationIdentity.LEGACY_METADATA_DIRECTORY
+                )
+        }
+        metadataDirectories.all { directory ->
+            deleteDocument(directory.documentUri) &&
+                documentPresence(directory.documentUri) != DocumentPresence.EXISTS
+        }
     }
 
     // ── Rename ─────────────────────────────────────────────────────────────
@@ -1951,8 +1981,8 @@ class SafRepository(private val context: Context) {
                             it.documentUri == result.documentUri
                         }
                         is ChildrenInspectionResult.Failed -> {
-                            deleteDocument(result.documentUri)
-                            val absent = documentPresence(result.documentUri) == DocumentPresence.ABSENT
+                            val absent = deleteDocument(result.documentUri) &&
+                                documentPresence(result.documentUri) != DocumentPresence.EXISTS
                             return@withContext PathResolutionResult.IntermediateNameMismatch(
                                 if (absent) created.toList() else created + result.documentUri,
                             )
@@ -1963,7 +1993,7 @@ class SafRepository(private val context: Context) {
                         isSameOrDescendant(treeUriString, result.documentUri) != true
                     ) {
                         val deleted = deleteDocument(result.documentUri) &&
-                            documentPresence(result.documentUri) == DocumentPresence.ABSENT
+                            documentPresence(result.documentUri) != DocumentPresence.EXISTS
                         return@withContext PathResolutionResult.IntermediateNameMismatch(
                             if (deleted) created.toList() else created + result.documentUri,
                         )
@@ -2003,8 +2033,7 @@ class SafRepository(private val context: Context) {
                 allDeleted = false
                 continue
             }
-            deleteDocument(uri)
-            if (documentPresence(uri) != DocumentPresence.ABSENT) allDeleted = false
+            if (!deleteDocument(uri) || documentPresence(uri) == DocumentPresence.EXISTS) allDeleted = false
         }
         return allDeleted
     }

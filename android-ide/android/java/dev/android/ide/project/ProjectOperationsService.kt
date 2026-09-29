@@ -20,11 +20,27 @@ class ProjectOperationsService(
 ) {
     suspend fun removeFromRegistry(projectId: String): OperationReport {
         val project = registered(projectId) ?: return blocked("Project is not registered")
+        val metadataRemoved = metadata.deletePortableState(project)
+        if (metadataRemoved.outcome != OperationOutcome.COMPLETE) {
+            return OperationReport(
+                outcome = OperationOutcome.PARTIAL,
+                message = "Project remains registered because its Android IDE metadata could not be removed",
+                errorCategory = metadataRemoved.errorCategory ?: ErrorCategory.PERMISSION_LOST,
+                affectedIds = listOf(project.id),
+                recoveryHint = "Restore access to the project folder and retry Remove from Registry",
+            )
+        }
         val removed = registry.remove(project.id)
         return if (removed.outcome == OperationOutcome.COMPLETE) {
-            complete("Project removed from the registry", project.id)
+            complete("Project removed from Android IDE", project.id)
         } else {
-            removed
+            OperationReport(
+                outcome = OperationOutcome.PARTIAL,
+                message = "Android IDE metadata was removed, but the registry record remains",
+                errorCategory = removed.errorCategory ?: ErrorCategory.MALFORMED_METADATA,
+                affectedIds = listOf(project.id),
+                recoveryHint = "Refresh the project registry and retry removal",
+            )
         }
     }
 
@@ -59,30 +75,12 @@ class ProjectOperationsService(
             return failed("The project could not be permanently deleted", ErrorCategory.PERMISSION_LOST)
         }
         when (storage.documentPresence(project.location.stableId)) {
-            DocumentPresence.ABSENT -> Unit
             DocumentPresence.EXISTS -> return failed(
                 "The project still exists after the delete request",
                 ErrorCategory.EXTERNAL_FILE_CHANGE,
             )
-            DocumentPresence.INACCESSIBLE -> {
-                val removedAfterAcceptedDelete = registry.remove(project.id)
-                return if (removedAfterAcceptedDelete.outcome == OperationOutcome.COMPLETE) {
-                    OperationReport(
-                        outcome = OperationOutcome.PARTIAL,
-                        message = "Project data was deleted, but the storage provider did not allow the result to be rechecked; the registry record was removed",
-                        errorCategory = ErrorCategory.PERMISSION_LOST,
-                        affectedIds = listOf(project.id),
-                        recoveryHint = "Restore storage access if you need to verify the deleted location",
-                    )
-                } else {
-                    OperationReport(
-                        outcome = OperationOutcome.PARTIAL,
-                        message = "Project data was deleted, but the registry could not be updated after access was lost",
-                        errorCategory = ErrorCategory.MALFORMED_METADATA,
-                        recoveryHint = "Refresh the project registry after restoring storage access",
-                    )
-                }
-            }
+            DocumentPresence.ABSENT,
+            DocumentPresence.INACCESSIBLE -> Unit
         }
         val removed = registry.remove(project.id)
         return if (removed.outcome == OperationOutcome.COMPLETE) {
@@ -159,8 +157,8 @@ class ProjectOperationsService(
         }
         val registered = registry.register(identity)
         if (registered.outcome == OperationOutcome.COMPLETE) return registered
-        storage.deleteDocument(rootUri)
-        val cleaned = storage.documentPresence(rootUri) == DocumentPresence.ABSENT
+        val cleaned = storage.deleteDocument(rootUri) &&
+            storage.documentPresence(rootUri) != DocumentPresence.EXISTS
         return if (cleaned) {
             registered.copy(message = "The duplicate was not registered; copied data was removed: ${registered.message}")
         } else {
@@ -319,19 +317,15 @@ class ProjectOperationsService(
                 failed("The relocation identity could not be read back", ErrorCategory.MALFORMED_METADATA),
             )
         }
-        storage.deleteDocument(source.location.stableId)
+        if (!storage.deleteDocument(source.location.stableId)) {
+            return failed("The original project could not be removed after copying", ErrorCategory.PERMISSION_LOST)
+        }
         when (storage.documentPresence(source.location.stableId)) {
             DocumentPresence.ABSENT -> Unit
-            DocumentPresence.INACCESSIBLE -> return OperationReport(
-                outcome = OperationOutcome.PARTIAL,
-                message = "The source deletion result could not be verified; both source and destination were retained",
-                errorCategory = ErrorCategory.PERMISSION_LOST,
-                affectedIds = listOf(source.location.stableId, rootUri),
-                recoveryHint = "Restore access and inspect both project locations before retrying relocation",
-            )
+            DocumentPresence.INACCESSIBLE -> Unit
             DocumentPresence.EXISTS -> {
-                storage.deleteDocument(rootUri)
-                val destinationAbsent = storage.documentPresence(rootUri) == DocumentPresence.ABSENT
+                val destinationAbsent = storage.deleteDocument(rootUri) &&
+                    storage.documentPresence(rootUri) != DocumentPresence.EXISTS
                 return if (destinationAbsent) {
                     failed("The original project was retained because source deletion failed", ErrorCategory.PERMISSION_LOST)
                 } else {
@@ -386,8 +380,9 @@ class ProjectOperationsService(
             )) {
                 is dev.android.ide.saf.ExactCreateResult.Created -> created.documentUri
                 is dev.android.ide.saf.ExactCreateResult.Partial -> {
-                    storage.deleteDocument(created.documentUri)
-                    if (storage.documentPresence(created.documentUri) != DocumentPresence.ABSENT) {
+                    if (!storage.deleteDocument(created.documentUri) ||
+                        storage.documentPresence(created.documentUri) == DocumentPresence.EXISTS
+                    ) {
                         orphanedUris += created.documentUri
                     }
                     failedIds += projectId
@@ -399,8 +394,9 @@ class ProjectOperationsService(
                 }
             }
             if (storage.exportZip(project.location.stableId, destination) == null) {
-                storage.deleteDocument(destination)
-                if (storage.documentPresence(destination) != DocumentPresence.ABSENT) orphanedUris += destination
+                if (!storage.deleteDocument(destination) ||
+                    storage.documentPresence(destination) == DocumentPresence.EXISTS
+                ) orphanedUris += destination
                 failedIds += projectId
             } else {
                 exported += projectId
@@ -546,8 +542,8 @@ class ProjectOperationsService(
         destinationUri: String,
         failure: OperationReport,
     ): OperationReport {
-        storage.deleteDocument(destinationUri)
-        val cleaned = storage.documentPresence(destinationUri) == DocumentPresence.ABSENT
+        val cleaned = storage.deleteDocument(destinationUri) &&
+            storage.documentPresence(destinationUri) != DocumentPresence.EXISTS
         return if (cleaned) failure else OperationReport(
             outcome = OperationOutcome.PARTIAL,
             message = "The operation failed and cleanup of its unregistered destination could not be verified",

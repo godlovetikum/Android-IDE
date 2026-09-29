@@ -19,6 +19,7 @@ import dev.android.ide.lifecycle.LifecycleCoordinatorImpl
 import dev.android.ide.project.ProjectStateService
 import dev.android.ide.project.ProjectRestoreResult
 import dev.android.ide.project.ProjectAcquisitionService
+import dev.android.ide.project.CreateProjectTemplate
 import dev.android.ide.project.ProjectDetailsResult
 import dev.android.ide.project.ProjectDetailsService
 import dev.android.ide.data.model.ProjectDetails
@@ -47,6 +48,7 @@ data class AppShellState(
     val operationReport: OperationReport? = null,
     val registryWarning: String? = null,
     val restoring: Boolean = false,
+    val refreshingProjects: Boolean = false,
     val operationInProgress: Boolean = false,
     val projectDetails: ProjectDetails? = null,
     val folderInspection: FolderInspection? = null,
@@ -79,7 +81,7 @@ data class FolderInspection(
 data class ProjectSummary(
     val fileCount: Int? = null,
     val totalBytes: Long? = null,
-    val hasGit: Boolean = false,
+    val hasGit: Boolean? = null,
     val status: String? = null,
 )
 
@@ -97,9 +99,7 @@ class AppShellViewModel(application: Application) : AndroidViewModel(application
     private val runtimeState = RuntimeStateStore(application)
     private val terminalRuntime = TerminalRuntimeAdapterImpl(application)
     private var restoreJob: kotlinx.coroutines.Job? = null
-    private var summaryJob: kotlinx.coroutines.Job? = null
     private var restoreGeneration = 0L
-    private var summaryGeneration = 0L
     private var projectRefreshGeneration = 0L
     private var folderInspectionGeneration = 0L
 
@@ -210,9 +210,13 @@ class AppShellViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun sendTerminalInput(input: String) {
+        sendTerminalInput(input.toByteArray(Charsets.UTF_8))
+    }
+
+    fun sendTerminalInput(input: ByteArray) {
         val sessionId = _state.value.selectedTerminalSessionId ?: return
         viewModelScope.launch {
-            val report = terminalRuntime.sendInput(sessionId, input.toByteArray(Charsets.UTF_8))
+            val report = terminalRuntime.sendInput(sessionId, input)
             _state.update { it.copy(terminalFeedback = report) }
             refreshTerminalOutput()
         }
@@ -354,9 +358,12 @@ class AppShellViewModel(application: Application) : AndroidViewModel(application
 
     fun refreshProjectList() {
         viewModelScope.launch {
-            _state.update { it.copy(operationInProgress = true, statusMessage = null, operationReport = null) }
-            refreshProjects()
-            _state.update { it.copy(operationInProgress = false) }
+            _state.update { it.copy(refreshingProjects = true, statusMessage = null, operationReport = null) }
+            try {
+                refreshProjects()
+            } finally {
+                _state.update { it.copy(refreshingProjects = false) }
+            }
         }
     }
 
@@ -537,10 +544,15 @@ class AppShellViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    fun createBlankProject(destinationParentUri: String, name: String, description: String) {
+    fun createBlankProject(
+        destinationParentUri: String,
+        name: String,
+        description: String,
+        template: CreateProjectTemplate = CreateProjectTemplate.FROM_SCRATCH,
+    ) {
         viewModelScope.launch {
             _state.update { it.copy(operationInProgress = true, statusMessage = null, operationReport = null) }
-            val report = acquisition.createBlankProject(destinationParentUri, name, description)
+            val report = acquisition.createBlankProject(destinationParentUri, name, description, template)
             _state.update {
                 it.copy(
                     operationInProgress = false,
@@ -726,30 +738,20 @@ class AppShellViewModel(application: Application) : AndroidViewModel(application
         val currentIds = registered.map { it.id }.toSet()
         val warning = registry.warning()
         _state.update { it.copy(projects = registered, projectSummaries = emptyMap(), registryWarning = warning) }
-        val summaryGeneration = ++this.summaryGeneration
-        summaryJob?.cancel()
-        summaryJob = viewModelScope.launch {
-            val summaries = registered.associate { project ->
-                project.id to when (val result = detailsService.load(project.id)) {
-                    is ProjectDetailsResult.Loaded -> ProjectSummary(
-                        fileCount = result.details.fileCount,
-                        totalBytes = result.details.totalBytes,
-                        hasGit = result.details.git != null,
-                    )
-                    is ProjectDetailsResult.Unavailable -> ProjectSummary(
-                        status = when (project.location.capabilityState) {
-                            dev.android.ide.contracts.CapabilityState.PERMISSION_LOST -> "Project storage permission needed"
-                            dev.android.ide.contracts.CapabilityState.UNSUPPORTED -> "Project storage not supported"
-                            else -> "Project storage unavailable"
-                        },
-                    )
-                }
+        val summaries = registered.associate { project ->
+            project.id to when (val result = detailsService.load(project.id)) {
+                is ProjectDetailsResult.Loaded -> ProjectSummary(
+                    fileCount = result.details.fileCount,
+                    totalBytes = result.details.totalBytes,
+                    hasGit = result.details.git != null,
+                )
+                is ProjectDetailsResult.Unavailable -> ProjectSummary(
+                    status = result.reason,
+                )
             }
-            if (summaryGeneration == this@AppShellViewModel.summaryGeneration &&
-                _state.value.projects.map { it.id }.toSet() == currentIds
-            ) {
-                _state.update { it.copy(projectSummaries = summaries) }
-            }
+        }
+        if (generation == projectRefreshGeneration && _state.value.projects.map { it.id }.toSet() == currentIds) {
+            _state.update { it.copy(projectSummaries = summaries) }
         }
     }
 

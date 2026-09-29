@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
@@ -29,6 +30,7 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
@@ -51,6 +53,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.termux.view.TerminalView
@@ -68,6 +72,10 @@ fun TerminalSurface(state: AppShellState, viewModel: AppShellViewModel, onOpenNa
     var packageDialogOpen by remember { mutableStateOf(false) }
     var renameSessionId by remember { mutableStateOf<String?>(null) }
     var renameValue by remember { mutableStateOf("") }
+    var sessionMenuId by remember { mutableStateOf<String?>(null) }
+    var ctrlLatched by remember { mutableStateOf(false) }
+    var altLatched by remember { mutableStateOf(false) }
+    var escapeLatched by remember { mutableStateOf(false) }
     val sessions = state.terminalSessions
     val selected = sessions.firstOrNull { it.id == state.selectedTerminalSessionId && it.availability == SessionAvailability.AVAILABLE }
     val runtimeAvailable = state.runtimeCapabilities?.availability == RuntimeAvailability.AVAILABLE
@@ -127,16 +135,31 @@ fun TerminalSurface(state: AppShellState, viewModel: AppShellViewModel, onOpenNa
         }
         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             sessions.forEach { session ->
-                TextButton(onClick = { viewModel.selectTerminalSession(session.id) }, enabled = session.availability == SessionAvailability.AVAILABLE) {
-                    Text(
-                        if (session.availability == SessionAvailability.AVAILABLE) session.name else "${session.name} (Unavailable)",
-                        color = if (session.id == selected?.id) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                Box {
+                    Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                        TextButton(onClick = { viewModel.selectTerminalSession(session.id) }, enabled = session.availability == SessionAvailability.AVAILABLE) {
+                            Text(
+                                if (session.availability == SessionAvailability.AVAILABLE) session.name else "${session.name} (Unavailable)",
+                                color = if (session.id == selected?.id) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        IconButton(onClick = { sessionMenuId = session.id }) {
+                            Icon(Icons.Default.MoreVert, "Session actions")
+                        }
+                    }
+                    DropdownMenu(expanded = sessionMenuId == session.id, onDismissRequest = { sessionMenuId = null }) {
+                        DropdownMenuItem(
+                            leadingIcon = { Icon(Icons.Default.Edit, null) },
+                            text = { Text("Rename session") },
+                            onClick = { sessionMenuId = null; renameSessionId = session.id; renameValue = session.name },
+                        )
+                        DropdownMenuItem(
+                            leadingIcon = { Icon(Icons.Default.Close, null) },
+                            text = { Text("Close session") },
+                            onClick = { sessionMenuId = null; viewModel.closeTerminalSession(session.id) },
+                        )
+                    }
                 }
-                IconButton(onClick = { renameSessionId = session.id; renameValue = session.name }) {
-                    Icon(Icons.Default.Edit, "Rename session")
-                }
-                IconButton(onClick = { viewModel.closeTerminalSession(session.id) }) { Icon(Icons.Default.Close, "Close session") }
             }
             OutlinedTextField(sessionName, { sessionName = it }, label = { Text("Session name") }, singleLine = true, modifier = Modifier.width(180.dp))
             Button(onClick = { viewModel.createTerminalSession(name = sessionName); sessionName = "" }, enabled = runtimeAvailable) { Icon(Icons.Default.Add, null); Text("New") }
@@ -166,6 +189,17 @@ fun TerminalSurface(state: AppShellState, viewModel: AppShellViewModel, onOpenNa
                 update = { view ->
                     val live = viewModel.terminalSession(selected.id)
                     if (live != null && view.mTermSession !== live) view.attachSession(live)
+                },
+            )
+            TerminalShortcutToolbar(
+                ctrlLatched = ctrlLatched,
+                altLatched = altLatched,
+                escapeLatched = escapeLatched,
+                onCtrlToggle = { ctrlLatched = !ctrlLatched },
+                onAltToggle = { altLatched = !altLatched },
+                onEscapeToggle = { escapeLatched = !escapeLatched },
+                onSend = { key ->
+                    viewModel.sendTerminalInput(encodeTerminalShortcut(key, ctrlLatched, altLatched, escapeLatched))
                 },
             )
             Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
@@ -212,6 +246,114 @@ fun TerminalSurface(state: AppShellState, viewModel: AppShellViewModel, onOpenNa
         }
     }
     }
+}
+
+private data class TerminalShortcut(val label: String, val sequence: String, val forceCtrl: Boolean = false)
+
+private val TERMINAL_NAVIGATION_SHORTCUTS = listOf(
+    TerminalShortcut("Esc key", "\u001B"),
+    TerminalShortcut("Tab", "\t"),
+    TerminalShortcut("Enter", "\r"),
+    TerminalShortcut("Backspace", "\u007F"),
+    TerminalShortcut("↑", "\u001B[A"),
+    TerminalShortcut("↓", "\u001B[B"),
+    TerminalShortcut("←", "\u001B[D"),
+    TerminalShortcut("→", "\u001B[C"),
+    TerminalShortcut("Home", "\u001B[H"),
+    TerminalShortcut("End", "\u001B[F"),
+    TerminalShortcut("PgUp", "\u001B[5~"),
+    TerminalShortcut("PgDn", "\u001B[6~"),
+)
+
+private val TERMINAL_CONTROL_SHORTCUTS = listOf(
+    TerminalShortcut("Ctrl+C", "c", forceCtrl = true),
+    TerminalShortcut("Ctrl+D", "d", forceCtrl = true),
+    TerminalShortcut("Ctrl+Z", "z", forceCtrl = true),
+    TerminalShortcut("Ctrl+L", "l", forceCtrl = true),
+)
+
+@Composable
+private fun TerminalShortcutToolbar(
+    ctrlLatched: Boolean,
+    altLatched: Boolean,
+    escapeLatched: Boolean,
+    onCtrlToggle: () -> Unit,
+    onAltToggle: () -> Unit,
+    onEscapeToggle: () -> Unit,
+    onSend: (TerminalShortcut) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(
+            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            TerminalShortcutButton("Ctrl", ctrlLatched, onCtrlToggle)
+            TerminalShortcutButton("Alt", altLatched, onAltToggle)
+            TerminalShortcutButton("Esc mod", escapeLatched, onEscapeToggle)
+            TERMINAL_CONTROL_SHORTCUTS.forEach { shortcut ->
+                TerminalShortcutButton(shortcut.label, false) { onSend(shortcut) }
+            }
+        }
+        Row(
+            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            TERMINAL_NAVIGATION_SHORTCUTS.forEach { shortcut ->
+                TerminalShortcutButton(shortcut.label, false) { onSend(shortcut) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TerminalShortcutButton(label: String, selected: Boolean = false, onClick: () -> Unit) {
+    val modifier = Modifier
+        .height(38.dp)
+        .semantics { this.selected = selected }
+    if (selected) {
+        Button(
+            onClick = onClick,
+            modifier = modifier,
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = MaterialTheme.colorScheme.primaryContainer,
+                contentColor = MaterialTheme.colorScheme.primary,
+            ),
+        ) { Text(label, style = MaterialTheme.typography.labelMedium) }
+    } else {
+        androidx.compose.material3.OutlinedButton(
+            onClick = onClick,
+            modifier = modifier,
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+        ) { Text(label, style = MaterialTheme.typography.labelMedium) }
+    }
+}
+
+private fun encodeTerminalShortcut(
+    shortcut: TerminalShortcut,
+    ctrlLatched: Boolean,
+    altLatched: Boolean,
+    escapeLatched: Boolean,
+): ByteArray {
+    val ctrl = ctrlLatched || shortcut.forceCtrl
+    val raw = shortcut.sequence
+    val payload = when {
+        ctrl && raw.length == 1 && raw[0].code in 0x20..0x7E -> byteArrayOf((raw[0].code and 0x1F).toByte())
+        ctrl && raw.startsWith("\u001B[") -> ctrlModifiedCsi(raw).toByteArray(Charsets.UTF_8)
+        else -> raw.toByteArray(Charsets.UTF_8)
+    }
+    val prefix = if (altLatched || escapeLatched) byteArrayOf(0x1B) else byteArrayOf()
+    return prefix + payload
+}
+
+private fun ctrlModifiedCsi(sequence: String): String {
+    val final = sequence.lastOrNull() ?: return sequence
+    val parameter = when (final) {
+        'A', 'B', 'C', 'D', 'H', 'F' -> "1;5"
+        '~' -> sequence.substringAfter('[').substringBefore('~').ifBlank { "1" } + ";5"
+        else -> return sequence
+    }
+    return "\u001B[${parameter}${final}"
 }
 
 private class IdeTerminalViewClient : TerminalViewClient {

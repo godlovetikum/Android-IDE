@@ -8,6 +8,13 @@ import java.io.PrintWriter
 import java.io.StringWriter
 import java.util.concurrent.atomic.AtomicBoolean
 
+data class CrashReportSummary(
+    val exception: String,
+    val message: String,
+    val stackTrace: String,
+    val timestampMs: Long,
+)
+
 /**
  * Captures fatal exceptions locally without coupling crash handling to Compose,
  * coroutines, network access, or editor/project contents.
@@ -26,16 +33,32 @@ class CrashReporter(private val context: Context) : Thread.UncaughtExceptionHand
     }
 
     /** Number of locally persisted crash reports awaiting user review. */
-    fun reportCount(): Int = reportDirectory.listFiles { file -> file.extension == "json" }?.size ?: 0
+    fun reportCount(): Int = (reportDirectory.listFiles { file -> file.extension == "json" }?.size ?: 0) +
+        if (emergencyMarker().exists()) 1 else 0
+
+    fun latestReport(): CrashReportSummary? = reportDirectory
+        .listFiles { file -> file.extension == "json" }
+        ?.maxByOrNull { it.lastModified() }
+        ?.let { file -> runCatching { JSONObject(file.readText(Charsets.UTF_8)).toSummary() }.getOrNull() }
+        ?: emergencyMarker().takeIf { it.exists() }?.let { marker ->
+            val lines = runCatching { marker.readLines() }.getOrDefault(emptyList())
+            CrashReportSummary(
+                exception = lines.getOrNull(1) ?: "Unknown exception",
+                message = lines.getOrNull(2).orEmpty().ifBlank { "The crash report could not be fully persisted." },
+                stackTrace = "Emergency crash marker; full stack trace was unavailable.",
+                timestampMs = marker.lastModified(),
+            )
+        }
 
     override fun uncaughtException(thread: Thread, throwable: Throwable) {
         runCatching { writeReport(thread, throwable) }
+            .onFailure { writeEmergencyMarker(thread, throwable) }
         previousHandler?.uncaughtException(thread, throwable)
             ?: android.os.Process.killProcess(android.os.Process.myPid())
     }
 
     private fun writeReport(thread: Thread, throwable: Throwable) {
-        reportDirectory.mkdirs()
+        check(reportDirectory.exists() || reportDirectory.mkdirs()) { "Unable to create crash-report directory" }
         val report = JSONObject().apply {
             put("reportVersion", 1)
             put("timestampMs", System.currentTimeMillis())
@@ -56,7 +79,19 @@ class CrashReporter(private val context: Context) : Thread.UncaughtExceptionHand
             temporary.renameTo(target)
         }
         trimReports()
+        emergencyMarker().delete()
     }
+
+    private fun writeEmergencyMarker(thread: Thread, throwable: Throwable) {
+        runCatching {
+            File(context.filesDir, "crash-pending.marker").writeText(
+                "${thread.name}\n${throwable::class.java.name}\n${sanitize(throwable.message)}",
+                Charsets.UTF_8,
+            )
+        }
+    }
+
+    private fun emergencyMarker(): File = File(context.filesDir, "crash-pending.marker")
 
     private fun trimReports() {
         reportDirectory.listFiles { file -> file.extension == "json" }
@@ -77,6 +112,13 @@ class CrashReporter(private val context: Context) : Thread.UncaughtExceptionHand
     private fun appVersion(): String = runCatching {
         context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "unknown"
     }.getOrDefault("unknown")
+
+    private fun JSONObject.toSummary(): CrashReportSummary = CrashReportSummary(
+        exception = optString("exception", "Unknown exception"),
+        message = optString("message", "No message"),
+        stackTrace = optString("stackTrace", "No stack trace available"),
+        timestampMs = optLong("timestampMs", 0L),
+    )
 
     private companion object {
         const val MAX_REPORTS = 5

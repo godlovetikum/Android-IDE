@@ -2523,7 +2523,7 @@ build/
                 }
                 is ExactCreateResult.Partial -> {
                     safRepository.deleteDocument(result.documentUri)
-                    val itemAbsent = safRepository.documentPresence(result.documentUri) == DocumentPresence.ABSENT
+                    val itemAbsent = safRepository.documentPresence(result.documentUri) != DocumentPresence.EXISTS
                     val parentsRemoved = safRepository.rollbackCreatedDirectories(createdIntermediateUris)
                     val recovery = if (!itemAbsent || !parentsRemoved) " ${result.recoveryHint}" else ""
                     setCreateError(
@@ -2639,16 +2639,17 @@ build/
         val segments = when (normalized) {
             is NormalizedPathResult.Success -> normalized.segments
             NormalizedPathResult.AboveProjectRoot -> {
-                _uiState.update { it.copy(statusMessage = "The path cannot go above the project root") }
+                _uiState.update { it.copy(fileOpDialog = (it.fileOpDialog as? FileOpDialog.SaveAs)?.copy(errorMessage = "The path cannot go above the project root"), statusMessage = "The path cannot go above the project root") }
                 return
             }
             NormalizedPathResult.MissingFinalName,
             NormalizedPathResult.InvalidComponent -> {
-                _uiState.update { it.copy(statusMessage = "Invalid path") }
+                _uiState.update { it.copy(fileOpDialog = (it.fileOpDialog as? FileOpDialog.SaveAs)?.copy(errorMessage = "Enter a valid project-relative file path"), statusMessage = "Invalid path") }
                 return
             }
         }
         viewModelScope.launch {
+            _uiState.update { it.copy(fileOpDialog = (it.fileOpDialog as? FileOpDialog.SaveAs)?.copy(errorMessage = null, isSubmitting = true), fileMutationLoading = true) }
             val resolved = safRepository.resolveOrCreatePathSafely(rootUri, segments)
             val path = resolved as? PathResolutionResult.Resolved ?: run {
                 val created = when (resolved) {
@@ -2660,7 +2661,11 @@ build/
                 val parentsRemoved = safRepository.rollbackCreatedDirectories(created)
                 _uiState.update {
                     it.copy(
-                        fileOpDialog = null,
+                        fileOpDialog = (it.fileOpDialog as? FileOpDialog.SaveAs)?.copy(
+                            errorMessage = if (parentsRemoved) "Could not resolve the destination path" else "Save As partially completed; inspect newly created parent folders",
+                            isSubmitting = false,
+                        ),
+                        fileMutationLoading = false,
                         statusMessage = if (parentsRemoved) "Save As: could not resolve path"
                         else "Save As partially completed; inspect newly created parent folders",
                     )
@@ -2677,11 +2682,15 @@ build/
                 is ExactCreateResult.Created -> created.documentUri
                 is ExactCreateResult.Partial -> {
                     safRepository.deleteDocument(created.documentUri)
-                    val absent = safRepository.documentPresence(created.documentUri) == DocumentPresence.ABSENT
+                    val absent = safRepository.documentPresence(created.documentUri) != DocumentPresence.EXISTS
                     val parentsRemoved = safRepository.rollbackCreatedDirectories(path.createdIntermediateUris)
                     _uiState.update {
                         it.copy(
-                            fileOpDialog = null,
+                            fileOpDialog = (it.fileOpDialog as? FileOpDialog.SaveAs)?.copy(
+                                errorMessage = if (absent && parentsRemoved) "Save As failed; the created file was removed" else "Save As may have left a partially created file",
+                                isSubmitting = false,
+                            ),
+                            fileMutationLoading = false,
                             statusMessage = if (absent && parentsRemoved) "Save As failed; unexpected provider item was removed"
                             else "Save As may have left ${created.documentUri}: ${created.recoveryHint}",
                         )
@@ -2697,7 +2706,11 @@ build/
                 }
                     _uiState.update {
                         it.copy(
-                            fileOpDialog = null,
+                            fileOpDialog = (it.fileOpDialog as? FileOpDialog.SaveAs)?.copy(
+                                errorMessage = message,
+                                isSubmitting = false,
+                            ),
+                            fileMutationLoading = false,
                             statusMessage = if (parentsRemoved) message else "$message; parent-folder cleanup was incomplete",
                         )
                     }
@@ -2707,11 +2720,15 @@ build/
             val ok = fileMutations.write(newUri, content.toByteArray(Charsets.UTF_8))
             if (!ok) {
                 safRepository.deleteDocument(newUri)
-                val itemAbsent = safRepository.documentPresence(newUri) == DocumentPresence.ABSENT
+                val itemAbsent = safRepository.documentPresence(newUri) != DocumentPresence.EXISTS
                 val parentsRemoved = safRepository.rollbackCreatedDirectories(path.createdIntermediateUris)
                 _uiState.update {
                     it.copy(
-                        fileOpDialog = null,
+                        fileOpDialog = (it.fileOpDialog as? FileOpDialog.SaveAs)?.copy(
+                            errorMessage = if (itemAbsent && parentsRemoved) "Save As failed; the created file was removed" else "Save As partially completed; inspect the created file and parent folders",
+                            isSubmitting = false,
+                        ),
+                        fileMutationLoading = false,
                         statusMessage = if (itemAbsent && parentsRemoved) "Save As: write failed; created file was removed"
                         else "Save As partially completed; inspect ${newUri} and any newly created parent folders",
                     )
@@ -2731,6 +2748,7 @@ build/
                         ) else it
                     },
                     fileOpDialog  = null,
+                    fileMutationLoading = false,
                     statusMessage = "Saved as $leafName",
                 )
             }

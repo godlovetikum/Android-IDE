@@ -64,5 +64,9 @@ sealed class FileOpDialog {
      * for saving the active file's content.  The [suggestedName] pre-fills the
      * text field with the current tab's display name.
      */
-    data class SaveAs(val suggestedName: String) : FileOpDialog()
+    data class SaveAs(
+        val suggestedName: String,
+        val errorMessage: String? = null,
+        val isSubmitting: Boolean = false,
+    ) : FileOpDialog()
 }

@@ -1,7 +1,5 @@
 *.zip
 * .zip
-android-ide/android/assets/termux/bootstrap-*.zip
-android-ide/android/assets/termux/SHA256SUMS
 instructions.md
 TECH_STACK_MIGRATION.md
 attached_assets/
@@ -9,3 +7,4 @@ attached_assets/
 .local
 .cache
 .agents
+.dev-android-ide/

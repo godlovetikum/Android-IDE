@@ -40,10 +40,10 @@ class ProjectFileMutationService(private val storage: ProjectStorageAdapterImpl)
     suspend fun rename(sourceUri: String, newName: String): String? =
         storage.renameDocument(sourceUri, newName)
 
-    /** Deletes only the selected entry and reports success only after absence is verified. */
+    /** Deletes only the selected entry and fails only when deletion is rejected or presence is confirmed. */
     suspend fun delete(sourceUri: String): Boolean =
         storage.deleteDocument(sourceUri) &&
-            storage.documentPresence(sourceUri) == dev.android.ide.saf.DocumentPresence.ABSENT
+            storage.documentPresence(sourceUri) != dev.android.ide.saf.DocumentPresence.EXISTS
 
     suspend fun deleteChildIfPresent(parentUri: String, childName: String): Boolean =
         storage.deleteChildIfPresent(parentUri, childName)

@@ -146,6 +146,15 @@ class ProjectMetadataAdapterImpl(
         }
     }
 
+    suspend fun deletePortableState(project: ProjectIdentity): OperationReport {
+        val removed = saf.deleteProjectMetadataDirectory(project.location.stableId)
+        return if (removed) {
+            complete("Android IDE project metadata removed", project.id)
+        } else {
+            failed("Android IDE project metadata could not be removed", project.id, ErrorCategory.PERMISSION_LOST)
+        }
+    }
+
     override suspend fun readIdentity(location: ProjectLocation): ProjectIdentity? {
         val manifest = saf.readProjectMetadataFile(location.stableId, "project.json") ?: return null
         val project = manifest.optJSONObject("project") ?: return null

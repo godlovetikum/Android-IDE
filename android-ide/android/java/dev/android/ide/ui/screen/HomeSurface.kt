@@ -27,12 +27,18 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -51,8 +57,10 @@ fun HomeSurface(
     onFeedback: (String) -> Unit,
     crashRecoveryCount: Int = 0,
     crashReportCount: Int = 0,
+    latestCrashReport: dev.android.ide.CrashReportSummary? = null,
 ) {
     val colors = LocalIdeColors.current
+    var crashReportVisible by remember { mutableStateOf(false) }
     val destinations = buildList {
         add(HomeDestinationData(Icons.Default.FolderOpen, "Projects", "Manage your projects and workspace", true) { onNavigate(Surface.PROJECTS) })
         add(HomeDestinationData(Icons.Default.Code, "Editor", "Edit code and manage project files", true) { onNavigate(Surface.EDITOR) })
@@ -73,7 +81,9 @@ fun HomeSurface(
                 else -> null
             }
             val context = listOfNotNull(recoveryText, reportText).joinToString("; ")
-            add(HomeDestinationData(Icons.Default.WarningAmber, "Errors", "Your last session didn't exit properly — $context", true, isWarning = true) { onNavigate(Surface.EDITOR) })
+            add(HomeDestinationData(Icons.Default.WarningAmber, "Errors", "Your last session didn't exit properly — $context", true, isWarning = true) {
+                if (latestCrashReport != null) crashReportVisible = true else onNavigate(Surface.EDITOR)
+            })
         }
     }
 
@@ -110,6 +120,20 @@ fun HomeSurface(
                 colors = ButtonDefaults.buttonColors(containerColor = colors.error),
             ) { Text("Exit Android IDE") }
         }
+    }
+    if (crashReportVisible && latestCrashReport != null) {
+        AlertDialog(
+            onDismissRequest = { crashReportVisible = false },
+            title = { Text("Crash report") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(latestCrashReport.exception, style = MaterialTheme.typography.titleSmall)
+                    if (latestCrashReport.message.isNotBlank()) Text(latestCrashReport.message)
+                    Text(latestCrashReport.stackTrace, style = MaterialTheme.typography.bodySmall, maxLines = 12, overflow = TextOverflow.Ellipsis)
+                }
+            },
+            confirmButton = { TextButton(onClick = { crashReportVisible = false }) { Text("Close") } },
+        )
     }
 }
 

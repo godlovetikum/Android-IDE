@@ -5,8 +5,11 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -63,12 +66,17 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.android.ide.app.AppShellState
 import dev.android.ide.app.AppShellViewModel
 import dev.android.ide.contracts.Surface
 import dev.android.ide.ui.components.EditorPane
+import dev.android.ide.ui.components.EditorProjectActionsMenu
 import dev.android.ide.ui.components.EditorTabBar
 import dev.android.ide.ui.components.FileTreePanel
 import dev.android.ide.ui.theme.LocalIdeColors
@@ -123,7 +131,6 @@ fun EditorSurface(
         fileTree = state.fileTree,
         onOpenGlobalNavigation = onOpenGlobalNavigation,
         onOpenSettings = onOpenSettings,
-        onTogglePanel = onOpenGlobalNavigation,
         onFeedback = onFeedback,
         modifier = modifier.fillMaxSize().background(LocalIdeColors.current.background),
     )
@@ -145,6 +152,41 @@ fun EditorSurface(
         }
     }
     EditorDialogHost(state, ideViewModel, onChooseExportDestination = { dialog -> exportZip.launch("${dialog.node.displayName}.zip") })
+}
+
+@Composable
+private fun EditorSidebarActionTile(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    selected: Boolean = false,
+    onClick: () -> Unit,
+) {
+    val shape = RoundedCornerShape(10.dp)
+    TextButton(
+        onClick = onClick,
+        modifier = Modifier
+            .height(58.dp)
+            .widthIn(min = 68.dp)
+            .border(
+                width = if (selected) 1.5.dp else 1.dp,
+                color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
+                shape = shape,
+            )
+            .background(
+                color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
+                shape = shape,
+            )
+            .semantics {
+                role = Role.Button
+                this.selected = selected
+            },
+        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 5.dp),
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Icon(icon, contentDescription = label, modifier = Modifier.size(20.dp))
+            Text(label, style = MaterialTheme.typography.labelSmall, maxLines = 1)
+        }
+    }
 }
 
 enum class EditorPanel { FILES, FILENAME_SEARCH, CONTENT_SEARCH }
@@ -179,32 +221,55 @@ fun EditorSidebar(
     val root = rootNode ?: return
     Column(modifier.background(colors.surface)) {
         Row(
-            Modifier.fillMaxWidth().height(58.dp).padding(horizontal = 8.dp),
-            horizontalArrangement = Arrangement.Start,
+            Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .padding(horizontal = 8.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text("Files", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(end = 6.dp))
-            IconButton(onClick = {
-                if (state.isSearchVisible) {
-                    onHideFileSearch()
-                    onPanelSelected(EditorPanel.FILES)
-                } else {
-                    onPanelSelected(EditorPanel.FILENAME_SEARCH)
-                    onSearchFiles()
-                }
-            }) { Icon(Icons.Default.Search, if (state.isSearchVisible) "Hide filename search" else "Find files") }
-            IconButton(onClick = onLocate) { Icon(Icons.Default.MyLocation, "Locate current file") }
-            IconButton(onClick = { ideViewModel.showCreateFileDialog(root) }) { Icon(Icons.Default.Description, "New file") }
-            IconButton(onClick = { ideViewModel.showCreateFolderDialog(root) }) { Icon(Icons.Default.CreateNewFolder, "New folder") }
+            EditorSidebarActionTile(
+                icon = Icons.Default.FolderOpen,
+                label = "Files",
+                selected = contentPanel == EditorPanel.FILES,
+                onClick = { onPanelSelected(EditorPanel.FILES); onHideFileSearch(); onHideContentSearch() },
+            )
+            EditorSidebarActionTile(
+                icon = Icons.Default.Search,
+                label = "Search",
+                selected = state.isSearchVisible,
+                onClick = {
+                    if (state.isSearchVisible) onHideFileSearch() else onSearchFiles()
+                    onPanelSelected(if (state.isSearchVisible) EditorPanel.FILES else EditorPanel.FILENAME_SEARCH)
+                },
+            )
+            EditorSidebarActionTile(
+                icon = Icons.Default.Code,
+                label = "Contents",
+                selected = state.isContentSearchVisible,
+                onClick = {
+                    if (state.isContentSearchVisible) onHideContentSearch() else onSearchContent()
+                    onPanelSelected(if (state.isContentSearchVisible) EditorPanel.FILES else EditorPanel.CONTENT_SEARCH)
+                },
+            )
+            EditorSidebarActionTile(Icons.Default.MyLocation, "Locate", onClick = onLocate)
+            EditorSidebarActionTile(Icons.Default.Description, "New file", onClick = { ideViewModel.showCreateFileDialog(root) })
+            EditorSidebarActionTile(Icons.Default.CreateNewFolder, "New folder", onClick = { ideViewModel.showCreateFolderDialog(root) })
             var moreOpen by remember { mutableStateOf(false) }
             Box {
-                IconButton(onClick = { moreOpen = true }) { Icon(Icons.Default.MoreVert, "More file actions") }
-                DropdownMenu(expanded = moreOpen, onDismissRequest = { moreOpen = false }) {
-                    DropdownMenuItem(text = { Text("Refresh files") }, onClick = { moreOpen = false; onRefresh() })
-                    DropdownMenuItem(text = { Text("Import files") }, onClick = { moreOpen = false; onImport(root.documentUri) })
-                    DropdownMenuItem(text = { Text("Export project") }, onClick = { moreOpen = false; onExportProject() })
-                    DropdownMenuItem(text = { Text("Project details") }, onClick = { moreOpen = false; onShowDetails() })
-                }
+                EditorSidebarActionTile(Icons.Default.MoreVert, "More", onClick = { moreOpen = true })
+                EditorProjectActionsMenu(
+                    expanded = moreOpen,
+                    onDismiss = { moreOpen = false },
+                    onNewFile = { ideViewModel.showCreateFileDialog(root) },
+                    onNewFolder = { ideViewModel.showCreateFolderDialog(root) },
+                    onImportFiles = { onImport(root.documentUri) },
+                    onExportProject = onExportProject,
+                    onRefresh = onRefresh,
+                    onShowDetails = onShowDetails,
+                    onDeleteProject = onDeleteProject,
+                    onRemoveProject = onRemoveProject,
+                )
             }
         }
         HorizontalDivider(color = colors.separator)
@@ -311,7 +376,6 @@ private fun EditorWorkspace(
     fileTree: List<FileNode>,
     onOpenGlobalNavigation: () -> Unit,
     onOpenSettings: () -> Unit,
-    onTogglePanel: () -> Unit,
     onFeedback: (String) -> Unit,
     modifier: Modifier,
 ) {
@@ -321,14 +385,18 @@ private fun EditorWorkspace(
     Column(modifier.background(colors.background)) {
         EditorTopBar(
             state = state, activeTab = activeTab, fileTree = fileTree,
-            onOpenGlobalNavigation = onOpenGlobalNavigation, onTogglePanel = onTogglePanel,
+            projectRootUri = state.projectRootUri,
+            onOpenGlobalNavigation = onOpenGlobalNavigation,
             onFind = {
                 ideViewModel.showEditorFind()
                 ideViewModel.sendEditorCommand(EditorOutbound.ShowFind)
             },
-            onSave = ideViewModel::saveActiveFile,
+            onSave = {
+                if (activeTab?.isBlank == true) ideViewModel.showSaveAsDialog() else ideViewModel.saveActiveFile()
+            },
             onMore = { moreOpen = true },
             onOpenFile = ideViewModel::openFile,
+            loadNavChildren = ideViewModel::loadNavChildren,
             onFeedback = onFeedback,
             onOpenSettings = onOpenSettings,
         )
@@ -363,6 +431,7 @@ private fun EditorWorkspace(
             onInsertText = { ideViewModel.sendEditorCommand(EditorOutbound.InsertText(it)) }, onExecuteCommand = { ideViewModel.sendEditorCommand(EditorOutbound.ExecuteCommand(it)) },
             onPasteFromClipboard = ideViewModel::pasteFromKotlinClipboard, hasEditorSelection = state.hasEditorSelection,
             showKeyboardToolbar = state.editorSettings.showKeyboardToolbar, showSymbolBar = state.editorSettings.showSymbolBar,
+            keyboardToolbarOrder = state.editorSettings.keyboardToolbarOrder,
             tabCursorPositions = state.tabCursorPositions, tabScrollPositions = state.tabScrollPositions, modifier = Modifier.weight(1f).fillMaxWidth(),
         )
         if (state.editorSettings.showStatusBar) EditorStatusBar(state, activeTab)
@@ -382,12 +451,13 @@ private fun EditorTopBar(
     state: IdeUiState,
     activeTab: EditorTab?,
     fileTree: List<FileNode>,
+    projectRootUri: String?,
     onOpenGlobalNavigation: () -> Unit,
-    onTogglePanel: () -> Unit,
     onFind: () -> Unit,
     onSave: () -> Unit,
     onMore: () -> Unit,
     onOpenFile: (String) -> Unit,
+    loadNavChildren: suspend (String) -> List<FileNode>,
     onFeedback: (String) -> Unit,
     onOpenSettings: () -> Unit,
 ) {
@@ -395,18 +465,62 @@ private fun EditorTopBar(
     var pathOpen by remember { mutableStateOf(false) }
     val path = activeTab?.let { fileTree.pathTo(it.documentUri) } ?: state.projectName
     val node = activeTab?.let { fileTree.findNode(it.documentUri) }
-    val siblings = node?.parentDocumentUri?.let { fileTree.findNode(it)?.children } ?: fileTree
+    val activeParentUri = node?.parentDocumentUri ?: projectRootUri
+    var navCurrentUri by remember { mutableStateOf<String?>(null) }
+    var navItems by remember { mutableStateOf(emptyList<FileNode>()) }
+    var navLoading by remember { mutableStateOf(false) }
+    LaunchedEffect(pathOpen, activeParentUri, navCurrentUri) {
+        if (!pathOpen) {
+            navCurrentUri = null
+            navItems = emptyList()
+            return@LaunchedEffect
+        }
+        if (navCurrentUri == null) {
+            navCurrentUri = activeParentUri
+            return@LaunchedEffect
+        }
+        val targetUri = navCurrentUri ?: return@LaunchedEffect
+        navLoading = true
+        navItems = loadNavChildren(targetUri)
+        navLoading = false
+    }
     Row(Modifier.fillMaxWidth().height(56.dp).background(colors.surface).padding(horizontal = 2.dp), verticalAlignment = Alignment.CenterVertically) {
         IconButton(onClick = onOpenGlobalNavigation) { Icon(Icons.Default.Menu, "Open application navigation", tint = colors.textPrimary) }
-        IconButton(onClick = onTogglePanel) { Icon(Icons.Default.FolderOpen, "Toggle contextual sidebar", tint = colors.textSecondary) }
         Box(Modifier.weight(1f)) {
             Text(
                 text = path.ifBlank { "No file selected" }, color = colors.textPrimary, style = MaterialTheme.typography.titleSmall,
                 maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.clickable { if (activeTab != null) pathOpen = true }.padding(horizontal = 6.dp, vertical = 10.dp),
             )
             DropdownMenu(expanded = pathOpen, onDismissRequest = { pathOpen = false }) {
-                siblings.forEach { sibling ->
-                    DropdownMenuItem(text = { Text(sibling.displayName) }, onClick = { pathOpen = false; if (!sibling.isDirectory) onOpenFile(sibling.documentUri) })
+                val currentUri = navCurrentUri ?: activeParentUri
+                val parentUri = currentUri?.let { uri -> fileTree.findNode(uri)?.parentDocumentUri }
+                DropdownMenuItem(
+                    text = { Text("..", color = colors.accent) },
+                    enabled = parentUri != null,
+                    onClick = {
+                        parentUri?.let { navCurrentUri = it }
+                    },
+                )
+                if (navLoading) {
+                    DropdownMenuItem(text = { Text("Loading…", color = colors.textDisabled) }, onClick = {}, enabled = false)
+                } else {
+                    navItems.forEach { sibling ->
+                        DropdownMenuItem(
+                            text = {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    if (sibling.isDirectory) {
+                                        Icon(Icons.Default.FolderOpen, contentDescription = null, tint = colors.textSecondary, modifier = Modifier.size(18.dp))
+                                        Spacer(Modifier.width(8.dp))
+                                    }
+                                    Text(if (sibling.isDirectory) "${sibling.displayName}/" else sibling.displayName, color = if (sibling.documentUri == activeTab?.documentUri) colors.accent else colors.textPrimary)
+                                }
+                            },
+                            onClick = {
+                                if (sibling.isDirectory) navCurrentUri = sibling.documentUri
+                                else { pathOpen = false; onOpenFile(sibling.documentUri) }
+                            },
+                        )
+                    }
                 }
             }
         }
@@ -459,7 +573,7 @@ private fun EditorDialogHost(state: IdeUiState, ideViewModel: IdeViewModel, onCh
         is FileOpDialog.Export -> AlertDialog(onDismissRequest = { if (!dialog.isSubmitting) ideViewModel.dismissFileOpDialog() }, title = { Text("Export ${dialog.node.displayName}") }, text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { Text("The selected ${if (dialog.node.isDirectory) "folder" else "file"} will be exported as a ZIP without changing the source.") ; dialog.resultMessage?.let { Text(it, color = if (dialog.failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary) }; if (dialog.isSubmitting) Row(verticalAlignment = Alignment.CenterVertically) { CircularProgressIndicator(Modifier.padding(end = 8.dp), strokeWidth = 2.dp); Text("Exporting…") } } }, confirmButton = { Button(onClick = { onChooseExportDestination(dialog) }, enabled = !dialog.isSubmitting) { Text(if (dialog.failed) "Retry export" else "Choose export location") } }, dismissButton = { TextButton(onClick = ideViewModel::dismissFileOpDialog, enabled = !dialog.isSubmitting) { Text(if (dialog.isSubmitting) "Please wait" else "Cancel") } })
         is FileOpDialog.CreateFile -> EditorTextDialog("Create file", "File path", "", dialog.errorMessage, ideViewModel::dismissFileOpDialog, dialog.isSubmitting) { ideViewModel.createFileInDirectory(dialog.parentNode, it) }
         is FileOpDialog.CreateFolder -> EditorTextDialog("Create folder", "Folder path", "", dialog.errorMessage, ideViewModel::dismissFileOpDialog, dialog.isSubmitting) { ideViewModel.createFolderInDirectory(dialog.parentNode, it) }
-        is FileOpDialog.SaveAs -> EditorTextDialog("Save As", "Project-relative path", dialog.suggestedName, null, ideViewModel::dismissFileOpDialog) { ideViewModel.saveAsAtPath(it) }
+        is FileOpDialog.SaveAs -> EditorTextDialog("Save As", "Project-relative path", dialog.suggestedName, dialog.errorMessage, ideViewModel::dismissFileOpDialog, dialog.isSubmitting) { ideViewModel.saveAsAtPath(it) }
         is FileOpDialog.ReplaceAll -> AlertDialog(
             onDismissRequest = { if (!dialog.isSubmitting) ideViewModel.dismissFileOpDialog() },
             title = { Text("Replace project content?") },

@@ -21,6 +21,7 @@ class EditorSettingsRepository(context: Context) {
         private const val KEY_VOLUME_MODE          = "volume_key_mode"
         private const val KEY_SHOW_KEYBOARD_BAR    = "show_keyboard_toolbar"
         private const val KEY_SHOW_SYMBOL_BAR      = "show_symbol_bar"
+        private const val KEY_KEYBOARD_TOOLBAR_ORDER = "keyboard_toolbar_order"
         private const val KEY_SHOW_STATUS_BAR      = "show_status_bar"
         private const val KEY_HIDE_GIT_FOLDER      = "hide_git_folder"
         private const val KEY_HIDE_METADATA_FOLDER = "hide_project_metadata_folder"
@@ -44,6 +45,11 @@ class EditorSettingsRepository(context: Context) {
         editorTheme          = prefs.getString(KEY_EDITOR_THEME, "system") ?: "system",
         showKeyboardToolbar  = prefs.getBoolean(KEY_SHOW_KEYBOARD_BAR, true),
         showSymbolBar        = prefs.getBoolean(KEY_SHOW_SYMBOL_BAR, true),
+        keyboardToolbarOrder = prefs.getString(KEY_KEYBOARD_TOOLBAR_ORDER, null)
+            ?.split(',')
+            ?.filter { it.isNotBlank() }
+            ?.let { stored -> (stored + EditorSettings.DEFAULT_KEYBOARD_TOOLBAR_ORDER).distinct() }
+            ?: EditorSettings.DEFAULT_KEYBOARD_TOOLBAR_ORDER,
         showStatusBar        = prefs.getBoolean(KEY_SHOW_STATUS_BAR, true),
         hideGitFolder        = prefs.getBoolean(KEY_HIDE_GIT_FOLDER, true),
         hideProjectMetadataFolder = prefs.getBoolean(KEY_HIDE_METADATA_FOLDER, true),
@@ -67,6 +73,7 @@ class EditorSettingsRepository(context: Context) {
             .putString (KEY_EDITOR_THEME,        settings.editorTheme)
             .putBoolean(KEY_SHOW_KEYBOARD_BAR,   settings.showKeyboardToolbar)
             .putBoolean(KEY_SHOW_SYMBOL_BAR,     settings.showSymbolBar)
+            .putString(KEY_KEYBOARD_TOOLBAR_ORDER, settings.keyboardToolbarOrder.joinToString(","))
             .putBoolean(KEY_SHOW_STATUS_BAR,     settings.showStatusBar)
             .putBoolean(KEY_HIDE_GIT_FOLDER,     settings.hideGitFolder)
             .putBoolean(KEY_HIDE_METADATA_FOLDER, settings.hideProjectMetadataFolder)
