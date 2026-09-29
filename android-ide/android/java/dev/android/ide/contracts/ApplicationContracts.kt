@@ -83,16 +83,9 @@ data class RuntimeCapabilities(
     val architecture: String? = null,
     val shellAvailable: Boolean = false,
     val ptyAvailable: Boolean = false,
-    val packageManagerAvailable: Boolean = false,
     val executableFilesSupported: Boolean = false,
     val symlinksSupported: Boolean = false,
     val explanation: String? = null,
-)
-
-data class RuntimePackage(
-    val name: String,
-    val version: String? = null,
-    val installed: Boolean = false,
 )
 
 data class ChildProcessDescriptor(
@@ -241,8 +234,6 @@ interface RuntimeWorkspaceAdapter {
     /** Runtime-owned storage is exposed as an ordinary provider location, not a project class. */
     suspend fun providerRootLocation(): ProjectLocation?
     suspend fun capabilities(): RuntimeCapabilities
-    suspend fun installedPackages(): List<RuntimePackage>
-    suspend fun installPackages(packages: List<String>): OperationReport
 }
 
 interface TerminalRuntimeAdapter {

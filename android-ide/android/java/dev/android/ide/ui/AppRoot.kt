@@ -295,14 +295,6 @@ fun AppRoot(viewModel: AppShellViewModel, ideViewModel: IdeViewModel, onExit: ()
                 onDismiss = { operationKind = null },
             )
         }
-        feedback?.let { message ->
-            AlertDialog(
-                onDismissRequest = { feedback = null },
-                title = { Text("Git clone") },
-                text = { Text(message) },
-                confirmButton = { TextButton(onClick = { feedback = null }) { Text("OK") } },
-            )
-        }
         }
     }
 }

@@ -68,6 +68,7 @@ class BundledTermuxRuntimeInstaller(private val context: Context) {
                 }
                 if (prefix.exists()) prefix.deleteRecursively()
                 check(staging.renameTo(prefix)) { "Unable to install the bundled runtime directory" }
+                check(repairRuntimeExecutables()) { "The bundled terminal runtime files are not executable" }
                 marker.parentFile?.mkdirs()
                 marker.writeText(assetName)
                 home.mkdirs()
@@ -78,12 +79,27 @@ class BundledTermuxRuntimeInstaller(private val context: Context) {
             }
         } else {
             home.mkdirs()
-            OperationReport(OperationOutcome.COMPLETE, "Bundled Termux runtime is available")
+            if (!repairRuntimeExecutables()) {
+                unavailable("The bundled terminal runtime files are not executable")
+            } else {
+                OperationReport(OperationOutcome.COMPLETE, "Bundled Termux runtime is available")
+            }
         }
     }
 
     fun prefix(): File = prefix
     fun home(): File = home
+
+    private fun repairRuntimeExecutables(): Boolean {
+        val bin = File(prefix, "bin")
+        if (!bin.isDirectory) return false
+        bin.setExecutable(true, false)
+        val required = listOf("sh", "pkg", "npm")
+        return required.all { name ->
+            val executable = File(bin, name)
+            executable.exists() && executable.setExecutable(true, false) && executable.canExecute()
+        }
+    }
 
     private fun unavailable(message: String) =
         OperationReport(OperationOutcome.BLOCKED, message, ErrorCategory.UNAVAILABLE_RUNTIME)

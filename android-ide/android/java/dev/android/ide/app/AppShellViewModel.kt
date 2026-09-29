@@ -60,8 +60,6 @@ data class AppShellState(
     val selectedTerminalSessionId: String? = null,
     val terminalOutput: String = "",
     val terminalFeedback: OperationReport? = null,
-    val terminalOperationInProgress: Boolean = false,
-    val installedRuntimePackages: List<dev.android.ide.contracts.RuntimePackage> = emptyList(),
     val navigationPromptVisible: Boolean = false,
     val pendingNavigation: Surface? = null,
     val pendingBackNavigation: Boolean = false,
@@ -117,7 +115,6 @@ class AppShellViewModel(application: Application) : AndroidViewModel(application
             terminalRuntime.initialize()
             _state.update { it.copy(runtimeCapabilities = terminalRuntime.capabilities()) }
             refreshTerminalSessions()
-            refreshRuntimePackages()
         }
     }
 
@@ -154,7 +151,6 @@ class AppShellViewModel(application: Application) : AndroidViewModel(application
             )
             _state.update { it.copy(selectedTerminalSessionId = session.id, terminalFeedback = null) }
             refreshTerminalSessions()
-            refreshRuntimePackages()
         }
     }
 
@@ -166,7 +162,6 @@ class AppShellViewModel(application: Application) : AndroidViewModel(application
             val session = terminalRuntime.createSession(directory, project?.name ?: "Untitled session")
             _state.update { it.copy(selectedTerminalSessionId = session.id, terminalFeedback = null) }
             refreshTerminalSessions()
-            refreshRuntimePackages()
             navigate(Surface.TERMINAL)
         }
     }
@@ -175,31 +170,6 @@ class AppShellViewModel(application: Application) : AndroidViewModel(application
         val sessionId = _state.value.selectedTerminalSessionId ?: return
         viewModelScope.launch {
             _state.update { it.copy(terminalFeedback = terminalRuntime.resize(sessionId, columns, rows)) }
-        }
-    }
-
-    fun refreshRuntimePackages() {
-        viewModelScope.launch {
-            _state.update { it.copy(installedRuntimePackages = terminalRuntime.installedPackages()) }
-        }
-    }
-
-    fun installRuntimePackages(packageNames: List<String>) {
-        val requested = packageNames.map(String::trim).filter(String::isNotBlank).distinct()
-        if (requested.isEmpty()) {
-            _state.update { it.copy(terminalFeedback = OperationReport(dev.android.ide.contracts.OperationOutcome.BLOCKED, "Choose at least one package", dev.android.ide.contracts.ErrorCategory.PACKAGE_FAILURE)) }
-            return
-        }
-        viewModelScope.launch {
-            val capabilities = terminalRuntime.capabilities()
-            if (!capabilities.packageManagerAvailable) {
-                _state.update { it.copy(terminalFeedback = OperationReport(dev.android.ide.contracts.OperationOutcome.BLOCKED, "The terminal package manager is unavailable", dev.android.ide.contracts.ErrorCategory.UNAVAILABLE_RUNTIME)) }
-                return@launch
-            }
-            _state.update { it.copy(terminalOperationInProgress = true, terminalFeedback = OperationReport(dev.android.ide.contracts.OperationOutcome.BLOCKED, "Installing selected packages…", dev.android.ide.contracts.ErrorCategory.PACKAGE_FAILURE)) }
-            val report = terminalRuntime.installPackages(requested)
-            _state.update { it.copy(terminalOperationInProgress = false, terminalFeedback = report) }
-            refreshRuntimePackages()
         }
     }
 

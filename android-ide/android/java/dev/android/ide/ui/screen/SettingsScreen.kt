@@ -1,5 +1,7 @@
 package dev.android.ide.ui.screen
 
+import android.Manifest
+import android.os.Build
 import android.content.Intent
 import android.provider.Settings
 import androidx.activity.compose.BackHandler
@@ -239,6 +241,10 @@ private fun StorageAccessSettings() {
         mutableStateOf(resolver.persistedUriPermissions.count { it.isReadPermission || it.isWritePermission })
     }
     var permissionMessage by rememberSaveable { mutableStateOf<String?>(null) }
+    val androidPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { results ->
+        val granted = results.count { it.value }
+        permissionMessage = if (granted == results.size) "Requested Android permissions granted" else "$granted of ${results.size} requested Android permissions granted"
+    }
     val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) {
             val result = runCatching {
@@ -271,10 +277,19 @@ private fun StorageAccessSettings() {
     SettingsCard {
         Text("Android app permissions", style = MaterialTheme.typography.titleSmall)
         Text(
-            "Notifications and other Android-managed permissions are controlled by the system settings for this app.",
+            "Request notifications on Android 13+ and legacy storage access on older Android versions. Modern project access uses the folder picker above.",
             style = MaterialTheme.typography.bodySmall,
             color = LocalIdeColors.current.textSecondary,
         )
+        OutlinedButton(onClick = {
+            val requested = buildList {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) add(Manifest.permission.POST_NOTIFICATIONS)
+                if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.S_V2) add(Manifest.permission.READ_EXTERNAL_STORAGE)
+                if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.P) add(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+            }
+            if (requested.isEmpty()) permissionMessage = "No additional runtime permissions are required on this Android version"
+            else androidPermissionLauncher.launch(requested.toTypedArray())
+        }) { Text("Request available permissions") }
         OutlinedButton(onClick = {
             context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
                 data = android.net.Uri.parse("package:${context.packageName}")

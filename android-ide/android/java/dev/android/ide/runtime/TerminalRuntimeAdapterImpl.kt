@@ -15,7 +15,6 @@ import dev.android.ide.contracts.ProjectIdentity
 import dev.android.ide.contracts.ProjectLocation
 import dev.android.ide.contracts.RuntimeCapabilities
 import dev.android.ide.contracts.RuntimeAvailability
-import dev.android.ide.contracts.RuntimePackage
 import dev.android.ide.contracts.RuntimeWorkspaceAdapter
 import dev.android.ide.contracts.SessionAvailability
 import dev.android.ide.contracts.SessionDescriptor
@@ -47,11 +46,7 @@ class TerminalRuntimeAdapterImpl(context: Context) : TerminalRuntimeAdapter, Run
     @Volatile private var explicitlyShuttingDown = false
     private val termuxPrefix get() = bundledInstaller.prefix()
     private val shell get() = File(termuxPrefix, "bin/sh")
-    private val packageManager get() = File(termuxPrefix, "bin/pkg")
-    private val npm get() = File(termuxPrefix, "bin/npm")
     private val runtimeHome get() = bundledInstaller.home()
-    private val developerBootstrapMarker get() = File(runtimeHome, ".android-ide-developer-bootstrap-v1")
-    @Volatile private var developerBootstrapAttempted = false
 
     override suspend fun initialize(): OperationReport {
         val bootstrap = bundledInstaller.initialize()
@@ -85,31 +80,12 @@ class TerminalRuntimeAdapterImpl(context: Context) : TerminalRuntimeAdapter, Run
             architecture = System.getProperty("os.arch"),
             shellAvailable = available,
             ptyAvailable = available,
-            packageManagerAvailable = available && packageManager.canExecute(),
             executableFilesSupported = available,
             symlinksSupported = available,
             explanation = if (available) null else "Terminal files were not found",
         )
     }
 
-    override suspend fun installedPackages(): List<RuntimePackage> {
-        if (!packageManager.isFile || !shell.canExecute()) return emptyList()
-        return runCatching {
-            ProcessBuilder(shell.absolutePath, packageManager.absolutePath, "list-installed")
-                .redirectErrorStream(true).start().inputStream.bufferedReader().readText()
-                .lineSequence().mapNotNull { line ->
-                    val value = line.trim().removePrefix("Installing ").takeIf { it.isNotBlank() } ?: return@mapNotNull null
-                    val split = value.split("/", limit = 2)
-                    RuntimePackage(split.first(), split.getOrNull(1), installed = true)
-                }.toList()
-        }.getOrDefault(emptyList())
-    }
-
-    override suspend fun installPackages(packages: List<String>): OperationReport {
-        if (packages.isEmpty()) return OperationReport(OperationOutcome.BLOCKED, "Choose at least one package", ErrorCategory.PACKAGE_FAILURE)
-        if (!packageManager.isFile || !shell.canExecute()) return unavailable("The terminal package manager is unavailable")
-        return runCommand(listOf(shell.absolutePath, packageManager.absolutePath, "install", "-y") + packages, runtimeHome)
-    }
 
     override suspend fun inspectProjectAccess(project: ProjectIdentity): TerminalProjectAccess {
         if (capabilities().availability != RuntimeAvailability.AVAILABLE) return TerminalProjectAccess(false, "Terminal is unavailable")
@@ -133,12 +109,6 @@ class TerminalRuntimeAdapterImpl(context: Context) : TerminalRuntimeAdapter, Run
         val id = UUID.randomUUID().toString()
         val sessionName = name.trim().ifBlank { "Untitled session" }
         if (!shell.canExecute()) return unavailableSession(id, sessionName, "Terminal is unavailable")
-        // Package setup is deliberately first-use and idempotent. A failed network
-        // operation must not prevent the shell itself from opening.
-        if (!developerBootstrapMarker.exists() && !developerBootstrapAttempted) {
-            developerBootstrapAttempted = true
-            runCatching { ensureDeveloperPackages() }
-        }
         val directory = workingDirectory?.let(::File)?.takeIf { it.isDirectory } ?: runtimeHome
         return runCatching {
             val environment = arrayOf(
@@ -148,7 +118,7 @@ class TerminalRuntimeAdapterImpl(context: Context) : TerminalRuntimeAdapter, Run
                 "TERM=xterm-256color",
                 "LANG=C.UTF-8",
             )
-            val session = TerminalSession(shell.absolutePath, directory.absolutePath, arrayOf(shell.absolutePath), environment, TRANSCRIPT_ROWS, sessionClient)
+            val session = TerminalSession(shell.absolutePath, directory.absolutePath, arrayOf(shell.absolutePath, "-i"), environment, TRANSCRIPT_ROWS, sessionClient)
             val descriptor = SessionDescriptor(id, "global", session.mHandle, sessionName, directory.absolutePath, Instant.now(), SessionAvailability.AVAILABLE)
             ContextCompat.startForegroundService(appContext, Intent(appContext, TerminalForegroundService::class.java))
             sessions[id] = LiveSession(descriptor, session)
@@ -307,31 +277,6 @@ class TerminalRuntimeAdapterImpl(context: Context) : TerminalRuntimeAdapter, Run
         live.session.finishIfRunning()
     }
 
-    private suspend fun runCommand(command: List<String>, directory: File): OperationReport = runCatching {
-        val process = ProcessBuilder(command).directory(directory).redirectErrorStream(true).start()
-        val output = process.inputStream.bufferedReader().readText()
-        val code = process.waitFor()
-        if (code == 0) OperationReport(OperationOutcome.COMPLETE, output.ifBlank { "Package operation completed" })
-        else OperationReport(OperationOutcome.FAILED, output.ifBlank { "Package operation failed" }, ErrorCategory.PACKAGE_FAILURE)
-    }.getOrElse { OperationReport(OperationOutcome.FAILED, it.message ?: "Package operation failed", ErrorCategory.PACKAGE_FAILURE) }
-
-    private suspend fun ensureDeveloperPackages(): OperationReport {
-        if (developerBootstrapMarker.exists()) return OperationReport(OperationOutcome.COMPLETE, "Developer packages are ready")
-        if (!packageManager.isFile || !shell.canExecute()) {
-            return unavailable("The bundled terminal package manager is unavailable; continuing without automatic package setup")
-        }
-        val packages = listOf("git", "curl", "wget", "ca-certificates", "nodejs", "npm", "python", "openssh", "unzip", "tar", "grep", "sed", "awk")
-        val base = runCommand(listOf(shell.absolutePath, packageManager.absolutePath, "install", "-y") + packages, runtimeHome)
-        if (base.outcome != OperationOutcome.COMPLETE) return base
-        val liveServer = if (npm.isFile) {
-            runCommand(listOf(shell.absolutePath, npm.absolutePath, "install", "--global", "live-server"), runtimeHome)
-        } else {
-            OperationReport(OperationOutcome.FAILED, "npm was not included in the terminal runtime", ErrorCategory.PACKAGE_FAILURE)
-        }
-        if (liveServer.outcome != OperationOutcome.COMPLETE) return liveServer
-        developerBootstrapMarker.writeText("git curl wget nodejs npm python openssh unzip tar grep sed awk live-server\n")
-        return OperationReport(OperationOutcome.COMPLETE, "Core developer packages and Live Server are ready")
-    }
 
     private fun unavailable(message: String) = OperationReport(OperationOutcome.BLOCKED, message, ErrorCategory.UNAVAILABLE_RUNTIME)
 

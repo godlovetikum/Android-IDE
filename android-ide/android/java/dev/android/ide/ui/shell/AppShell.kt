@@ -8,13 +8,15 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.border
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -262,42 +264,39 @@ fun AppShell(
 
     ModalNavigationDrawer(
         drawerState = drawerState,
-        gesturesEnabled = true,
+        gesturesEnabled = drawerState.isOpen,
         drawerContent = {
-            ModalDrawerSheet(
-                modifier = Modifier
-                    // A usable navigation drawer is conventionally about 80%
-                    // of a phone viewport, capped so tablets do not waste space.
-                    .fillMaxWidth(0.8f)
-                    .widthIn(max = 380.dp),
-            ) {
-                ContextualNavigation(
-                    modifier = Modifier.fillMaxSize(),
-                    state = state,
-                    section = sidebarSection,
-                    appViewModel = viewModel,
-                    ideViewModel = ideViewModel,
-                    moreOpen = moreOpen,
-                    onMore = { moreOpen = !moreOpen },
-                    onNavigate = { surface, closeSidebar -> navigate(surface, closeSidebar) },
-                    onSectionChange = { sidebarSection = it },
-                    onSectionNavigate = { targetSection, targetSurface ->
-                        sidebarSection = targetSection
-                        navigate(targetSurface, closeSidebar = false)
-                    },
-                    onOpenProject = { viewModel.openProject(it); coroutineScope.launch { drawerState.close() } },
-                    onCreateProject = { onCreateProject(null); moreOpen = false; coroutineScope.launch { drawerState.close() } },
-                    onImportFolder = { onImportFolder(); moreOpen = false; coroutineScope.launch { drawerState.close() } },
-                    onImportZip = { onImportZip(); moreOpen = false; coroutineScope.launch { drawerState.close() } },
-                    onCloneGit = { onCloneGit(); moreOpen = false; coroutineScope.launch { drawerState.close() } },
-                    onFeedback = { phaseFeedback = it },
-                    onSettingsSection = { section -> settingsSection = section; navigate(Surface.SETTINGS, closeSidebar = true) },
-                    onDismissDrawer = { coroutineScope.launch { drawerState.close() } },
-                    onOpenEditorPanel = { editorPanelRequest += 1; coroutineScope.launch { drawerState.close() } },
-                    onImportFiles = { target -> importTargetUri = target; importFilesLauncher.launch(arrayOf("*/*")) },
-                    onExportDirectory = { node -> exportTargetUri = node.documentUri; exportDirectoryLauncher.launch("${node.displayName}.zip") },
-                    onExportProject = onExportProject,
-                )
+            BoxWithConstraints {
+                val drawerWidth = minOf(maxWidth * 0.8f, 380.dp)
+                ModalDrawerSheet(modifier = Modifier.width(drawerWidth).fillMaxHeight()) {
+                    ContextualNavigation(
+                        modifier = Modifier.fillMaxSize(),
+                        state = state,
+                        section = sidebarSection,
+                        appViewModel = viewModel,
+                        ideViewModel = ideViewModel,
+                        moreOpen = moreOpen,
+                        onMore = { moreOpen = !moreOpen },
+                        onNavigate = { surface, closeSidebar -> navigate(surface, closeSidebar) },
+                        onSectionChange = { sidebarSection = it },
+                        onSectionNavigate = { targetSection, targetSurface ->
+                            sidebarSection = targetSection
+                            navigate(targetSurface, closeSidebar = false)
+                        },
+                        onOpenProject = { viewModel.openProject(it); coroutineScope.launch { drawerState.close() } },
+                        onCreateProject = { onCreateProject(null); moreOpen = false; coroutineScope.launch { drawerState.close() } },
+                        onImportFolder = { onImportFolder(); moreOpen = false; coroutineScope.launch { drawerState.close() } },
+                        onImportZip = { onImportZip(); moreOpen = false; coroutineScope.launch { drawerState.close() } },
+                        onCloneGit = { onCloneGit(); moreOpen = false; coroutineScope.launch { drawerState.close() } },
+                        onFeedback = { phaseFeedback = it },
+                        onSettingsSection = { section -> settingsSection = section; navigate(Surface.SETTINGS, closeSidebar = true) },
+                        onDismissDrawer = { coroutineScope.launch { drawerState.close() } },
+                        onOpenEditorPanel = { editorPanelRequest += 1; coroutineScope.launch { drawerState.close() } },
+                        onImportFiles = { target -> importTargetUri = target; importFilesLauncher.launch(arrayOf("*/*")) },
+                        onExportDirectory = { node -> exportTargetUri = node.documentUri; exportDirectoryLauncher.launch("${node.displayName}.zip") },
+                        onExportProject = onExportProject,
+                    )
+                }
             }
         },
     ) {
