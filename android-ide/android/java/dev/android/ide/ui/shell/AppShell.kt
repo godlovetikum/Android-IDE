@@ -9,9 +9,11 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.border
+import androidx.compose.foundation.background
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -34,6 +36,8 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DrawerValue
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -49,6 +53,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -204,6 +209,7 @@ fun AppShell(
             onSettingsSectionConsumed = { settingsSection = null },
             editorPanelRequest = editorPanelRequest,
             crashReportCount = crashReportCount,
+            latestCrashReport = latestCrashReport,
         )
     }
 
@@ -454,7 +460,7 @@ private fun ContextualNavigation(
                         contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 108.dp),
                     ) {
                         item { Text("Terminal sessions", style = MaterialTheme.typography.labelLarge) }
-                        item { NavigationItem(Icons.Default.Add, "New terminal session", false) { appViewModel.createTerminalSession(); onDismissDrawer() } }
+                        item { NavigationItem(Icons.Default.Add, "New terminal session", false, onClick = { appViewModel.createTerminalSession(); onDismissDrawer() }) }
                         state.terminalSessions.forEach { session ->
                             item {
                                 TerminalSessionSidebarItem(
@@ -466,7 +472,7 @@ private fun ContextualNavigation(
                                 )
                             }
                         }
-                        item { NavigationItem(Icons.Default.Close, "Close all sessions", false) { appViewModel.closeAllTerminalSessions(); onDismissDrawer() } }
+                        item { NavigationItem(Icons.Default.Close, "Close all sessions", false, onClick = { appViewModel.closeAllTerminalSessions(); onDismissDrawer() }) }
                     }
                 }
             }
@@ -527,7 +533,14 @@ private fun TerminalSessionSidebarItem(
         AlertDialog(
             onDismissRequest = { renameOpen = false },
             title = { Text("Rename session") },
-            text = { androidx.compose.material3.OutlinedTextField(renameValue, { renameValue = it }, label = { Text("Session name") }, singleLine = true) },
+            text = {
+                androidx.compose.material3.OutlinedTextField(
+                    value = renameValue,
+                    onValueChange = { renameValue = it },
+                    label = { Text("Session name") },
+                    singleLine = true,
+                )
+            },
             confirmButton = { Button(onClick = { onRename(renameValue); renameOpen = false }, enabled = renameValue.isNotBlank()) { Text("Rename") } },
             dismissButton = { TextButton(onClick = { renameOpen = false }) { Text("Cancel") } },
         )
@@ -624,6 +637,7 @@ private fun SurfaceHost(
     onSettingsSectionConsumed: () -> Unit,
     editorPanelRequest: Long,
     crashReportCount: Int,
+    latestCrashReport: dev.android.ide.CrashReportSummary?,
 ) {
     val ideState by ideViewModel.uiState.collectAsState()
     when (state.surface) {

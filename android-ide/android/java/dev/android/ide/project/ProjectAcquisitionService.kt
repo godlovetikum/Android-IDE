@@ -361,6 +361,7 @@ createServer((request, response) => {
                     add("styles/main.css" to """:root { font-family: system-ui, sans-serif; }
 body { margin: 0; padding: 2rem; }
 """)
+                }
                 CreateProjectTemplate.FROM_SCRATCH -> Unit
             }
         }

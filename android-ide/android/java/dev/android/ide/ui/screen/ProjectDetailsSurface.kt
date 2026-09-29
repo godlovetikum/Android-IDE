@@ -203,7 +203,7 @@ fun ProjectDetailsSurface(
                 DetailLine("Files", details.fileCount.toString())
                 DetailLine("Folders", details.folderCount.toString())
                 DetailLine("Size", formatBytes(details.totalBytes))
-                DetailLine("Created", formatTimestamp(details.creationTimeMs))
+                details.creationTimeMs?.let { DetailLine("Created", formatTimestamp(it)) }
                 details.lastModifiedTimeMs?.let { DetailLine("Last modified", formatTimestamp(it)) }
                 details.languageBytes.entries.sortedByDescending { it.value }.take(4).forEach { (language, bytes) ->
                     DetailLine(language, formatBytes(bytes))

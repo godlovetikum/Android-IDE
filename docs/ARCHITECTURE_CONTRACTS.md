@@ -23,9 +23,12 @@ A screen may query another owner through an adapter or state contract, but it mu
 
 ## 3. Project-location and storage authority
 
-Every project location belongs to a storage provider and is identified by that provider's stable location identity. There is no project-location class or persisted “private runtime” flag. SAF, local files, and the Termux runtime's own storage may each provide authoritative project locations.
+Android IDE has exactly two supported project-location classes:
 
-Project registration is gated by project-storage read/write access and verified registry-containment rules. Capabilities such as file creation, rename, delete, and change observation are reported separately and checked by the operations that need them. Terminal/runtime, Git, and other domains assess their own per-project access; their inability to operate on a location never blocks registration or editor/file access. A cloud provider may remain unsupported for live editing under its provider policy, but that does not imply a terminal requirement. The application must never silently change the selected provider/location, overwrite, merge, rename, or redirect a requested destination.
+1. **User-visible local location:** a device, removable, or other local provider location that passes capability checks for the required editor and runtime operations on the same files.
+2. **Private development workspace:** an explicitly selected location inside the integrated Termux-based runtime. It is authoritative when selected; it is not a hidden duplicate or cache.
+
+Cloud-backed or remote document providers are import/export sources, not live editable project locations. A location that can be selected but cannot support the required read, write, mutation, execution, or change-observation behavior is rejected with an actionable result. The application must never silently change location class, overwrite, merge, rename, or redirect a requested destination.
 
 Every acquisition or relocation operation follows: validate input; inspect destination and capabilities; review the exact operation; execute; verify returned identity and state; report complete, partial, blocked, interrupted, failed, or cancelled outcome; offer supported recovery or cleanup.
 
@@ -67,10 +70,10 @@ Higher-level domains depend on these logical contracts, not on SAF, Termux, WebV
 | Adapter | Responsibility |
 |---|---|
 | `ProjectStorageAdapter` | Project-relative listing, reads, writes, mutations, metadata, capability checks, and change observation |
-| `ProjectRegistryAdapter` | Registered project records, recent ordering, project-storage availability, containment, and removal without deleting user files |
+| `ProjectRegistryAdapter` | Registered project records, recent ordering, availability, and removal without deleting user files |
 | `ProjectMetadataAdapter` | Portable identity and workspace descriptors, with explicit migration and no secret storage |
-| `RuntimeWorkspaceAdapter` | Termux runtime initialization and exposure of its storage root as an ordinary provider location |
-| `TerminalRuntimeAdapter` | Sessions, PTY I/O, resize, child tracking, termination, availability, and per-project working-directory access |
+| `RuntimeWorkspaceAdapter` | Private workspace initialization, root identity, and project working directories |
+| `TerminalRuntimeAdapter` | Sessions, PTY I/O, resize, child tracking, termination, and availability |
 | `EditorDocumentAdapter` | Stable project-relative document identity, load/save, external-change reporting, and recovery separation |
 | `GitAdapter` | Canonical runtime Git status, mutations, configuration, output, and errors |
 | `BrowserPreviewAdapter` | Global browser/preview state and failure isolation from project and runtime ownership |
@@ -131,6 +134,6 @@ Application foundation must not prematurely implement terminal runtime, editor f
 
 ## 11. Acceptance and limitations
 
-Architecture contracts are accepted when the contract record and Kotlin contract types agree, active documents point to the approved references, legacy documents are clearly archived, identity migration is isolated and visible, and targeted checks find no active claim that terminal/Git access is a project-registration prerequisite, sessions are project-owned by default, credentials belong in project metadata, desktop mode is required, or processes are unkillable.
+Architecture contracts are accepted when the contract record and Kotlin contract types agree, active documents point to the approved references, legacy documents are clearly archived, identity migration is isolated and visible, and targeted checks find no active claim that cloud storage is live-editable, sessions are project-owned by default, credentials belong in project metadata, desktop mode is required, or processes are unkillable.
 
 This contract set does not claim that any provider integration or runtime feature is implemented. Android builds and device validation are separate acceptance activities and are intentionally not run as part of this lightweight contract verification.

@@ -55,11 +55,8 @@ Terminal runtime, browser, Git, language intelligence, credentials, extensions, 
 ## Domain status
 
 ### Project and workspace management
-The Phase 2 implementation is now present on `dev`: blank project creation, existing-folder import, validated ZIP import, provider-backed project details, exact-name file/folder mutations, export, duplication, copy-verify-delete relocation, registry removal, permanent deletion, batch actions, and explicit private-workspace copy/move boundaries. All destructive paths inspect destinations, reject nested registered-project locations, verify copies before deleting sources, and return complete, partial, blocked, or failed operation reports. ZIP import rejects traversal, absolute paths, duplicate paths, unsafe entries, oversized archives, and extraction conflicts before or during exact extraction, then cleans up failed imports. Project details compute current file count, folder count, total size, timestamps, location, capability state, language totals, and Git branch, failing closed when the provider cannot be fully inspected. GitHub Actions and phone acceptance remain required before declaring the Phase 2 gate passed.
 
-The project list now supports long-press multi-selection, selected-row feedback, reversible batch removal from the registry, verified batch permanent deletion, cancellation, and selection cleanup when navigating away. Permanent deletion is explicitly confirmed and refuses to remove a registered parent while child projects remain.
-
-The remaining project-management actions are now wired: project rename, export/share as ZIP, copy storage path, copy Git remote URLs, batch ZIP export, batch path copy, verified batch permanent deletion, and precise unavailable-versus-permission-lost registry state. Acquisition and transfer reject both directions of project containment. Provider mutations preserve tri-state deletion uncertainty, normalize document URIs, use bounded streaming copies, verify copied contents, report unrecoverable move cleanup as partial, and preserve metadata-migration conflicts. ZIP export stages archives before destination write. Transfers use provider-neutral destinations and check their own storage operations; no private-workspace project class gates registration. Archive-name collisions and provider failures produce partial or blocked reports instead of overwriting or silently succeeding. GitHub Actions and device/provider acceptance remain the gate.
+The product behavior is defined. Implementation remains future work and must follow Phase 2 of the approved roadmap. Required acceptance coverage includes acquisition, conflict preflight, metadata initialization, project registry, file and folder mutations, project location classes, export, duplication, relocation, removal, deletion, and permission loss.
 
 ### Code editing
 
@@ -67,7 +64,7 @@ The product behavior and Monaco provider direction are defined. Implementation r
 
 ### Terminal, runtime, dependencies, and background processes
 
-The Termux runtime direction and provider-owned storage-root model are defined. Implementation remains future work and must follow Phase 3. Required acceptance coverage includes bootstrap initialization, package capability reporting, PTYs, global sessions, per-project terminal-access checks and working directories, child-process ownership, foreground lifecycle, process-loss reporting, and explicit close behavior. A terminal access denial must leave project registration and editor/file access unchanged.
+The Termux runtime direction and private development workspace model are defined. Implementation remains future work and must follow Phase 3. Required acceptance coverage includes bootstrap initialization, package capability reporting, PTYs, global sessions, project working directories, child-process ownership, foreground lifecycle, process-loss reporting, and explicit close behavior.
 
 ### Browser, previews, and developer tools
 
@@ -92,23 +89,3 @@ Extensions remain an explicit placeholder. Packaging, permissions, sandboxing, l
 ## Repository discipline
 
 The working tree contains pre-existing implementation changes and untracked documentation from earlier work. No existing change is accepted solely because it is present in source. Do not commit or push without explicit instruction. Keep validation targeted and avoid heavy Android builds or background processes unless explicitly authorized.
-
-## Phase 0/1 hardening completed before Phase 2
-
-The `dev` branch received the following pre-Phase-2 corrections on 2026-09-24. SAF mutation URI normalization now preserves child document IDs instead of converting them to the selected tree root. Copy-then-delete move fallbacks verify the copied destination before source deletion and clean up the copy when source removal fails. The foundation shell no longer renders redundant application branding above navigation, and selected navigation items use layout-stable styling rather than a variable-width bullet prefix.
-
-These corrections are source-level hardening only. Android build, lint, device, and provider-matrix acceptance remain assigned to GitHub Actions and device testing. No Phase 2 feature implementation has been started in this session.
-
-## Phase 2 compile-failure remediation (2026-09-25)
-
-The `Debug Build` workflow run for commit `ee5d8b1` ("Implement Phase 2 project management and safety fixes") failed at `:app:compileDebugKotlin` with 22 diagnostics. All four root causes are corrected on `dev` at source level, and each is recorded as `BUG-029`–`BUG-032` in `docs/DEBUG_LOG.md`:
-
-1. The project rename dialog triggered `AppShell`-scoped state from the stateless `AppContent` composable; the trigger now routes through a new `onRequestRename` callback parameter.
-2. `ProjectDetailsService` referenced `ProjectRegistryAdapter` without importing it, which cascaded into 19 downstream diagnostics; the missing import is restored.
-3. `SafRepository.contentEquals` inferred its `try` expression as `Any` instead of `Boolean` and could not report equal files; the helper is restructured so every branch returns an explicit `Boolean`.
-4. A positional `Project(…)` construction in `IdeViewModel` broke when `description` was inserted as the second parameter; the call site now uses named arguments.
-
-This remediation changed no product behavior beyond making the verification helper report equality
-correctly. In accordance with repository discipline, no Gradle task, Git commit, push, or history
-change was performed. Compilation, lint, and the Android 15/16 provider matrix remain the
-outstanding acceptance activities for the Phase 2 gate.
