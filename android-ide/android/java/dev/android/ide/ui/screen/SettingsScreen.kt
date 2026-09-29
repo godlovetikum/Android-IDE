@@ -14,9 +14,11 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.selection.selectable
@@ -24,6 +26,7 @@ import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Lock
@@ -35,10 +38,12 @@ import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
@@ -60,6 +65,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalContext
 import dev.android.ide.data.model.AppTheme
@@ -352,8 +358,11 @@ private fun EditorSettingsContent(uiState: IdeUiState, s: EditorSettings, ideVie
     FileTreeSettingsContent(s, ideViewModel)
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun KeyboardSettingsContent(uiState: IdeUiState, s: EditorSettings, ideViewModel: IdeViewModel) {
+    var toolbarOrderSheetOpen by rememberSaveable { mutableStateOf(false) }
+    var draftOrder by rememberSaveable { mutableStateOf(s.keyboardToolbarOrder) }
     SettingsCard {
         Text("Keyboard and input", style = MaterialTheme.typography.titleSmall)
         VisibilitySettingRow("Keyboard toolbar", "Show cursor, selection, and editing controls above the keyboard.", s.showKeyboardToolbar, { ideViewModel.setEditorSettings(s.copy(showKeyboardToolbar = it)) })
@@ -367,37 +376,63 @@ private fun KeyboardSettingsContent(uiState: IdeUiState, s: EditorSettings, ideV
             VolumeKeyOption("Disabled (system volume)", VolumeKeyMode.DISABLED, uiState.volumeKeyMode, ideViewModel)
         }
         HorizontalDivider()
-        Text("Keyboard shortcut order", style = MaterialTheme.typography.bodyMedium)
-        Text("Choose the order used by the editor toolbar. Actions are grouped into pages automatically.", style = MaterialTheme.typography.bodySmall, color = LocalIdeColors.current.textSecondary)
-        s.keyboardToolbarOrder.forEachIndexed { index, actionId ->
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text("${index + 1}. ${keyboardToolbarLabel(actionId)}", Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
-                TextButton(
-                    onClick = {
-                        if (index > 0) {
-                            val order = s.keyboardToolbarOrder.toMutableList()
-                            order[index] = order[index - 1].also { order[index - 1] = order[index] }
-                            ideViewModel.setEditorSettings(s.copy(keyboardToolbarOrder = order))
-                        }
-                    },
-                    enabled = index > 0,
-                    modifier = Modifier.semantics { contentDescription = "Move ${keyboardToolbarLabel(actionId)} up" },
-                ) { Text("↑") }
-                TextButton(
-                    onClick = {
-                        if (index < s.keyboardToolbarOrder.lastIndex) {
-                            val order = s.keyboardToolbarOrder.toMutableList()
-                            order[index] = order[index + 1].also { order[index + 1] = order[index] }
-                            ideViewModel.setEditorSettings(s.copy(keyboardToolbarOrder = order))
-                        }
-                    },
-                    enabled = index < s.keyboardToolbarOrder.lastIndex,
-                    modifier = Modifier.semantics { contentDescription = "Move ${keyboardToolbarLabel(actionId)} down" },
-                ) { Text("↓") }
-            }
+        Text("Keyboard toolbar order", style = MaterialTheme.typography.bodyMedium)
+        Text("The toolbar order is managed in a separate drag-and-drop editor.", style = MaterialTheme.typography.bodySmall, color = LocalIdeColors.current.textSecondary)
+        TextButton(onClick = { draftOrder = s.keyboardToolbarOrder; toolbarOrderSheetOpen = true }) {
+            Text("Customize toolbar order")
         }
-        TextButton(onClick = { ideViewModel.setEditorSettings(s.copy(keyboardToolbarOrder = EditorSettings.DEFAULT_KEYBOARD_TOOLBAR_ORDER)) }) {
-            Text("Reset keyboard shortcut order")
+    }
+    if (toolbarOrderSheetOpen) {
+        ModalBottomSheet(onDismissRequest = { toolbarOrderSheetOpen = false }) {
+            Column(
+                Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text("Customize keyboard toolbar", style = MaterialTheme.typography.titleMedium)
+                Text("Long-press an action, then drag it to a new position.", style = MaterialTheme.typography.bodySmall, color = LocalIdeColors.current.textSecondary)
+                LazyColumn(Modifier.fillMaxWidth().heightIn(max = 480.dp)) {
+                    itemsIndexed(draftOrder, key = { _, id -> id }) { index, actionId ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .pointerInput(draftOrder) {
+                                    var currentIndex = index
+                                    detectDragGesturesAfterLongPress(
+                                        onDrag = { change, dragAmount ->
+                                            change.consume()
+                                            val target = when {
+                                                dragAmount.y > 18f -> currentIndex + 1
+                                                dragAmount.y < -18f -> currentIndex - 1
+                                                else -> currentIndex
+                                            }.coerceIn(0, draftOrder.lastIndex)
+                                            if (target != currentIndex) {
+                                                val reordered = draftOrder.toMutableList()
+                                                reordered[currentIndex] = reordered[target].also { reordered[target] = reordered[currentIndex] }
+                                                draftOrder = reordered
+                                                currentIndex = target
+                                            }
+                                        },
+                                        onDragEnd = {},
+                                        onDragCancel = {},
+                                    )
+                                }
+                                .padding(vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(Icons.Default.DragHandle, contentDescription = "Drag ${keyboardToolbarLabel(actionId)}")
+                            Text("${index + 1}. ${keyboardToolbarLabel(actionId)}", Modifier.padding(start = 12.dp))
+                        }
+                    }
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    TextButton(onClick = { draftOrder = EditorSettings.DEFAULT_KEYBOARD_TOOLBAR_ORDER }) { Text("Reset") }
+                    TextButton(onClick = { toolbarOrderSheetOpen = false }) { Text("Cancel") }
+                    TextButton(onClick = {
+                        ideViewModel.setEditorSettings(s.copy(keyboardToolbarOrder = draftOrder))
+                        toolbarOrderSheetOpen = false
+                    }) { Text("Done") }
+                }
+            }
         }
     }
 }

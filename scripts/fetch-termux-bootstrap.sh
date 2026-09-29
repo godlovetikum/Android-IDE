@@ -25,9 +25,23 @@ esac
 
 TARGET="$OUT_DIR/$ASSET"
 if [[ ! -f "$TARGET" ]] || [[ "$(sha256sum "$TARGET" | cut -d' ' -f1)" != "$SHA" ]]; then
+  if [[ "${TERMUX_BOOTSTRAP_OFFLINE:-0}" == "1" ]]; then
+    echo "Offline mode is enabled and the pinned Termux bootstrap is missing or invalid: $TARGET" >&2
+    echo "Provide a verified local archive or unset TERMUX_BOOTSTRAP_OFFLINE when network access is available." >&2
+    exit 3
+  fi
+  if ! command -v curl >/dev/null 2>&1; then
+    echo "Cannot download the pinned Termux bootstrap: curl is not installed." >&2
+    echo "Install curl, provide a verified local $ASSET in $OUT_DIR, or set TERMUX_BOOTSTRAP_OFFLINE=1." >&2
+    exit 127
+  fi
   TMP="$TARGET.partial"
   trap 'rm -f "$TMP"' EXIT
-  curl --fail --location --retry 3 --silent --show-error "$BASE_URL/$ASSET" -o "$TMP"
+  if ! curl --fail --location --retry 3 --silent --show-error "$BASE_URL/$ASSET" -o "$TMP"; then
+    echo "Unable to download the pinned Termux bootstrap for $ABI; the network may be unavailable." >&2
+    echo "Retry with network access or place the verified archive at $TARGET." >&2
+    exit 4
+  fi
   printf '%s  %s\n' "$SHA" "$TMP" | sha256sum -c -
   mv "$TMP" "$TARGET"
   trap - EXIT

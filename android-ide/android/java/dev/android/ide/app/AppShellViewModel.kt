@@ -145,25 +145,29 @@ class AppShellViewModel(application: Application) : AndroidViewModel(application
 
     fun createTerminalSession(workingDirectory: String? = null, name: String = "") {
         viewModelScope.launch {
-            val selected = _state.value.selectedProjectId
-            val project = _state.value.projects.firstOrNull { it.id == selected }
-            val access = project?.let { terminalRuntime.inspectProjectAccess(it) }
-            if (access != null && !access.available) {
-                _state.update { it.copy(terminalFeedback = OperationReport(dev.android.ide.contracts.OperationOutcome.BLOCKED, access.explanation ?: "Terminal access is unavailable", dev.android.ide.contracts.ErrorCategory.UNAVAILABLE_RUNTIME)) }
-                return@launch
-            }
+            val inheritedDirectory = workingDirectory ?: _state.value.terminalSessions
+                .firstOrNull { it.id == _state.value.selectedTerminalSessionId && it.availability == SessionAvailability.AVAILABLE }
+                ?.workingDirectory
             val session = terminalRuntime.createSession(
-                workingDirectory ?: project?.let { terminalRuntime.workingDirectory(it) },
+                inheritedDirectory,
                 name.trim().ifBlank { "Untitled session" },
             )
-            val locationNotice = access?.explanation?.let { explanation ->
-                OperationReport(
-                    dev.android.ide.contracts.OperationOutcome.COMPLETE,
-                    "Terminal opened in its command-line home workspace instead of the project folder. $explanation",
-                )
-            }
-            _state.update { it.copy(selectedTerminalSessionId = session.id, terminalFeedback = locationNotice) }
+            _state.update { it.copy(selectedTerminalSessionId = session.id, terminalFeedback = null) }
             refreshTerminalSessions()
+            refreshRuntimePackages()
+        }
+    }
+
+    /** Open a terminal for a project using its accessible filesystem directory when available. */
+    fun openTerminalForProject(projectId: String) {
+        viewModelScope.launch {
+            val project = _state.value.projects.firstOrNull { it.id == projectId }
+            val directory = project?.let { terminalRuntime.workingDirectory(it) }
+            val session = terminalRuntime.createSession(directory, project?.name ?: "Untitled session")
+            _state.update { it.copy(selectedTerminalSessionId = session.id, terminalFeedback = null) }
+            refreshTerminalSessions()
+            refreshRuntimePackages()
+            navigate(Surface.TERMINAL)
         }
     }
 

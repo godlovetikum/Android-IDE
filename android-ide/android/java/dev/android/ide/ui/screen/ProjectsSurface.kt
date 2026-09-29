@@ -90,6 +90,7 @@ fun ProjectsSurface(
     onDuplicateProject: (String) -> Unit,
     onRelocateProject: (String) -> Unit,
     onCopyRemoteUrls: (String) -> Unit,
+    onOpenTerminal: (String) -> Unit,
     onFeedback: (String) -> Unit,
     onOpenNavigation: () -> Unit,
     modifier: Modifier = Modifier,
@@ -449,7 +450,7 @@ private fun ProjectCard(
                     onCopyRemoteUrls = { onCopyRemoteUrls(project.id) },
                     onOpenEditor = { onOpen(project.id) },
                     onOpenGit = { onFeedback("Git is coming soon") },
-                    onOpenTerminal = { onFeedback("Opening terminal is coming soon") },
+                    onOpenTerminal = { onOpenTerminal(project.id) },
                     onOpenBrowser = { onFeedback("Browser preview is coming soon") },
                     onRemoveFromRegistry = { onSelect(project.id); confirmRemove = true },
                     onDeletePermanently = {

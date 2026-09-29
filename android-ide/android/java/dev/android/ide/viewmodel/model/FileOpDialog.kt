@@ -60,6 +60,17 @@ sealed class FileOpDialog {
         val resultMessage: String? = null,
     ) : FileOpDialog()
 
+    /** Preview/confirmation and progress state for replacing matches in one file. */
+    data class ReplaceFile(
+        val documentUri: String,
+        val fileName: String,
+        val find: String,
+        val replacement: String,
+        val matches: Int,
+        val isSubmitting: Boolean = false,
+        val resultMessage: String? = null,
+    ) : FileOpDialog()
+
     /**
      * for saving the active file's content.  The [suggestedName] pre-fills the
      * text field with the current tab's display name.

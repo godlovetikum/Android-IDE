@@ -2,18 +2,21 @@ package dev.android.ide.ui.screen
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.FolderOpen
@@ -27,7 +30,6 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -36,15 +38,14 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import kotlin.math.ceil
 import dev.android.ide.contracts.Surface
 import dev.android.ide.ui.theme.LocalIdeColors
 
@@ -57,10 +58,9 @@ fun HomeSurface(
     onFeedback: (String) -> Unit,
     crashRecoveryCount: Int = 0,
     crashReportCount: Int = 0,
-    latestCrashReport: dev.android.ide.CrashReportSummary? = null,
+    onOpenCrashConsole: () -> Unit = {},
 ) {
     val colors = LocalIdeColors.current
-    var crashReportVisible by remember { mutableStateOf(false) }
     val destinations = buildList {
         add(HomeDestinationData(Icons.Default.FolderOpen, "Projects", "Manage your projects and workspace", true) { onNavigate(Surface.PROJECTS) })
         add(HomeDestinationData(Icons.Default.Code, "Editor", "Edit code and manage project files", true) { onNavigate(Surface.EDITOR) })
@@ -69,22 +69,25 @@ fun HomeSurface(
         add(HomeDestinationData(Icons.Default.Language, "Browser", "Browser the web and access developer console", false) { onFeedback("Browser") })
         add(HomeDestinationData(Icons.Default.Extension, "Extensions", "Install and manage Add-ons", false) { onFeedback("Extensions") })
         add(HomeDestinationData(Icons.Default.Settings, "Settings", "Customize your workspace and app preferences", true) { onNavigate(Surface.SETTINGS) })
-        if (crashRecoveryCount > 0 || crashReportCount > 0) {
-            val recoveryText = when (crashRecoveryCount) {
-                1 -> "1 unsaved file is available to restore"
-                in 2..Int.MAX_VALUE -> "$crashRecoveryCount unsaved files are available to restore"
-                else -> null
-            }
-            val reportText = when (crashReportCount) {
-                1 -> "1 crash report is available to review"
-                in 2..Int.MAX_VALUE -> "$crashReportCount crash reports are available to review"
-                else -> null
-            }
-            val context = listOfNotNull(recoveryText, reportText).joinToString("; ")
-            add(HomeDestinationData(Icons.Default.WarningAmber, "Errors", "Your last session didn't exit properly — $context", true, isWarning = true) {
-                if (latestCrashReport != null) crashReportVisible = true else onNavigate(Surface.EDITOR)
-            })
+        val recoveryText = when (crashRecoveryCount) {
+            1 -> "1 unsaved file is available to restore"
+            in 2..Int.MAX_VALUE -> "$crashRecoveryCount unsaved files are available to restore"
+            else -> null
         }
+        val reportText = when (crashReportCount) {
+            1 -> "1 crash report is available to review"
+            in 2..Int.MAX_VALUE -> "$crashReportCount crash reports are available to review"
+            else -> null
+        }
+        val diagnosticContext = listOfNotNull(recoveryText, reportText).joinToString("; ")
+        add(HomeDestinationData(
+            if (crashRecoveryCount > 0 || crashReportCount > 0) Icons.Default.WarningAmber else Icons.Default.BugReport,
+            "Diagnostics",
+            if (diagnosticContext.isBlank()) "Open the project diagnostics console to inspect crash and recovery state"
+            else "Your last session needs attention — $diagnosticContext",
+            true,
+            isWarning = crashRecoveryCount > 0 || crashReportCount > 0,
+        ) { onOpenCrashConsole() })
     }
 
     Column(
@@ -103,15 +106,24 @@ fun HomeSurface(
             Modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            LazyVerticalGrid(
-                columns = GridCells.Fixed(2),
-                modifier = Modifier.fillMaxWidth().weight(1f),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                contentPadding = PaddingValues(bottom = 12.dp),
-            ) {
-                items(destinations, key = { it.title }) { destination ->
-                    HomeDestination(destination)
+            BoxWithConstraints(Modifier.fillMaxWidth().weight(1f)) {
+                val columns = if (maxWidth < 560.dp) {
+                    2
+                } else {
+                    ceil(((maxWidth.value + 12f) / (250f + 12f)).toDouble()).toInt().coerceAtLeast(2)
+                }
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(columns),
+                    modifier = Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    contentPadding = PaddingValues(bottom = 12.dp),
+                ) {
+                    items(destinations, key = { it.title }) { destination ->
+                        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
+                            HomeDestination(destination, Modifier.widthIn(max = 250.dp))
+                        }
+                    }
                 }
             }
             Button(
@@ -121,30 +133,16 @@ fun HomeSurface(
             ) { Text("Exit Android IDE") }
         }
     }
-    if (crashReportVisible && latestCrashReport != null) {
-        AlertDialog(
-            onDismissRequest = { crashReportVisible = false },
-            title = { Text("Crash report") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(latestCrashReport.exception, style = MaterialTheme.typography.titleSmall)
-                    if (latestCrashReport.message.isNotBlank()) Text(latestCrashReport.message)
-                    Text(latestCrashReport.stackTrace, style = MaterialTheme.typography.bodySmall, maxLines = 12, overflow = TextOverflow.Ellipsis)
-                }
-            },
-            confirmButton = { TextButton(onClick = { crashReportVisible = false }) { Text("Close") } },
-        )
-    }
 }
 
 @Composable
-private fun HomeDestination(destination: HomeDestinationData) {
+private fun HomeDestination(destination: HomeDestinationData, modifier: Modifier = Modifier) {
     val colors = LocalIdeColors.current
     val accent = if (destination.isWarning) Color(0xFFD6A84F) else colors.accent
     Card(
         onClick = destination.onClick,
         enabled = destination.enabled,
-        modifier = Modifier.fillMaxWidth().height(176.dp),
+        modifier = modifier.fillMaxWidth().heightIn(min = 176.dp),
         colors = CardDefaults.cardColors(
             containerColor = if (destination.isWarning) Color(0xFF3A3020) else colors.surface,
             contentColor = colors.textPrimary,
@@ -152,33 +150,38 @@ private fun HomeDestination(destination: HomeDestinationData) {
             disabledContentColor = colors.textDisabled,
         ),
     ) {
-        Column(
-            Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 12.dp),
+        BoxWithConstraints {
+            Column(
+            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             Box(
-                modifier = Modifier.fillMaxWidth().height(78.dp),
+                modifier = Modifier.fillMaxWidth().heightIn(min = 72.dp),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
                     destination.icon,
                     contentDescription = destination.title,
                     tint = if (destination.enabled) accent else colors.textSecondary,
-                    modifier = Modifier.size(60.dp),
+                    modifier = Modifier.size((maxWidth * 0.30f).coerceIn(48.dp, 72.dp)),
                 )
             }
             Text(
                 destination.title,
                 style = MaterialTheme.typography.titleLarge,
                 color = if (destination.isWarning) Color(0xFFFFD98A) else colors.textPrimary,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth(),
             )
             Text(
                 destination.description,
                 style = MaterialTheme.typography.bodySmall,
                 color = if (destination.isWarning) Color(0xFFFFD98A) else colors.textSecondary,
-                maxLines = 3,
-                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth(),
             )
+        }
         }
     }
 }

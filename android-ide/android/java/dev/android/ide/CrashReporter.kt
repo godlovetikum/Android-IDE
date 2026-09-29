@@ -9,10 +9,17 @@ import java.io.StringWriter
 import java.util.concurrent.atomic.AtomicBoolean
 
 data class CrashReportSummary(
+    val id: String,
     val exception: String,
     val message: String,
     val stackTrace: String,
     val timestampMs: Long,
+    val appVersion: String = "unknown",
+    val androidVersion: String = "unknown",
+    val apiLevel: Int = 0,
+    val abi: String = "unknown",
+    val thread: String = "unknown",
+    val rawJson: String = "{}",
 )
 
 /**
@@ -33,22 +40,43 @@ class CrashReporter(private val context: Context) : Thread.UncaughtExceptionHand
     }
 
     /** Number of locally persisted crash reports awaiting user review. */
-    fun reportCount(): Int = (reportDirectory.listFiles { file -> file.extension == "json" }?.size ?: 0) +
-        if (emergencyMarker().exists()) 1 else 0
+    fun reportCount(): Int = reports().size
 
-    fun latestReport(): CrashReportSummary? = reportDirectory
-        .listFiles { file -> file.extension == "json" }
-        ?.maxByOrNull { it.lastModified() }
-        ?.let { file -> runCatching { JSONObject(file.readText(Charsets.UTF_8)).toSummary() }.getOrNull() }
-        ?: emergencyMarker().takeIf { it.exists() }?.let { marker ->
+    /** Reports are newest first and include the complete original JSON payload. */
+    fun reports(): List<CrashReportSummary> {
+        val persisted = reportDirectory
+            .listFiles { file -> file.extension == "json" }
+            ?.sortedByDescending { it.lastModified() }
+            ?.mapNotNull { file ->
+                runCatching {
+                    JSONObject(file.readText(Charsets.UTF_8)).toSummary(file.name)
+                }.getOrNull()
+            }
+            .orEmpty()
+        if (persisted.isNotEmpty()) return persisted
+        return emergencyMarker().takeIf { it.exists() }?.let { marker ->
             val lines = runCatching { marker.readLines() }.getOrDefault(emptyList())
-            CrashReportSummary(
-                exception = lines.getOrNull(1) ?: "Unknown exception",
-                message = lines.getOrNull(2).orEmpty().ifBlank { "The crash report could not be fully persisted." },
-                stackTrace = "Emergency crash marker; full stack trace was unavailable.",
-                timestampMs = marker.lastModified(),
+            val json = JSONObject()
+                .put("reportVersion", 1)
+                .put("timestampMs", marker.lastModified())
+                .put("exception", lines.getOrNull(1) ?: "Unknown exception")
+                .put("message", lines.getOrNull(2).orEmpty().ifBlank { "The crash report could not be fully persisted." })
+                .put("stackTrace", "Emergency crash marker; full stack trace was unavailable.")
+                .toString(2)
+            listOf(
+                CrashReportSummary(
+                    id = marker.name,
+                    exception = lines.getOrNull(1) ?: "Unknown exception",
+                    message = lines.getOrNull(2).orEmpty().ifBlank { "The crash report could not be fully persisted." },
+                    stackTrace = "Emergency crash marker; full stack trace was unavailable.",
+                    timestampMs = marker.lastModified(),
+                    rawJson = json,
+                ),
             )
-        }
+        }.orEmpty()
+    }
+
+    fun latestReport(): CrashReportSummary? = reports().firstOrNull()
 
     override fun uncaughtException(thread: Thread, throwable: Throwable) {
         runCatching { writeReport(thread, throwable) }
@@ -113,11 +141,18 @@ class CrashReporter(private val context: Context) : Thread.UncaughtExceptionHand
         context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "unknown"
     }.getOrDefault("unknown")
 
-    private fun JSONObject.toSummary(): CrashReportSummary = CrashReportSummary(
+    private fun JSONObject.toSummary(id: String): CrashReportSummary = CrashReportSummary(
+        id = id,
         exception = optString("exception", "Unknown exception"),
         message = optString("message", "No message"),
         stackTrace = optString("stackTrace", "No stack trace available"),
         timestampMs = optLong("timestampMs", 0L),
+        appVersion = optString("appVersion", "unknown"),
+        androidVersion = optString("androidVersion", "unknown"),
+        apiLevel = optInt("apiLevel", 0),
+        abi = optString("abi", "unknown"),
+        thread = optString("thread", "unknown"),
+        rawJson = toString(2),
     )
 
     private companion object {

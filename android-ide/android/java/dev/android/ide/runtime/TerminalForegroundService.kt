@@ -25,9 +25,9 @@ class TerminalForegroundService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
 
     override fun onDestroy() {
-        // A service/process stop is not an explicit user close. Keep descriptors
-        // so the next launch can show sessions as unavailable/recoverable.
-        sessionStore.markAvailableUnavailable("The terminal service stopped; this session is unavailable")
+        // The PTYs are gone when the service is destroyed. Do not leave stale
+        // descriptors that the next launch cannot reconnect to.
+        sessionStore.clear()
         super.onDestroy()
     }
 

@@ -1772,6 +1772,31 @@ build/
         _uiState.update { it.copy(isContentSearchVisible = false, contentSearchQuery = "", contentSearchResults = emptyList()) }
     }
 
+    fun clearContentSearchResults() {
+        projectSearchJob?.cancel()
+        _uiState.update { it.copy(contentSearchResults = emptyList()) }
+    }
+
+    fun setContentSearchMatchCase(enabled: Boolean) {
+        _uiState.update { it.copy(contentSearchMatchCase = enabled) }
+        searchProjectContents(_uiState.value.contentSearchQuery)
+    }
+
+    fun setContentSearchWholeWord(enabled: Boolean) {
+        _uiState.update { it.copy(contentSearchWholeWord = enabled) }
+        searchProjectContents(_uiState.value.contentSearchQuery)
+    }
+
+    fun setContentSearchRegex(enabled: Boolean) {
+        _uiState.update { it.copy(contentSearchRegex = enabled) }
+        searchProjectContents(_uiState.value.contentSearchQuery)
+    }
+
+    fun setContentSearchShowContext(enabled: Boolean) {
+        _uiState.update { it.copy(contentSearchShowContext = enabled) }
+        searchProjectContents(_uiState.value.contentSearchQuery)
+    }
+
     fun searchProjectContents(query: String) {
         _uiState.update { it.copy(contentSearchQuery = query) }
         projectSearchJob?.cancel()
@@ -1780,9 +1805,19 @@ build/
             return
         }
         val rootUri = _uiState.value.projectRootUri ?: return
+        val options = _uiState.value
         projectSearchJob = viewModelScope.launch {
             delay(180)
             val results = mutableListOf<FileSearchResult>()
+            val regex = if (options.contentSearchRegex) {
+                runCatching {
+                    Regex(query, if (options.contentSearchMatchCase) emptySet<RegexOption>() else setOf(RegexOption.IGNORE_CASE))
+                }.getOrNull()
+            } else null
+            if (options.contentSearchRegex && regex == null) {
+                _uiState.update { it.copy(contentSearchResults = emptyList(), statusMessage = "Invalid search expression") }
+                return@launch
+            }
             suspend fun searchDirectory(uri: String, path: String) {
                 safRepository.listChildren(uri).forEach { node ->
                     val nodePath = if (path.isEmpty()) node.displayName else "$path/${node.displayName}"
@@ -1796,13 +1831,43 @@ build/
                         val bytes = fileMutations.read(node.documentUri) ?: return@forEach
                         if (bytes.take(8192).any { it == 0.toByte() }) return@forEach
                         val content = bytes.toString(Charsets.UTF_8)
-                        content.lineSequence().withIndex().forEach { (lineIndex, line) ->
-                            var from = 0
-                            while (from <= line.length) {
-                                val column = line.indexOf(query, from, ignoreCase = true)
-                                if (column < 0) break
-                                results += FileSearchResult(node.documentUri, node.displayName, "/$nodePath", line.trim().take(180), lineIndex + 1, column + 1, query.length)
-                                from = column + maxOf(query.length, 1)
+                        val lines = content.split('\n')
+                        lines.forEachIndexed { lineIndex, line ->
+                            val matches: List<MatchRange> = if (options.contentSearchRegex) {
+                                regex!!.findAll(line).map { MatchRange(it.range.first, it.range.last + 1, it.value) }.toList()
+                            } else {
+                                literalContentMatches(line, query, options.contentSearchMatchCase, options.contentSearchWholeWord)
+                            }
+                            matches.filter { match ->
+                                !options.contentSearchWholeWord || isWholeWordBoundary(line, match.range.first, match.range.last + 1)
+                            }.forEach { match ->
+                                val start = match.range.first
+                                val length = match.value.length.coerceAtLeast(1)
+                                val windowStart = maxOf(0, start - 80)
+                                val windowEnd = minOf(line.length, start + length + 160)
+                                val leadingMarker = if (windowStart > 0) "…" else ""
+                                val trailingMarker = if (windowEnd < line.length) "…" else ""
+                                val beforeContext = if (options.contentSearchShowContext && lineIndex > 0) {
+                                    lines[lineIndex - 1].trim().takeLast(70) + "\n"
+                                } else ""
+                                val afterContext = if (options.contentSearchShowContext && lineIndex + 1 < lines.size) {
+                                    "\n" + lines[lineIndex + 1].trim().take(70)
+                                } else ""
+                                val linePreview = line.substring(windowStart, windowEnd)
+                                val preview = beforeContext + leadingMarker + linePreview + trailingMarker + afterContext
+                                val previewMatchStart = beforeContext.length + leadingMarker.length + (start - windowStart)
+                                results += FileSearchResult(
+                                    node.documentUri,
+                                    node.displayName,
+                                    "/$nodePath",
+                                    preview,
+                                    lineIndex + 1,
+                                    start + 1,
+                                    length,
+                                    false,
+                                    previewMatchStart,
+                                    length,
+                                )
                             }
                         }
                     }
@@ -1827,8 +1892,19 @@ build/
         _uiState.update { it.copy(fileOpDialog = FileOpDialog.ReplaceAll(find, replacement, results.map { r -> r.documentUri }.distinct().size, matchCount)) }
     }
 
+    /** Show a confirmation before replacing only the matches belonging to one file. */
+    fun replaceFileContents(documentUri: String, fileName: String, find: String, replacement: String) {
+        if (find.isBlank()) return
+        val matches = _uiState.value.contentSearchResults.count { it.documentUri == documentUri }
+        if (matches == 0) return
+        _uiState.update {
+            it.copy(fileOpDialog = FileOpDialog.ReplaceFile(documentUri, fileName, find, replacement, matches))
+        }
+    }
+
     fun confirmReplaceProjectContents() {
         val dialog = _uiState.value.fileOpDialog as? FileOpDialog.ReplaceAll ?: return
+        val options = _uiState.value
         _uiState.update { it.copy(fileOpDialog = dialog.copy(isSubmitting = true)) }
         viewModelScope.launch {
             val results = _uiState.value.contentSearchResults
@@ -1841,7 +1917,14 @@ build/
                     return@forEach
                 }
                 val original = bytes.toString(Charsets.UTF_8)
-                val changed = original.replace(dialog.find, dialog.replacement, ignoreCase = true)
+                val changed = replaceContentMatches(
+                    original,
+                    dialog.find,
+                    dialog.replacement,
+                    options.contentSearchMatchCase,
+                    options.contentSearchWholeWord,
+                    options.contentSearchRegex,
+                )
                 if (changed == original) return@forEach
                 if (fileMutations.write(result.documentUri, changed.toByteArray(Charsets.UTF_8))) changedFiles++ else failedFiles++
             }
@@ -1854,6 +1937,101 @@ build/
             }
             searchProjectContents(_uiState.value.contentSearchQuery)
         }
+    }
+
+    fun confirmReplaceFileContents() {
+        val dialog = _uiState.value.fileOpDialog as? FileOpDialog.ReplaceFile ?: return
+        val options = _uiState.value
+        _uiState.update { it.copy(fileOpDialog = dialog.copy(isSubmitting = true)) }
+        viewModelScope.launch {
+            val bytes = fileMutations.read(dialog.documentUri)
+            val changed = if (bytes == null || bytes.take(8192).any { it == 0.toByte() }) {
+                null
+            } else {
+                val original = bytes.toString(Charsets.UTF_8)
+                replaceContentMatches(
+                    original,
+                    dialog.find,
+                    dialog.replacement,
+                    options.contentSearchMatchCase,
+                    options.contentSearchWholeWord,
+                    options.contentSearchRegex,
+                ).takeUnless { it == original }
+            }
+            val written = changed != null && fileMutations.write(dialog.documentUri, changed.toByteArray(Charsets.UTF_8))
+            _uiState.update {
+                it.copy(
+                    fileOpDialog = null,
+                    statusMessage = if (written) "Replaced matches in ${dialog.fileName}" else "Could not update ${dialog.fileName}",
+                )
+            }
+            searchProjectContents(_uiState.value.contentSearchQuery)
+        }
+    }
+
+    private fun literalContentMatches(
+        line: String,
+        query: String,
+        matchCase: Boolean,
+        wholeWord: Boolean,
+    ): List<MatchRange> {
+        if (query.isEmpty()) return emptyList()
+        val matches = mutableListOf<MatchRange>()
+        var from = 0
+        while (from <= line.length) {
+            val start = line.indexOf(query, from, ignoreCase = !matchCase)
+            if (start < 0) break
+            val end = start + query.length
+            if (!wholeWord || isWholeWordBoundary(line, start, end)) {
+                matches += MatchRange(start, end, line.substring(start, end))
+            }
+            from = start + maxOf(query.length, 1)
+        }
+        return matches
+    }
+
+    private fun isWholeWordBoundary(text: String, start: Int, end: Int): Boolean {
+        fun isWordCharacter(value: Char?) = value != null && (value.isLetterOrDigit() || value == '_')
+        return !isWordCharacter(text.getOrNull(start - 1)) && !isWordCharacter(text.getOrNull(end))
+    }
+
+    private fun replaceContentMatches(
+        source: String,
+        find: String,
+        replacement: String,
+        matchCase: Boolean,
+        wholeWord: Boolean,
+        regex: Boolean,
+    ): String {
+        if (regex) {
+            return runCatching {
+                val expression = if (wholeWord) "(?<![\\p{L}\\p{N}_])(?:$find)(?![\\p{L}\\p{N}_])" else find
+                Regex(expression, if (matchCase) emptySet<RegexOption>() else setOf(RegexOption.IGNORE_CASE)).replace(source, replacement)
+            }.getOrDefault(source)
+        }
+        if (find.isEmpty()) return source
+        val result = StringBuilder(source.length)
+        var cursor = 0
+        while (cursor < source.length) {
+            val start = source.indexOf(find, cursor, ignoreCase = !matchCase)
+            if (start < 0) {
+                result.append(source, cursor, source.length)
+                break
+            }
+            val end = start + find.length
+            if (wholeWord && !isWholeWordBoundary(source, start, end)) {
+                result.append(source, cursor, end)
+                cursor = end
+            } else {
+                result.append(source, cursor, start).append(replacement)
+                cursor = end
+            }
+        }
+        return result.toString()
+    }
+
+    private data class MatchRange(val start: Int, val end: Int, val value: String) {
+        val range: IntRange get() = start until end
     }
 
     fun showEditorFind() {

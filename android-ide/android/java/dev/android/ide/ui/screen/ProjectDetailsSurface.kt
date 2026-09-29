@@ -131,7 +131,7 @@ fun ProjectDetailsSurface(
                 },
                 onOpenEditor = { viewModel.navigate(Surface.EDITOR) },
                 onOpenGit = { viewModel.navigate(Surface.GIT) },
-                onOpenTerminal = { viewModel.navigate(Surface.TERMINAL) },
+                onOpenTerminal = { project?.id?.let(viewModel::openTerminalForProject) },
                 onOpenBrowser = { viewModel.navigate(Surface.BROWSER) },
                 onRemoveFromRegistry = { confirmRemove = true },
                 onDeletePermanently = {

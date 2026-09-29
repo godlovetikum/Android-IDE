@@ -36,8 +36,6 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.foundation.pager.HorizontalPager
-import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ContentCopy
@@ -377,7 +375,7 @@ private fun SymbolBar(
     }
 }
 
-// ── Keyboard toolbar — 2-page HorizontalPager (no horizontal scroll) ──────────
+// ── Keyboard toolbar — explicit page controls, no swipe pager or indicators ────
 
 private data class KeyboardAction(
     val id: String,
@@ -460,7 +458,8 @@ private fun KeyboardToolbar(
         .distinct()
         .mapNotNull(actionCatalog::get)
     val pages = orderedActions.chunked(8)
-    val pagerState = rememberPagerState(pageCount = { pages.size.coerceAtLeast(1) })
+    var selectedPage by rememberSaveable { mutableIntStateOf(0) }
+    val pageIndex = selectedPage.coerceIn(0, pages.lastIndex.coerceAtLeast(0))
     // used previously goes out of sync when the system dismisses the keyboard (Back
     // button, predictive-back gesture, navigation) without our code knowing.
     val density         = LocalDensity.current
@@ -471,54 +470,45 @@ private fun KeyboardToolbar(
             .fillMaxWidth()
             .background(colors.surface),
     ) {
-        HorizontalPager(state = pagerState) { pageIndex ->
+        Row(
+            modifier = Modifier.fillMaxWidth().height(48.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            IconButton(
+                onClick = { selectedPage = (pageIndex - 1).coerceAtLeast(0) },
+                enabled = pageIndex > 0,
+                modifier = Modifier.size(44.dp),
+            ) {
+                Icon(Icons.Default.KeyboardArrowLeft, contentDescription = "Previous toolbar page")
+            }
             Row(
-                modifier = Modifier
-                    .height(48.dp)
-                    .fillMaxWidth(),
-                verticalAlignment     = Alignment.CenterVertically,
+                modifier = Modifier.weight(1f),
+                verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceEvenly,
             ) {
                 pages.getOrElse(pageIndex) { emptyList() }.forEach { action ->
                     ToolbarIconButton(
-                        // (tap hides it) and the Keyboard icon when hidden (tap shows it).
-                        // Previous code had the logic inverted.
-                        icon             = if (action.isKeyboardToggle)
-                                               if (keyboardShowing) Icons.Default.KeyboardHide
-                                               else action.icon
-                                           else action.icon,
-                        label            = action.label,
-                        isPaste          = action.isPaste,
-                        commandId        = action.commandId,
-                        enabled          = !action.requiresSelection || hasEditorSelection,
+                        icon = if (action.isKeyboardToggle) {
+                            if (keyboardShowing) Icons.Default.KeyboardHide else action.icon
+                        } else action.icon,
+                        label = action.label,
+                        isPaste = action.isPaste,
+                        commandId = action.commandId,
+                        enabled = !action.requiresSelection || hasEditorSelection,
                         onExecuteCommand = onExecuteCommand,
-                        onPaste          = onPasteFromClipboard,
-                        onCustomClick    = if (action.isKeyboardToggle) {
-                            {
-                                onToggleKeyboard(!keyboardShowing)
-                            }
+                        onPaste = onPasteFromClipboard,
+                        onCustomClick = if (action.isKeyboardToggle) {
+                            { onToggleKeyboard(!keyboardShowing) }
                         } else null,
                     )
                 }
             }
-        }
-        // Page indicator dots
-        Row(
-            modifier              = Modifier.fillMaxWidth().height(12.dp),
-            horizontalArrangement = Arrangement.Center,
-            verticalAlignment     = Alignment.CenterVertically,
-        ) {
-            repeat(pages.size) { idx ->
-                val selected = pagerState.currentPage == idx
-                Box(
-                    modifier = Modifier
-                        .padding(horizontal = 3.dp)
-                        .size(if (selected) 6.dp else 4.dp)
-                        .background(
-                            color = if (selected) colors.accent else colors.textDisabled,
-                            shape = androidx.compose.foundation.shape.CircleShape,
-                        ),
-                )
+            IconButton(
+                onClick = { selectedPage = (pageIndex + 1).coerceAtMost(pages.lastIndex.coerceAtLeast(0)) },
+                enabled = pageIndex < pages.lastIndex,
+                modifier = Modifier.size(44.dp),
+            ) {
+                Icon(Icons.Default.KeyboardArrowRight, contentDescription = "Next toolbar page")
             }
         }
     }

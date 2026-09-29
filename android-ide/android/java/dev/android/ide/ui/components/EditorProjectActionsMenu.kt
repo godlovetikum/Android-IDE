@@ -30,19 +30,22 @@ fun EditorProjectActionsMenu(
     onDeleteProject: () -> Unit,
     onRemoveProject: () -> Unit,
     onPasteAtRoot: (() -> Unit)? = null,
+    includeCreationActions: Boolean = true,
 ) {
     val colors = LocalIdeColors.current
     DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
-        DropdownMenuItem(
-            leadingIcon = { Icon(Icons.Default.Article, null) },
-            text = { Text("New file") },
-            onClick = { onDismiss(); onNewFile() },
-        )
-        DropdownMenuItem(
-            leadingIcon = { Icon(Icons.Default.FolderOpen, null) },
-            text = { Text("New folder") },
-            onClick = { onDismiss(); onNewFolder() },
-        )
+        if (includeCreationActions) {
+            DropdownMenuItem(
+                leadingIcon = { Icon(Icons.Default.Article, null) },
+                text = { Text("New file") },
+                onClick = { onDismiss(); onNewFile() },
+            )
+            DropdownMenuItem(
+                leadingIcon = { Icon(Icons.Default.FolderOpen, null) },
+                text = { Text("New folder") },
+                onClick = { onDismiss(); onNewFolder() },
+            )
+        }
         DropdownMenuItem(
             leadingIcon = { Icon(Icons.Default.FolderOpen, null) },
             text = { Text("Import files") },

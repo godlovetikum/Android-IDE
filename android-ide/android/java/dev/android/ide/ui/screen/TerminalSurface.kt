@@ -17,13 +17,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.DeleteSweep
-import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
@@ -39,7 +35,6 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -66,24 +61,24 @@ import dev.android.ide.contracts.SessionAvailability
 
 @Composable
 fun TerminalSurface(state: AppShellState, viewModel: AppShellViewModel, onOpenNavigation: () -> Unit, modifier: Modifier = Modifier) {
-    var sessionName by remember { mutableStateOf("") }
     var packageInput by remember { mutableStateOf("") }
     var packageMenuOpen by remember { mutableStateOf(false) }
     var packageDialogOpen by remember { mutableStateOf(false) }
-    var renameSessionId by remember { mutableStateOf<String?>(null) }
-    var renameValue by remember { mutableStateOf("") }
-    var sessionMenuId by remember { mutableStateOf<String?>(null) }
     var ctrlLatched by remember { mutableStateOf(false) }
     var altLatched by remember { mutableStateOf(false) }
     var escapeLatched by remember { mutableStateOf(false) }
+    var initialSessionRequested by remember { mutableStateOf(false) }
     val sessions = state.terminalSessions
     val selected = sessions.firstOrNull { it.id == state.selectedTerminalSessionId && it.availability == SessionAvailability.AVAILABLE }
     val runtimeAvailable = state.runtimeCapabilities?.availability == RuntimeAvailability.AVAILABLE
     val context = LocalContext.current
     val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
-    LaunchedEffect(runtimeAvailable, sessions) {
-        if (runtimeAvailable && sessions.isEmpty()) viewModel.createTerminalSession()
+    LaunchedEffect(runtimeAvailable) {
+        if (runtimeAvailable && !initialSessionRequested && sessions.none { it.availability == SessionAvailability.AVAILABLE }) {
+            initialSessionRequested = true
+            viewModel.createTerminalSession(workingDirectory = null)
+        }
     }
     LaunchedEffect(runtimeAvailable) {
         if (runtimeAvailable && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
@@ -110,7 +105,6 @@ fun TerminalSurface(state: AppShellState, viewModel: AppShellViewModel, onOpenNa
                 )
             }
             IconButton(onClick = viewModel::refreshTerminalSessions) { Icon(Icons.Default.Refresh, "Refresh terminal sessions") }
-            IconButton(onClick = viewModel::closeAllTerminalSessions, enabled = sessions.isNotEmpty()) { Icon(Icons.Default.DeleteSweep, "Close all terminal sessions") }
             Box {
                 IconButton(onClick = { packageMenuOpen = true }) { Icon(Icons.Default.MoreVert, "Terminal tools") }
                 DropdownMenu(expanded = packageMenuOpen, onDismissRequest = { packageMenuOpen = false }) {
@@ -133,43 +127,11 @@ fun TerminalSurface(state: AppShellState, viewModel: AppShellViewModel, onOpenNa
                 dismissButton = { TextButton(onClick = { packageDialogOpen = false }, enabled = !state.terminalOperationInProgress) { Text("Close") } },
             )
         }
-        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            sessions.forEach { session ->
-                Box {
-                    Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                        TextButton(onClick = { viewModel.selectTerminalSession(session.id) }, enabled = session.availability == SessionAvailability.AVAILABLE) {
-                            Text(
-                                if (session.availability == SessionAvailability.AVAILABLE) session.name else "${session.name} (Unavailable)",
-                                color = if (session.id == selected?.id) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        IconButton(onClick = { sessionMenuId = session.id }) {
-                            Icon(Icons.Default.MoreVert, "Session actions")
-                        }
-                    }
-                    DropdownMenu(expanded = sessionMenuId == session.id, onDismissRequest = { sessionMenuId = null }) {
-                        DropdownMenuItem(
-                            leadingIcon = { Icon(Icons.Default.Edit, null) },
-                            text = { Text("Rename session") },
-                            onClick = { sessionMenuId = null; renameSessionId = session.id; renameValue = session.name },
-                        )
-                        DropdownMenuItem(
-                            leadingIcon = { Icon(Icons.Default.Close, null) },
-                            text = { Text("Close session") },
-                            onClick = { sessionMenuId = null; viewModel.closeTerminalSession(session.id) },
-                        )
-                    }
-                }
-            }
-            OutlinedTextField(sessionName, { sessionName = it }, label = { Text("Session name") }, singleLine = true, modifier = Modifier.width(180.dp))
-            Button(onClick = { viewModel.createTerminalSession(name = sessionName); sessionName = "" }, enabled = runtimeAvailable) { Icon(Icons.Default.Add, null); Text("New") }
-        }
         if (selected == null || selected.availability != dev.android.ide.contracts.SessionAvailability.AVAILABLE) {
             Card(Modifier.fillMaxWidth().weight(1f), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
                 Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("No active terminal session", style = MaterialTheme.typography.titleMedium)
-                    Text("Unavailable sessions are kept for recovery context and are not rendered as live terminals. Create a new command-line session to continue.")
-                    Button(onClick = { viewModel.createTerminalSession(name = sessionName); sessionName = "" }, enabled = runtimeAvailable) { Icon(Icons.Default.Add, null); Text("Create session") }
+                    Text(if (runtimeAvailable) "Starting a fresh command-line session in the terminal home…" else "The terminal runtime is not available yet.")
                 }
             }
         } else {
@@ -206,27 +168,6 @@ fun TerminalSurface(state: AppShellState, viewModel: AppShellViewModel, onOpenNa
                 Text("Tap the terminal to type. Long-press for selection and copy.", Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
                 IconButton(onClick = viewModel::interruptTerminalSession, enabled = selected.availability == dev.android.ide.contracts.SessionAvailability.AVAILABLE) { Icon(Icons.Default.Stop, "Interrupt session") }
             }
-        }
-        renameSessionId?.let { sessionId ->
-            AlertDialog(
-                onDismissRequest = { renameSessionId = null },
-                title = { Text("Rename session") },
-                text = {
-                    OutlinedTextField(
-                        value = renameValue,
-                        onValueChange = { renameValue = it },
-                        label = { Text("Session name") },
-                        singleLine = true,
-                    )
-                },
-                confirmButton = {
-                    Button(
-                        onClick = { viewModel.renameTerminalSession(sessionId, renameValue); renameSessionId = null },
-                        enabled = renameValue.isNotBlank(),
-                    ) { Text("Rename") }
-                },
-                dismissButton = { TextButton(onClick = { renameSessionId = null }) { Text("Cancel") } },
-            )
         }
         state.terminalFeedback?.let { report ->
             Text(report.message, color = if (report.outcome == dev.android.ide.contracts.OperationOutcome.COMPLETE) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error)

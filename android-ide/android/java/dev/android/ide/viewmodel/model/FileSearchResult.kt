@@ -25,4 +25,7 @@ data class FileSearchResult(
     val matchColumn: Int? = null,
     val matchLength: Int? = null,
     val isDirectory: Boolean = false,
+    /** Start and length of the exact match within [matchPreview], when available. */
+    val previewMatchStart: Int = -1,
+    val previewMatchLength: Int = 0,
 )

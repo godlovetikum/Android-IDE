@@ -46,6 +46,7 @@ data class ProjectIdentity(
 
 enum class Surface {
     HOME,
+    DIAGNOSTICS,
     PROJECTS,
     PROJECT_DETAILS,
     EDITOR,

@@ -69,11 +69,17 @@ data class IdeUiState(
     /** Matching files for the filename query. */
     val fileSearchResults: List<FileSearchResult> = emptyList(),
 
-    /** Current case-insensitive content query scanned across project text files. */
+    /** Current content query scanned across project text files. */
     val contentSearchQuery: String = "",
 
     /** Files containing the current project-content query. */
     val contentSearchResults: List<FileSearchResult> = emptyList(),
+
+    /** Content-search matching preferences, aligned with Monaco find behavior. */
+    val contentSearchMatchCase: Boolean = false,
+    val contentSearchWholeWord: Boolean = false,
+    val contentSearchRegex: Boolean = false,
+    val contentSearchShowContext: Boolean = false,
 
     /** True while Monaco's find or replace widget is the active editor overlay. */
     val isEditorSearchVisible: Boolean = false,

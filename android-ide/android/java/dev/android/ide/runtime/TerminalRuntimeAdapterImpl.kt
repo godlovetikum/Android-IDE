@@ -48,7 +48,10 @@ class TerminalRuntimeAdapterImpl(context: Context) : TerminalRuntimeAdapter, Run
     private val termuxPrefix get() = bundledInstaller.prefix()
     private val shell get() = File(termuxPrefix, "bin/sh")
     private val packageManager get() = File(termuxPrefix, "bin/pkg")
+    private val npm get() = File(termuxPrefix, "bin/npm")
     private val runtimeHome get() = bundledInstaller.home()
+    private val developerBootstrapMarker get() = File(runtimeHome, ".android-ide-developer-bootstrap-v1")
+    @Volatile private var developerBootstrapAttempted = false
 
     override suspend fun initialize(): OperationReport {
         val bootstrap = bundledInstaller.initialize()
@@ -63,7 +66,10 @@ class TerminalRuntimeAdapterImpl(context: Context) : TerminalRuntimeAdapter, Run
             )
         }
         runtimeHome.mkdirs()
-        sessionStore.markAvailableUnavailable("This terminal session was interrupted and is unavailable; create a new session to continue")
+        // A TerminalSession owns an in-process PTY and cannot be reattached after
+        // Android recreates the process. Drop stale descriptors and let the UI
+        // create one fresh home-directory session instead of piling up dead rows.
+        sessionStore.clear()
         return OperationReport(OperationOutcome.COMPLETE, "Terminal is available")
     }
 
@@ -87,9 +93,9 @@ class TerminalRuntimeAdapterImpl(context: Context) : TerminalRuntimeAdapter, Run
     }
 
     override suspend fun installedPackages(): List<RuntimePackage> {
-        if (!packageManager.canExecute()) return emptyList()
+        if (!packageManager.isFile || !shell.canExecute()) return emptyList()
         return runCatching {
-            ProcessBuilder(packageManager.absolutePath, "list-installed")
+            ProcessBuilder(shell.absolutePath, packageManager.absolutePath, "list-installed")
                 .redirectErrorStream(true).start().inputStream.bufferedReader().readText()
                 .lineSequence().mapNotNull { line ->
                     val value = line.trim().removePrefix("Installing ").takeIf { it.isNotBlank() } ?: return@mapNotNull null
@@ -101,8 +107,8 @@ class TerminalRuntimeAdapterImpl(context: Context) : TerminalRuntimeAdapter, Run
 
     override suspend fun installPackages(packages: List<String>): OperationReport {
         if (packages.isEmpty()) return OperationReport(OperationOutcome.BLOCKED, "Choose at least one package", ErrorCategory.PACKAGE_FAILURE)
-        if (!packageManager.canExecute()) return unavailable("The terminal package manager is unavailable")
-        return runCommand(listOf(packageManager.absolutePath, "install", "-y") + packages, runtimeHome)
+        if (!packageManager.isFile || !shell.canExecute()) return unavailable("The terminal package manager is unavailable")
+        return runCommand(listOf(shell.absolutePath, packageManager.absolutePath, "install", "-y") + packages, runtimeHome)
     }
 
     override suspend fun inspectProjectAccess(project: ProjectIdentity): TerminalProjectAccess {
@@ -127,6 +133,12 @@ class TerminalRuntimeAdapterImpl(context: Context) : TerminalRuntimeAdapter, Run
         val id = UUID.randomUUID().toString()
         val sessionName = name.trim().ifBlank { "Untitled session" }
         if (!shell.canExecute()) return unavailableSession(id, sessionName, "Terminal is unavailable")
+        // Package setup is deliberately first-use and idempotent. A failed network
+        // operation must not prevent the shell itself from opening.
+        if (!developerBootstrapMarker.exists() && !developerBootstrapAttempted) {
+            developerBootstrapAttempted = true
+            runCatching { ensureDeveloperPackages() }
+        }
         val directory = workingDirectory?.let(::File)?.takeIf { it.isDirectory } ?: runtimeHome
         return runCatching {
             val environment = arrayOf(
@@ -165,7 +177,7 @@ class TerminalRuntimeAdapterImpl(context: Context) : TerminalRuntimeAdapter, Run
 
     override suspend fun listSessions(): List<SessionDescriptor> {
         sessions.values.filterNot { it.session.isRunning() }.forEach { markUnavailable(it.descriptor.id, "The terminal process ended") }
-        return (sessionStore.readAll() + sessions.values.map { it.descriptor }).distinctBy { it.id }.sortedBy { it.createdAt }
+        return sessions.values.map { it.descriptor }.sortedBy { it.createdAt }
     }
 
     override suspend fun renameSession(sessionId: String, name: String): OperationReport {
@@ -237,15 +249,14 @@ class TerminalRuntimeAdapterImpl(context: Context) : TerminalRuntimeAdapter, Run
     override suspend fun closeSession(sessionId: String): OperationReport {
         val live = sessions.remove(sessionId)
         live?.let(::terminateOwnedProcessGroup)
-        sessionStore.readAll().firstOrNull { it.id == sessionId }?.let {
-            sessionStore.upsert(it.copy(availability = SessionAvailability.EXPLICITLY_CLOSED, terminationReason = "Closed by user"))
-        }
+        sessionStore.remove(sessionId)
         if (sessions.isEmpty()) appContext.stopService(Intent(appContext, TerminalForegroundService::class.java))
         return OperationReport(OperationOutcome.COMPLETE, "Terminal session closed")
     }
 
     override suspend fun closeAllSessions(): OperationReport {
         sessions.keys.toList().forEach { closeSession(it) }
+        sessionStore.clear()
         appContext.stopService(Intent(appContext, TerminalForegroundService::class.java))
         return OperationReport(OperationOutcome.COMPLETE, "All terminal sessions closed")
     }
@@ -277,7 +288,7 @@ class TerminalRuntimeAdapterImpl(context: Context) : TerminalRuntimeAdapter, Run
 
     private fun markUnavailable(sessionId: String, reason: String) {
         val live = sessions.remove(sessionId) ?: return
-        sessionStore.upsert(live.descriptor.copy(availability = SessionAvailability.UNAVAILABLE, terminationReason = reason))
+        sessionStore.remove(live.descriptor.id)
         viewInvalidators.remove(sessionId)?.invoke()
     }
 
@@ -304,10 +315,28 @@ class TerminalRuntimeAdapterImpl(context: Context) : TerminalRuntimeAdapter, Run
         else OperationReport(OperationOutcome.FAILED, output.ifBlank { "Package operation failed" }, ErrorCategory.PACKAGE_FAILURE)
     }.getOrElse { OperationReport(OperationOutcome.FAILED, it.message ?: "Package operation failed", ErrorCategory.PACKAGE_FAILURE) }
 
+    private suspend fun ensureDeveloperPackages(): OperationReport {
+        if (developerBootstrapMarker.exists()) return OperationReport(OperationOutcome.COMPLETE, "Developer packages are ready")
+        if (!packageManager.isFile || !shell.canExecute()) {
+            return unavailable("The bundled terminal package manager is unavailable; continuing without automatic package setup")
+        }
+        val packages = listOf("git", "curl", "wget", "ca-certificates", "nodejs", "npm", "python", "openssh", "unzip", "tar", "grep", "sed", "awk")
+        val base = runCommand(listOf(shell.absolutePath, packageManager.absolutePath, "install", "-y") + packages, runtimeHome)
+        if (base.outcome != OperationOutcome.COMPLETE) return base
+        val liveServer = if (npm.isFile) {
+            runCommand(listOf(shell.absolutePath, npm.absolutePath, "install", "--global", "live-server"), runtimeHome)
+        } else {
+            OperationReport(OperationOutcome.FAILED, "npm was not included in the terminal runtime", ErrorCategory.PACKAGE_FAILURE)
+        }
+        if (liveServer.outcome != OperationOutcome.COMPLETE) return liveServer
+        developerBootstrapMarker.writeText("git curl wget nodejs npm python openssh unzip tar grep sed awk live-server\n")
+        return OperationReport(OperationOutcome.COMPLETE, "Core developer packages and Live Server are ready")
+    }
+
     private fun unavailable(message: String) = OperationReport(OperationOutcome.BLOCKED, message, ErrorCategory.UNAVAILABLE_RUNTIME)
 
     private fun unavailableSession(id: String, name: String, reason: String): SessionDescriptor =
-        SessionDescriptor(id, "global", name = name, createdAt = Instant.now(), availability = SessionAvailability.UNAVAILABLE, terminationReason = reason).also(sessionStore::upsert)
+        SessionDescriptor(id, "global", name = name, createdAt = Instant.now(), availability = SessionAvailability.UNAVAILABLE, terminationReason = reason)
 
     private val sessionClient = object : TerminalSessionClient {
         override fun onTextChanged(changedSession: TerminalSession) {
@@ -324,12 +353,8 @@ class TerminalRuntimeAdapterImpl(context: Context) : TerminalRuntimeAdapter, Run
                 viewInvalidators.remove(id)?.invoke()
                 return
             }
-            val descriptor = entry.value.descriptor.copy(
-                availability = SessionAvailability.UNAVAILABLE,
-                terminationReason = "The terminal process ended",
-            )
             sessions.remove(id)
-            sessionStore.upsert(descriptor)
+            sessionStore.remove(id)
             viewInvalidators.remove(id)?.invoke()
             if (sessions.isEmpty()) {
                 appContext.stopService(Intent(appContext, TerminalForegroundService::class.java))

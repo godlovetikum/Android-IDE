@@ -5,17 +5,14 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -24,7 +21,6 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Code
@@ -64,6 +60,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.Role
@@ -161,17 +158,11 @@ private fun EditorSidebarActionTile(
     selected: Boolean = false,
     onClick: () -> Unit,
 ) {
-    val shape = RoundedCornerShape(10.dp)
-    TextButton(
+    val shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp)
+    IconButton(
         onClick = onClick,
         modifier = Modifier
-            .height(58.dp)
-            .widthIn(min = 68.dp)
-            .border(
-                width = if (selected) 1.5.dp else 1.dp,
-                color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
-                shape = shape,
-            )
+            .size(38.dp)
             .background(
                 color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
                 shape = shape,
@@ -180,12 +171,8 @@ private fun EditorSidebarActionTile(
                 role = Role.Button
                 this.selected = selected
             },
-        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 5.dp),
     ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Icon(icon, contentDescription = label, modifier = Modifier.size(20.dp))
-            Text(label, style = MaterialTheme.typography.labelSmall, maxLines = 1)
-        }
+        Icon(icon, contentDescription = label, modifier = Modifier.size(18.dp))
     }
 }
 
@@ -223,9 +210,8 @@ fun EditorSidebar(
         Row(
             Modifier
                 .fillMaxWidth()
-                .horizontalScroll(rememberScrollState())
-                .padding(horizontal = 8.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                .padding(horizontal = 4.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.SpaceEvenly,
             verticalAlignment = Alignment.CenterVertically,
         ) {
             EditorSidebarActionTile(
@@ -269,6 +255,7 @@ fun EditorSidebar(
                     onShowDetails = onShowDetails,
                     onDeleteProject = onDeleteProject,
                     onRemoveProject = onRemoveProject,
+                    includeCreationActions = false,
                 )
             }
         }
@@ -292,6 +279,10 @@ fun EditorSidebar(
                 fileSearchResults = state.fileSearchResults,
                 contentSearchQuery = state.contentSearchQuery,
                 contentSearchResults = state.contentSearchResults,
+                contentSearchMatchCase = state.contentSearchMatchCase,
+                contentSearchWholeWord = state.contentSearchWholeWord,
+                contentSearchRegex = state.contentSearchRegex,
+                contentSearchShowContext = state.contentSearchShowContext,
                 onFileClick = onFileSelected,
                 onFileDoubleClick = ideViewModel::openFilePermanent,
                 onDirToggle = onToggleDirectory,
@@ -319,7 +310,13 @@ fun EditorSidebar(
                 onExitSelectionMode = ideViewModel::exitSelectionMode,
                 onSearchQueryChange = ideViewModel::searchFiles,
                 onContentSearchQueryChange = ideViewModel::searchProjectContents,
+                onContentSearchMatchCaseChange = ideViewModel::setContentSearchMatchCase,
+                onContentSearchWholeWordChange = ideViewModel::setContentSearchWholeWord,
+                onContentSearchRegexChange = ideViewModel::setContentSearchRegex,
+                onContentSearchShowContextChange = ideViewModel::setContentSearchShowContext,
                 onReplaceProjectContents = ideViewModel::replaceProjectContents,
+                onReplaceFileContents = ideViewModel::replaceFileContents,
+                onClearContentSearchResults = ideViewModel::clearContentSearchResults,
                 onHideFileSearch = onHideFileSearch,
                 onHideContentSearch = onHideContentSearch,
                 onSearchFileSelect = { result -> onFileSelected(result.documentUri) },
@@ -331,14 +328,21 @@ fun EditorSidebar(
                 locateTargetUri = state.locateTargetUri, locateRequestToken = state.locateRequestToken, onLocateConsumed = ideViewModel::clearLocateRequest,
                 hideGitFolder = state.editorSettings.hideGitFolder, isMultiSelectMode = false, selectedUris = emptySet(),
                 isSearchVisible = true, isContentSearchVisible = false, fileSearchQuery = state.fileSearchQuery, fileSearchResults = state.fileSearchResults,
-                contentSearchQuery = state.contentSearchQuery, contentSearchResults = state.contentSearchResults, onFileClick = onFileSelected, onFileDoubleClick = ideViewModel::openFilePermanent,
+                contentSearchQuery = state.contentSearchQuery, contentSearchResults = state.contentSearchResults,
+                contentSearchMatchCase = state.contentSearchMatchCase, contentSearchWholeWord = state.contentSearchWholeWord,
+                contentSearchRegex = state.contentSearchRegex, contentSearchShowContext = state.contentSearchShowContext,
+                onFileClick = onFileSelected, onFileDoubleClick = ideViewModel::openFilePermanent,
                 onDirToggle = onToggleDirectory, onShowRenameDialog = ideViewModel::showRenameDialog, onShowDeleteDialog = ideViewModel::showDeleteDialog,
                 onShowCreateFileDialog = ideViewModel::showCreateFileDialog, onShowCreateFolderDialog = ideViewModel::showCreateFolderDialog, onShowDuplicateDialog = ideViewModel::showDuplicateDialog,
                 onCopyNode = ideViewModel::copyFileNode, onCutNode = ideViewModel::cutFileNode, onPasteInto = ideViewModel::pasteFileNode, onImportFilesAt = { onImport(it.documentUri) }, onExportDirectory = onExportDirectory,
                 onNewFileAtRoot = { ideViewModel.showCreateFileDialog(root) }, onNewFolderAtRoot = { ideViewModel.showCreateFolderDialog(root) }, onImportFilesAtRoot = { onImport(root.documentUri) }, onExportProject = onExportProject,
                 onRefresh = onRefresh, onShowProjectDetails = onShowDetails, onDeleteProject = onDeleteProject, onRemoveProject = onRemoveProject, onPasteAtRoot = { ideViewModel.pasteFileNode(root) }, onCopyPath = ideViewModel::copyPathToClipboard,
                 onToggleNodeSelection = ideViewModel::toggleNodeSelection, onExitSelectionMode = ideViewModel::exitSelectionMode, onSearchQueryChange = ideViewModel::searchFiles, onContentSearchQueryChange = ideViewModel::searchProjectContents,
+                onContentSearchMatchCaseChange = ideViewModel::setContentSearchMatchCase, onContentSearchWholeWordChange = ideViewModel::setContentSearchWholeWord,
+                onContentSearchRegexChange = ideViewModel::setContentSearchRegex, onContentSearchShowContextChange = ideViewModel::setContentSearchShowContext,
                 onReplaceProjectContents = ideViewModel::replaceProjectContents,
+                onReplaceFileContents = ideViewModel::replaceFileContents,
+                onClearContentSearchResults = ideViewModel::clearContentSearchResults,
                 onHideFileSearch = { onHideFileSearch(); onPanelSelected(EditorPanel.FILES) }, onHideContentSearch = onHideContentSearch, onSearchFileSelect = { result -> onFileSelected(result.documentUri) }, modifier = Modifier.weight(1f),
             )
             EditorPanel.CONTENT_SEARCH -> FileTreePanel(
@@ -347,14 +351,21 @@ fun EditorSidebar(
                 locateTargetUri = state.locateTargetUri, locateRequestToken = state.locateRequestToken, onLocateConsumed = ideViewModel::clearLocateRequest,
                 hideGitFolder = state.editorSettings.hideGitFolder, isMultiSelectMode = false, selectedUris = emptySet(),
                 isSearchVisible = false, isContentSearchVisible = true, fileSearchQuery = state.fileSearchQuery, fileSearchResults = state.fileSearchResults,
-                contentSearchQuery = state.contentSearchQuery, contentSearchResults = state.contentSearchResults, onFileClick = onFileSelected, onFileDoubleClick = ideViewModel::openFilePermanent,
+                contentSearchQuery = state.contentSearchQuery, contentSearchResults = state.contentSearchResults,
+                contentSearchMatchCase = state.contentSearchMatchCase, contentSearchWholeWord = state.contentSearchWholeWord,
+                contentSearchRegex = state.contentSearchRegex, contentSearchShowContext = state.contentSearchShowContext,
+                onFileClick = onFileSelected, onFileDoubleClick = ideViewModel::openFilePermanent,
                 onDirToggle = onToggleDirectory, onShowRenameDialog = ideViewModel::showRenameDialog, onShowDeleteDialog = ideViewModel::showDeleteDialog,
                 onShowCreateFileDialog = ideViewModel::showCreateFileDialog, onShowCreateFolderDialog = ideViewModel::showCreateFolderDialog, onShowDuplicateDialog = ideViewModel::showDuplicateDialog,
                 onCopyNode = ideViewModel::copyFileNode, onCutNode = ideViewModel::cutFileNode, onPasteInto = ideViewModel::pasteFileNode, onImportFilesAt = { onImport(it.documentUri) }, onExportDirectory = onExportDirectory,
                 onNewFileAtRoot = { ideViewModel.showCreateFileDialog(root) }, onNewFolderAtRoot = { ideViewModel.showCreateFolderDialog(root) }, onImportFilesAtRoot = { onImport(root.documentUri) }, onExportProject = onExportProject,
                 onRefresh = onRefresh, onShowProjectDetails = onShowDetails, onDeleteProject = onDeleteProject, onRemoveProject = onRemoveProject, onPasteAtRoot = { ideViewModel.pasteFileNode(root) }, onCopyPath = ideViewModel::copyPathToClipboard,
                 onToggleNodeSelection = ideViewModel::toggleNodeSelection, onExitSelectionMode = ideViewModel::exitSelectionMode, onSearchQueryChange = ideViewModel::searchFiles, onContentSearchQueryChange = ideViewModel::searchProjectContents,
+                onContentSearchMatchCaseChange = ideViewModel::setContentSearchMatchCase, onContentSearchWholeWordChange = ideViewModel::setContentSearchWholeWord,
+                onContentSearchRegexChange = ideViewModel::setContentSearchRegex, onContentSearchShowContextChange = ideViewModel::setContentSearchShowContext,
                 onReplaceProjectContents = ideViewModel::replaceProjectContents,
+                onReplaceFileContents = ideViewModel::replaceFileContents,
+                onClearContentSearchResults = ideViewModel::clearContentSearchResults,
                 onHideFileSearch = onHideFileSearch, onHideContentSearch = { onHideContentSearch(); onPanelSelected(EditorPanel.FILES) }, onSearchFileSelect = onSearchResultSelected, modifier = Modifier.weight(1f),
             )
         }
@@ -381,6 +392,7 @@ private fun EditorWorkspace(
 ) {
     val colors = LocalIdeColors.current
     val activeTab = state.openTabs.firstOrNull { it.isActive }
+    val keyboardVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
     var moreOpen by remember { mutableStateOf(false) }
     Column(modifier.background(colors.background)) {
         EditorTopBar(
@@ -388,8 +400,13 @@ private fun EditorWorkspace(
             projectRootUri = state.projectRootUri,
             onOpenGlobalNavigation = onOpenGlobalNavigation,
             onFind = {
-                ideViewModel.showEditorFind()
-                ideViewModel.sendEditorCommand(EditorOutbound.ShowFind)
+                if (state.isEditorSearchVisible) {
+                    ideViewModel.sendEditorCommand(EditorOutbound.CloseSearch)
+                    ideViewModel.dismissEditorSearch()
+                } else {
+                    ideViewModel.showEditorFind()
+                    ideViewModel.sendEditorCommand(EditorOutbound.ShowFind)
+                }
             },
             onSave = {
                 if (activeTab?.isBlank == true) ideViewModel.showSaveAsDialog() else ideViewModel.saveActiveFile()
@@ -400,22 +417,6 @@ private fun EditorWorkspace(
             onFeedback = onFeedback,
             onOpenSettings = onOpenSettings,
         )
-        if (state.isEditorSearchVisible) {
-            Row(
-                Modifier.fillMaxWidth().background(colors.surface).padding(horizontal = 8.dp, vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text("Find", style = MaterialTheme.typography.labelMedium, color = colors.textSecondary)
-                TextButton(onClick = { ideViewModel.sendEditorCommand(EditorOutbound.ShowReplace) }) {
-                    Text("Replace")
-                }
-                Spacer(Modifier.weight(1f))
-                TextButton(onClick = {
-                    ideViewModel.sendEditorCommand(EditorOutbound.CloseSearch)
-                    ideViewModel.dismissEditorSearch()
-                }) { Text("Close") }
-            }
-        }
         if (state.openTabs.isNotEmpty()) {
             EditorTabBar(
                 tabs = state.openTabs, onTabSelected = ideViewModel::selectTab, onTabCloseSafe = ideViewModel::closeTabSafe,
@@ -434,7 +435,7 @@ private fun EditorWorkspace(
             keyboardToolbarOrder = state.editorSettings.keyboardToolbarOrder,
             tabCursorPositions = state.tabCursorPositions, tabScrollPositions = state.tabScrollPositions, modifier = Modifier.weight(1f).fillMaxWidth(),
         )
-        if (state.editorSettings.showStatusBar) EditorStatusBar(state, activeTab)
+        if (state.editorSettings.showStatusBar && !keyboardVisible) EditorStatusBar(state, activeTab)
     }
     DropdownMenu(expanded = moreOpen, onDismissRequest = { moreOpen = false }) {
         DropdownMenuItem(text = { Text("Save As") }, onClick = { moreOpen = false; ideViewModel.showSaveAsDialog() })
@@ -591,6 +592,30 @@ private fun EditorDialogHost(state: IdeUiState, ideViewModel: IdeViewModel, onCh
             confirmButton = {
                 Button(onClick = ideViewModel::confirmReplaceProjectContents, enabled = !dialog.isSubmitting) {
                     Text(if (dialog.isSubmitting) "Replacing…" else "Replace all")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = ideViewModel::dismissFileOpDialog, enabled = !dialog.isSubmitting) {
+                    Text(if (dialog.isSubmitting) "Please wait" else "Cancel")
+                },
+            },
+        )
+        is FileOpDialog.ReplaceFile -> AlertDialog(
+            onDismissRequest = { if (!dialog.isSubmitting) ideViewModel.dismissFileOpDialog() },
+            title = { Text("Replace matches in ${dialog.fileName}?") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Replace ${dialog.matches} occurrence(s) of \"${dialog.find}\" with \"${dialog.replacement}\" in this file?")
+                    dialog.resultMessage?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                    if (dialog.isSubmitting) Row(verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(Modifier.padding(end = 8.dp), strokeWidth = 2.dp)
+                        Text("Replacing…")
+                    }
+                }
+            },
+            confirmButton = {
+                Button(onClick = ideViewModel::confirmReplaceFileContents, enabled = !dialog.isSubmitting) {
+                    Text(if (dialog.isSubmitting) "Replacing…" else "Replace")
                 }
             },
             dismissButton = {

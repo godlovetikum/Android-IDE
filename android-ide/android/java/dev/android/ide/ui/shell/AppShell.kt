@@ -1,5 +1,6 @@
 package dev.android.ide.ui.shell
 
+import android.content.Intent
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -12,9 +13,12 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.border
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Menu
@@ -27,6 +31,7 @@ import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.MergeType
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Send
@@ -68,9 +73,11 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import dev.android.ide.app.AppShellState
 import dev.android.ide.app.AppShellViewModel
+import dev.android.ide.CrashReportSummary
 import dev.android.ide.contracts.Surface
 import dev.android.ide.CrashReporter
 import dev.android.ide.ui.screen.HomeSurface
+import dev.android.ide.ui.screen.CrashConsoleSurface
 import dev.android.ide.ui.screen.ProjectDetailsSurface
 import dev.android.ide.ui.screen.EditorSurface
 import dev.android.ide.ui.screen.ProjectsSurface
@@ -100,8 +107,8 @@ fun AppShell(
     val ideState by ideViewModel.uiState.collectAsState()
     val context = androidx.compose.ui.platform.LocalContext.current
     val crashReporter = androidx.compose.runtime.remember { CrashReporter(context) }
-    val crashReportCount = androidx.compose.runtime.remember { crashReporter.reportCount() }
-    val latestCrashReport = androidx.compose.runtime.remember { crashReporter.latestReport() }
+    var crashReports by remember { mutableStateOf(crashReporter.reports()) }
+    var pendingCrashExport by remember { mutableStateOf<String?>(null) }
     var editorNavigationPrompt by rememberSaveable { mutableStateOf(false) }
     var pendingEditorNavigation by rememberSaveable { mutableStateOf<Surface?>(null) }
     var pendingNavigationClosesSidebar by rememberSaveable { mutableStateOf(true) }
@@ -118,6 +125,42 @@ fun AppShell(
     var sidebarSection by rememberSaveable { mutableStateOf(SidebarSection.NAVIGATION) }
     var importTargetUri by rememberSaveable { mutableStateOf<String?>(null) }
     var exportTargetUri by rememberSaveable { mutableStateOf<String?>(null) }
+    val crashExportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+        val json = pendingCrashExport
+        if (uri != null && json != null) {
+            runCatching {
+                context.contentResolver.openOutputStream(uri)?.use { output ->
+                    output.write(json.toByteArray(Charsets.UTF_8))
+                } ?: error("The selected destination could not be opened")
+            }.onFailure { /* The document picker owns its own error UI. */ }
+        }
+        pendingCrashExport = null
+    }
+
+    fun openCrashConsole() {
+        crashReports = crashReporter.reports()
+        viewModel.navigate(Surface.DIAGNOSTICS)
+    }
+
+    fun copyCrashReport(report: CrashReportSummary) {
+        context.getSystemService(android.content.ClipboardManager::class.java)?.setPrimaryClip(
+            android.content.ClipData.newPlainText("Android IDE crash report", report.rawJson),
+        )
+    }
+
+    fun shareCrashReport(report: CrashReportSummary) {
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = "application/json"
+            putExtra(Intent.EXTRA_SUBJECT, "Android IDE crash report")
+            putExtra(Intent.EXTRA_TEXT, report.rawJson)
+        }
+        runCatching { context.startActivity(Intent.createChooser(intent, "Share crash log")) }
+    }
+
+    fun exportCrashReport(report: CrashReportSummary) {
+        pendingCrashExport = report.rawJson
+        crashExportLauncher.launch("android-ide-crash-${report.timestampMs}.json")
+    }
     val importFilesLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
         val target = importTargetUri
         if (target != null && uris.isNotEmpty()) ideViewModel.importFiles(target, uris.map { it.toString() })
@@ -208,8 +251,11 @@ fun AppShell(
             settingsSection = settingsSection,
             onSettingsSectionConsumed = { settingsSection = null },
             editorPanelRequest = editorPanelRequest,
-            crashReportCount = crashReportCount,
-            latestCrashReport = latestCrashReport,
+            crashReports = crashReports,
+            onOpenCrashConsole = ::openCrashConsole,
+            onCopyCrashReport = ::copyCrashReport,
+            onShareCrashReport = ::shareCrashReport,
+            onExportCrashReport = ::exportCrashReport,
         )
     }
 
@@ -217,7 +263,13 @@ fun AppShell(
         drawerState = drawerState,
         gesturesEnabled = true,
         drawerContent = {
-            ModalDrawerSheet {
+            ModalDrawerSheet(
+                modifier = Modifier
+                    // A usable navigation drawer is conventionally about 80%
+                    // of a phone viewport, capped so tablets do not waste space.
+                    .fillMaxWidth(0.8f)
+                    .widthIn(max = 380.dp),
+            ) {
                 ContextualNavigation(
                     modifier = Modifier.fillMaxSize(),
                     state = state,
@@ -349,42 +401,33 @@ private fun ContextualNavigation(
     onExportProject: (String) -> Unit,
 ) {
     val editorState by ideViewModel.uiState.collectAsState()
-    val sectionShape = RoundedCornerShape(12.dp)
     Column(
         modifier = modifier
             .navigationBarsPadding()
             .padding(horizontal = 12.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .border(1.dp, MaterialTheme.colorScheme.outlineVariant, sectionShape)
-                .padding(horizontal = 4.dp, vertical = 2.dp),
-        ) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                NavigationTopItem(Icons.Default.Send, "Navigation", section == SidebarSection.NAVIGATION) {
-                    onSectionChange(SidebarSection.NAVIGATION)
-                }
-                NavigationTopItem(Icons.Default.Code, "Editor", section == SidebarSection.EDITOR) {
-                    onSectionNavigate(SidebarSection.EDITOR, Surface.EDITOR)
-                }
-                NavigationTopItem(Icons.Default.Terminal, "Terminal", section == SidebarSection.TERMINAL) {
-                    onSectionNavigate(SidebarSection.TERMINAL, Surface.TERMINAL)
-                }
-                NavigationTopItem(Icons.Default.MergeType, "Git", state.surface == Surface.GIT) {
-                    onSectionNavigate(SidebarSection.NAVIGATION, Surface.GIT)
-                }
-                NavigationTopItem(Icons.Default.Language, "Browser", state.surface == Surface.BROWSER) {
-                    onSectionNavigate(SidebarSection.NAVIGATION, Surface.BROWSER)
-                }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+            NavigationTopItem(Icons.Default.Send, "Navigation", section == SidebarSection.NAVIGATION) {
+                onSectionChange(SidebarSection.NAVIGATION)
+            }
+            NavigationTopItem(Icons.Default.Code, "Editor", section == SidebarSection.EDITOR) {
+                onSectionNavigate(SidebarSection.EDITOR, Surface.EDITOR)
+            }
+            NavigationTopItem(Icons.Default.Terminal, "Terminal", section == SidebarSection.TERMINAL) {
+                onSectionNavigate(SidebarSection.TERMINAL, Surface.TERMINAL)
+            }
+            NavigationTopItem(Icons.Default.MergeType, "Git", state.surface == Surface.GIT) {
+                onSectionNavigate(SidebarSection.NAVIGATION, Surface.GIT)
+            }
+            NavigationTopItem(Icons.Default.Language, "Browser", state.surface == Surface.BROWSER) {
+                onSectionNavigate(SidebarSection.NAVIGATION, Surface.BROWSER)
             }
         }
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f)
-                .border(1.dp, MaterialTheme.colorScheme.outlineVariant, sectionShape)
                 .padding(8.dp),
         ) {
             when (section) {
@@ -393,12 +436,6 @@ private fun ContextualNavigation(
                         modifier = Modifier.fillMaxSize(),
                         verticalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
-                        Text(
-                            "Navigation",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
-                        )
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -406,13 +443,45 @@ private fun ContextualNavigation(
                                 .padding(10.dp),
                             verticalArrangement = Arrangement.spacedBy(10.dp),
                         ) {
+                            Text("Navigation", style = MaterialTheme.typography.titleSmall)
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                NavigationGridItem(Icons.Default.Home, "Home") { onNavigate(Surface.HOME, false) }
-                                NavigationGridItem(Icons.Default.FolderOpen, "Projects") { onNavigate(Surface.PROJECTS, false) }
+                                NavigationGridItem(Icons.Default.Home, "Home") { onNavigate(Surface.HOME, true) }
+                                NavigationGridItem(Icons.Default.FolderOpen, "Projects") { onNavigate(Surface.PROJECTS, true) }
                             }
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                NavigationGridItem(Icons.Default.Extension, "Extensions") { onNavigate(Surface.EXTENSIONS, false) }
-                                NavigationGridItem(Icons.Default.Settings, "Settings") { onNavigate(Surface.SETTINGS, false) }
+                                NavigationGridItem(Icons.Default.Extension, "Extensions") { onNavigate(Surface.EXTENSIONS, true) }
+                                NavigationGridItem(Icons.Default.Settings, "Settings") { onNavigate(Surface.SETTINGS, true) }
+                            }
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                NavigationGridItem(Icons.Default.BugReport, "Diagnostics") { onNavigate(Surface.DIAGNOSTICS, true) }
+                            }
+                        }
+                        Text("Recent projects", style = MaterialTheme.typography.titleSmall)
+                        val recentProjects = state.projects
+                            .sortedWith(
+                                compareByDescending<dev.android.ide.contracts.ProjectIdentity> { it.lastOpenedAt ?: java.time.Instant.MIN }
+                                    .thenByDescending { it.registeredAt },
+                            )
+                        if (recentProjects.isEmpty()) {
+                            Text(
+                                "No projects yet",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 8.dp),
+                            )
+                        } else {
+                            LazyColumn(
+                                modifier = Modifier.weight(1f),
+                                verticalArrangement = Arrangement.spacedBy(2.dp),
+                                contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 8.dp),
+                            ) {
+                                items(recentProjects, key = { it.id }) { project ->
+                                    RecentProjectRow(
+                                        project = project,
+                                        onOpen = { onOpenProject(project.id) },
+                                        onDetails = { appViewModel.showProjectDetails(project.id); onDismissDrawer() },
+                                    )
+                                }
                             }
                         }
                     }
@@ -475,6 +544,51 @@ private fun ContextualNavigation(
                         item { NavigationItem(Icons.Default.Close, "Close all sessions", false, onClick = { appViewModel.closeAllTerminalSessions(); onDismissDrawer() }) }
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RecentProjectRow(
+    project: dev.android.ide.contracts.ProjectIdentity,
+    onOpen: () -> Unit,
+    onDetails: () -> Unit,
+) {
+    var menuOpen by remember { mutableStateOf(false) }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onOpen)
+            .padding(start = 8.dp, end = 2.dp, top = 6.dp, bottom = 6.dp),
+        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(
+                project.name,
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+            )
+            Text(
+                relativeOpened(project.lastOpenedAt),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Box {
+            IconButton(onClick = { menuOpen = true }, modifier = Modifier.size(32.dp)) {
+                Icon(Icons.Default.MoreVert, contentDescription = "Project actions", modifier = Modifier.size(18.dp))
+            }
+            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                DropdownMenuItem(
+                    text = { Text("Open project") },
+                    onClick = { menuOpen = false; onOpen() },
+                )
+                DropdownMenuItem(
+                    text = { Text("Project details") },
+                    onClick = { menuOpen = false; onDetails() },
+                )
             }
         }
     }
@@ -636,8 +750,11 @@ private fun SurfaceHost(
     settingsSection: String?,
     onSettingsSectionConsumed: () -> Unit,
     editorPanelRequest: Long,
-    crashReportCount: Int,
-    latestCrashReport: dev.android.ide.CrashReportSummary?,
+    crashReports: List<CrashReportSummary>,
+    onOpenCrashConsole: () -> Unit,
+    onCopyCrashReport: (CrashReportSummary) -> Unit,
+    onShareCrashReport: (CrashReportSummary) -> Unit,
+    onExportCrashReport: (CrashReportSummary) -> Unit,
 ) {
     val ideState by ideViewModel.uiState.collectAsState()
     when (state.surface) {
@@ -647,10 +764,19 @@ private fun SurfaceHost(
             onExit = onRequestExit,
             onFeedback = onFeedback,
             crashRecoveryCount = ideState.recoveryEntries.size,
-            crashReportCount = crashReportCount,
-            latestCrashReport = latestCrashReport,
+            crashReportCount = crashReports.size,
+            onOpenCrashConsole = onOpenCrashConsole,
         )
-        Surface.PROJECTS -> ProjectsSurface(state, viewModel, onCreateProject, onImportFolder, onImportZip, onCloneGit, onExportProject, onExportProjects, onDuplicateProject, onRelocateProject, viewModel::copyProjectRemoteUrls, onFeedback, onOpenNavigation, modifier)
+        Surface.DIAGNOSTICS -> CrashConsoleSurface(
+            reports = crashReports,
+            recoveryCount = ideState.recoveryEntries.size,
+            onBack = { viewModel.back() },
+            onRefresh = onOpenCrashConsole,
+            onCopy = onCopyCrashReport,
+            onShare = onShareCrashReport,
+            onExport = onExportCrashReport,
+        )
+        Surface.PROJECTS -> ProjectsSurface(state, viewModel, onCreateProject, onImportFolder, onImportZip, onCloneGit, onExportProject, onExportProjects, onDuplicateProject, onRelocateProject, viewModel::copyProjectRemoteUrls, viewModel::openTerminalForProject, onFeedback, onOpenNavigation, modifier)
         Surface.PROJECT_DETAILS -> ProjectDetailsSurface(state, viewModel, onExportProject, onDuplicateProject, onRelocateProject, onOpenNavigation, modifier)
         Surface.EDITOR -> EditorSurface(
             shellState = state,
@@ -700,6 +826,7 @@ private fun placeholderPhase(label: String): Int = when (label) {
 
 private fun surfaceTitle(surface: Surface): String = when (surface) {
     Surface.HOME -> "Home"
+    Surface.DIAGNOSTICS -> "Diagnostics"
     Surface.PROJECTS -> "Projects"
     Surface.PROJECT_DETAILS -> "Project Details"
     Surface.EDITOR -> "Editor"
