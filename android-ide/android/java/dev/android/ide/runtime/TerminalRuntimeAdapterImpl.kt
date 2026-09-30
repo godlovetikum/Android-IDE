@@ -113,6 +113,7 @@ class TerminalRuntimeAdapterImpl(context: Context) : TerminalRuntimeAdapter, Run
         fileSystem.resolveProject(project).node?.localPath
             ?.let(::File)
             ?.takeIf { it.isDirectory && it.canRead() && it.canWrite() }
+            ?.absolutePath
 
     override suspend fun createSession(workingDirectory: String?, name: String): SessionDescriptor {
         val id = UUID.randomUUID().toString()

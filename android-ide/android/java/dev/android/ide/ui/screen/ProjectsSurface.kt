@@ -349,7 +349,7 @@ fun ProjectsSurface(
     ) { androidx.compose.material3.Icon(if (addActionsExpanded) Icons.Default.Close else Icons.Default.Add, contentDescription = if (addActionsExpanded) "Close project actions" else "Add project") }
     if (addActionsExpanded) {
         Card(
-            modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(horizontal = 16.dp, bottom = 84.dp).animateContentSize(),
+            modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 84.dp).animateContentSize(),
             elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
         ) {
         Column(
