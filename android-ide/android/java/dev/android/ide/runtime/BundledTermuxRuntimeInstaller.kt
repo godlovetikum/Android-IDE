@@ -2,6 +2,7 @@ package dev.android.ide.runtime
 
 import android.content.Context
 import android.os.Build
+import android.system.Os
 import dev.android.ide.contracts.ErrorCategory
 import dev.android.ide.contracts.OperationOutcome
 import dev.android.ide.contracts.OperationReport
@@ -42,6 +43,10 @@ class BundledTermuxRuntimeInstaller(private val context: Context) {
                                 target.parentFile?.mkdirs()
                                 target.outputStream().use { output -> zip.copyTo(output) }
                                 target.setExecutable(true, false)
+                                // File.setExecutable can report success while the mode
+                                // remains unchanged on some Android document/runtime
+                                // filesystems. Apply the POSIX mode explicitly as well.
+                                runCatching { Os.chmod(target.absolutePath, 0b111101101) }
                             }
                             zip.closeEntry()
                         }
@@ -97,7 +102,11 @@ class BundledTermuxRuntimeInstaller(private val context: Context) {
         val required = listOf("sh", "pkg", "npm")
         return required.all { name ->
             val executable = File(bin, name)
-            executable.exists() && executable.setExecutable(true, false) && executable.canExecute()
+            if (executable.exists()) {
+                executable.setExecutable(true, false)
+                runCatching { Os.chmod(executable.absolutePath, 0b111101101) }
+            }
+            executable.exists() && executable.canExecute()
         }
     }
 

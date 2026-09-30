@@ -108,10 +108,15 @@ fun TerminalSurface(state: AppShellState, viewModel: AppShellViewModel, onOpenNa
                         terminalView.isFocusable = true
                         terminalView.isFocusableInTouchMode = true
                         terminalView.setTerminalViewClient(IdeTerminalViewClient())
-                        terminalView.setOnClickListener {
-                            terminalView.requestFocus()
-                            (context.getSystemService(android.content.Context.INPUT_METHOD_SERVICE) as? android.view.inputmethod.InputMethodManager)
-                                ?.showSoftInput(terminalView, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT)
+                        terminalView.setOnTouchListener { view, event ->
+                            if (event.actionMasked == android.view.MotionEvent.ACTION_DOWN) {
+                                view.requestFocusFromTouch()
+                                (context.getSystemService(android.content.Context.INPUT_METHOD_SERVICE) as? android.view.inputmethod.InputMethodManager)
+                                    ?.showSoftInput(view, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT)
+                            }
+                            // Termux TerminalView must receive the event for cursor,
+                            // selection, and PTY input handling.
+                            false
                         }
                         viewModel.bindTerminalView(selected.id) { terminalView.postInvalidateOnAnimation() }
                         viewModel.terminalSession(selected.id)?.let(terminalView::attachSession)

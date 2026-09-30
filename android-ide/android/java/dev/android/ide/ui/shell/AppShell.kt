@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -128,6 +129,9 @@ fun AppShell(
     var sidebarSection by rememberSaveable { mutableStateOf(SidebarSection.NAVIGATION) }
     var importTargetUri by rememberSaveable { mutableStateOf<String?>(null) }
     var exportTargetUri by rememberSaveable { mutableStateOf<String?>(null) }
+    var projectDeleteConfirmation by rememberSaveable { mutableStateOf(false) }
+    var projectDeleteCode by rememberSaveable { mutableStateOf("") }
+    var enteredProjectDeleteCode by rememberSaveable { mutableStateOf("") }
     val crashExportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
         val json = pendingCrashExport
         if (uri != null && json != null) {
@@ -266,10 +270,19 @@ fun AppShell(
         drawerState = drawerState,
         gesturesEnabled = drawerState.isOpen,
         drawerContent = {
+            // Avoid composing the editor tree while the drawer is closed. This is
+            // important for very large projects and also removes the accessibility
+            // and gesture-visible sliver left by the drawer implementation.
             BoxWithConstraints {
                 val drawerWidth = minOf(maxWidth * 0.8f, 380.dp)
-                ModalDrawerSheet(modifier = Modifier.width(drawerWidth).fillMaxHeight()) {
-                    ContextualNavigation(
+                val closedOffset = if (drawerState.isOpen) 0.dp else -(maxWidth * 0.5f)
+                ModalDrawerSheet(
+                    modifier = Modifier
+                        .offset(x = closedOffset)
+                        .width(drawerWidth)
+                        .fillMaxHeight(),
+                ) {
+                    if (drawerState.isOpen) ContextualNavigation(
                         modifier = Modifier.fillMaxSize(),
                         state = state,
                         section = sidebarSection,
@@ -371,6 +384,36 @@ fun AppShell(
                 Text("$action not available. Coming soon (phase ${placeholderPhase(action)})")
             },
             confirmButton = { TextButton(onClick = { phaseFeedback = null }) { Text("OK") } },
+        )
+    }
+    if (projectDeleteConfirmation) {
+        val projectName = state.projects.firstOrNull { it.id == state.selectedProjectId }?.name ?: "this project"
+        AlertDialog(
+            onDismissRequest = { if (!state.operationInProgress) projectDeleteConfirmation = false },
+            title = { Text("Permanently delete $projectName?") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("This permanently removes the project data from its selected storage location. This action cannot be undone.")
+                    Text("Type $projectDeleteCode to confirm")
+                    androidx.compose.material3.OutlinedTextField(
+                        value = enteredProjectDeleteCode,
+                        onValueChange = { enteredProjectDeleteCode = it },
+                        label = { Text("Confirmation code") },
+                        singleLine = true,
+                        enabled = !state.operationInProgress,
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = { projectDeleteConfirmation = false; viewModel.permanentlyDeleteSelectedProject() },
+                    enabled = enteredProjectDeleteCode == projectDeleteCode && !state.operationInProgress,
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                ) { Text("Delete permanently") }
+            },
+            dismissButton = {
+                TextButton(onClick = { projectDeleteConfirmation = false }, enabled = !state.operationInProgress) { Text("Cancel") }
+            },
         )
     }
 }
@@ -512,7 +555,11 @@ private fun ContextualNavigation(
                             onExportDirectory = { node -> onExportDirectory(node); onDismissDrawer() },
                             onExportProject = { state.selectedProjectId?.let { onExportProject(it); onDismissDrawer() } },
                             onShowDetails = { state.selectedProjectId?.let { appViewModel.showProjectDetails(it); onDismissDrawer() } },
-                            onDeleteProject = appViewModel::permanentlyDeleteSelectedProject,
+                            onDeleteProject = {
+                                projectDeleteCode = (100..999).random().toString()
+                                enteredProjectDeleteCode = ""
+                                projectDeleteConfirmation = true
+                            },
                             onRemoveProject = appViewModel::removeSelectedProject,
                             onOpenSettings = { onNavigate(Surface.SETTINGS, true) },
                             onFeedback = onFeedback,

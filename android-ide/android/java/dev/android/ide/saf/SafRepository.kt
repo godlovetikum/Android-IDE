@@ -37,11 +37,13 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
+import java.io.BufferedInputStream
 import java.io.File
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
 import java.nio.charset.StandardCharsets
+import java.nio.charset.CodingErrorAction
 import java.nio.file.Files
 import java.nio.file.FileVisitResult
 import java.nio.file.LinkOption
@@ -516,6 +518,29 @@ class SafRepository(private val context: Context) {
             null
         }
     }
+
+    /**
+     * Stream a text document line-by-line from storage. Binary files and malformed
+     * UTF-8 are rejected before any line is delivered to the caller.
+     */
+    suspend fun forEachTextLine(documentUriString: String, onLine: (String) -> Unit): Boolean =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val input = BufferedInputStream(openInputStream(documentUriString) ?: return@runCatching false)
+                input.mark(16 * 1024)
+                val prefix = ByteArray(16 * 1024)
+                val count = input.read(prefix)
+                if (count <= 0) return@runCatching true
+                if (prefix.copyOf(count).any { it == 0.toByte() }) return@runCatching false
+                StandardCharsets.UTF_8.newDecoder()
+                    .onMalformedInput(CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(CodingErrorAction.REPORT)
+                    .decode(java.nio.ByteBuffer.wrap(prefix, 0, count))
+                input.reset()
+                input.bufferedReader(StandardCharsets.UTF_8).useLines { lines -> lines.forEach(onLine) }
+                true
+            }.getOrDefault(false)
+        }
 
     /** Stage a selected document to app-private cache with a strict byte ceiling. */
     suspend fun stageDocumentBounded(documentUriString: String, maxBytes: Long): StagedDocumentResult =
@@ -1027,7 +1052,15 @@ class SafRepository(private val context: Context) {
      */
     suspend fun projectMetadata(rootUriString: String): ProjectStorageMetadata? =
         withContext(Dispatchers.IO) {
-            val entries = mutableListOf<MetadataEntry>()
+            // Keep only the small subset needed by Git inspection. Project size and
+            // language totals are accumulated as the provider is walked; source and
+            // dependency files never become an in-memory metadata list.
+            val gitEntries = mutableListOf<MetadataEntry>()
+            val languageBytes = mutableMapOf<String, Long>()
+            var fileCount = 0
+            var folderCount = 0
+            var totalBytes = 0L
+            var latestModifiedMs: Long? = null
 
             suspend fun walk(directoryUri: String, prefix: String): Boolean {
                 val children = when (val inspection = inspectChildren(directoryUri)) {
@@ -1040,13 +1073,22 @@ class SafRepository(private val context: Context) {
                     } else {
                         "$prefix/${child.displayName}"
                     }
-                    entries += MetadataEntry(
-                        relativePath = relativePath,
-                        uri = child.documentUri,
-                        isDirectory = child.isDirectory,
-                        size = child.size.coerceAtLeast(0L),
-                        lastModifiedMs = child.lastModifiedMs,
-                    )
+                    child.lastModifiedMs?.let { latestModifiedMs = maxOf(latestModifiedMs ?: it, it) }
+                    if (child.isDirectory) {
+                        folderCount++
+                        if (relativePath == ".git" || relativePath.startsWith(".git/")) {
+                            gitEntries += MetadataEntry(relativePath, child.documentUri, true, child.size.coerceAtLeast(0L), child.lastModifiedMs)
+                        }
+                    } else {
+                        fileCount++
+                        val size = child.size.coerceAtLeast(0L)
+                        totalBytes += size
+                        val language = languageLabel(relativePath)
+                        if (!relativePath.startsWith(".git/")) languageBytes[language] = (languageBytes[language] ?: 0L) + size
+                        if (relativePath.startsWith(".git/")) {
+                            gitEntries += MetadataEntry(relativePath, child.documentUri, false, size, child.lastModifiedMs)
+                        }
+                    }
                     if (child.isDirectory && !walk(child.documentUri, relativePath)) {
                         return false
                     }
@@ -1059,27 +1101,21 @@ class SafRepository(private val context: Context) {
             val rootTimes = rootTimes(rootUriString)
             val projectJson = readProjectMetadataFile(rootUriString, "project.json")
             val project = projectJson?.optJSONObject("project")
-            val files = entries.filterNot { it.isDirectory }
-            val languageBytes = files
-                .filterNot { it.relativePath == ".git" || it.relativePath.startsWith(".git/") }
-                .groupingBy { languageLabel(it.relativePath) }
-                .fold(0L) { total, entry -> total + entry.size }
-                .toSortedMap()
 
             ProjectStorageMetadata(
                 description = project?.optString("description", "").orEmpty(),
                 creationTimeMs = rootTimes.first,
                 lastModifiedTimeMs = listOfNotNull(
                     rootTimes.second,
-                    entries.mapNotNull { it.lastModifiedMs }.maxOrNull(),
+                    latestModifiedMs,
                 ).maxOrNull(),
                 storageProvider = storageProvider(rootUriString),
                 storagePath = storagePath(rootUriString),
-                fileCount = files.size,
-                folderCount = entries.count { it.isDirectory },
-                totalBytes = files.sumOf { it.size },
-                languageBytes = languageBytes,
-                git = gitDetails(entries),
+                fileCount = fileCount,
+                folderCount = folderCount,
+                totalBytes = totalBytes,
+                languageBytes = languageBytes.toSortedMap(),
+                git = gitDetails(gitEntries),
             )
         }
 

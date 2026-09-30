@@ -48,6 +48,9 @@ import dev.android.ide.viewmodel.model.ProjectSwitchRequest
 import dev.android.ide.viewmodel.model.NormalizedPathResult
 import dev.android.ide.viewmodel.model.ancestorsOf
 import org.json.JSONObject
+import java.nio.ByteBuffer
+import java.nio.charset.CodingErrorAction
+import java.nio.charset.StandardCharsets
 import dev.android.ide.viewmodel.model.findNode
 import dev.android.ide.viewmodel.model.normalizeProjectPath
 import dev.android.ide.viewmodel.model.pathTo
@@ -1368,7 +1371,7 @@ build/
             ?: safRepository.getDisplayName(documentUri)
             ?: displayNameFromUri(documentUri)
         // Binary content (.apk, .class, compiled assets) corrupts Monaco's text model.
-        if (bytes.take(8192).any { it == 0.toByte() }) {
+        if (isBinaryDocument(bytes)) {
             _uiState.update { it.copy(fileOpDialog = FileOpDialog.BinaryOpenError(displayName)) }
             _uiState.update { it.copy(editorFileLoading = false) }
             return
@@ -1777,24 +1780,24 @@ build/
         _uiState.update { it.copy(contentSearchResults = emptyList()) }
     }
 
+    fun setContentSearchQuery(query: String) {
+        _uiState.update { it.copy(contentSearchQuery = query) }
+    }
+
     fun setContentSearchMatchCase(enabled: Boolean) {
         _uiState.update { it.copy(contentSearchMatchCase = enabled) }
-        searchProjectContents(_uiState.value.contentSearchQuery)
     }
 
     fun setContentSearchWholeWord(enabled: Boolean) {
         _uiState.update { it.copy(contentSearchWholeWord = enabled) }
-        searchProjectContents(_uiState.value.contentSearchQuery)
     }
 
     fun setContentSearchRegex(enabled: Boolean) {
         _uiState.update { it.copy(contentSearchRegex = enabled) }
-        searchProjectContents(_uiState.value.contentSearchQuery)
     }
 
     fun setContentSearchShowContext(enabled: Boolean) {
         _uiState.update { it.copy(contentSearchShowContext = enabled) }
-        searchProjectContents(_uiState.value.contentSearchQuery)
     }
 
     fun searchProjectContents(query: String) {
@@ -1807,7 +1810,6 @@ build/
         val rootUri = _uiState.value.projectRootUri ?: return
         val options = _uiState.value
         projectSearchJob = viewModelScope.launch {
-            delay(180)
             val results = mutableListOf<FileSearchResult>()
             val regex = if (options.contentSearchRegex) {
                 runCatching {
@@ -1827,12 +1829,10 @@ build/
                         )) return@forEach
                     if (node.isDirectory) {
                         searchDirectory(node.documentUri, nodePath)
-                    } else if (node.size <= 5 * 1024 * 1024L) {
-                        val bytes = fileMutations.read(node.documentUri) ?: return@forEach
-                        if (bytes.take(8192).any { it == 0.toByte() }) return@forEach
-                        val content = bytes.toString(Charsets.UTF_8)
-                        val lines = content.split('\n')
-                        lines.forEachIndexed { lineIndex, line ->
+                    } else {
+                        var lineIndex = 0
+                        var previousLine = ""
+                        val streamed = safRepository.forEachTextLine(node.documentUri) { line ->
                             val matches: List<MatchRange> = if (options.contentSearchRegex) {
                                 regex!!.findAll(line).map { MatchRange(it.range.first, it.range.last + 1, it.value) }.toList()
                             } else {
@@ -1848,11 +1848,9 @@ build/
                                 val leadingMarker = if (windowStart > 0) "…" else ""
                                 val trailingMarker = if (windowEnd < line.length) "…" else ""
                                 val beforeContext = if (options.contentSearchShowContext && lineIndex > 0) {
-                                    lines[lineIndex - 1].trim().takeLast(70) + "\n"
+                                    previousLine.trim().takeLast(70) + "\n"
                                 } else ""
-                                val afterContext = if (options.contentSearchShowContext && lineIndex + 1 < lines.size) {
-                                    "\n" + lines[lineIndex + 1].trim().take(70)
-                                } else ""
+                                val afterContext = ""
                                 val linePreview = line.substring(windowStart, windowEnd)
                                 val preview = beforeContext + leadingMarker + linePreview + trailingMarker + afterContext
                                 val previewMatchStart = beforeContext.length + leadingMarker.length + (start - windowStart)
@@ -1869,7 +1867,10 @@ build/
                                     length,
                                 )
                             }
+                            previousLine = line
+                            lineIndex++
                         }
+                        if (!streamed) return@forEach
                     }
                 }
             }
@@ -1945,7 +1946,7 @@ build/
         _uiState.update { it.copy(fileOpDialog = dialog.copy(isSubmitting = true)) }
         viewModelScope.launch {
             val bytes = fileMutations.read(dialog.documentUri)
-            val changed = if (bytes == null || bytes.take(8192).any { it == 0.toByte() }) {
+            val changed = if (bytes == null || isBinaryDocument(bytes)) {
                 null
             } else {
                 val original = bytes.toString(Charsets.UTF_8)
@@ -1967,6 +1968,20 @@ build/
             }
             searchProjectContents(_uiState.value.contentSearchQuery)
         }
+    }
+
+    private fun isBinaryDocument(bytes: ByteArray): Boolean {
+        val prefix = bytes.copyOf(minOf(bytes.size, 16 * 1024))
+        if (prefix.any { it == 0.toByte() }) return true
+        return runCatching {
+            val text = StandardCharsets.UTF_8.newDecoder()
+                .onMalformedInput(CodingErrorAction.REPORT)
+                .onUnmappableCharacter(CodingErrorAction.REPORT)
+                .decode(ByteBuffer.wrap(prefix))
+                .toString()
+            val controls = text.count { it.code < 32 && it != '\n' && it != '\r' && it != '\t' && it != '\u000C' }
+            controls > text.length / 100
+        }.getOrDefault(true)
     }
 
     private fun literalContentMatches(

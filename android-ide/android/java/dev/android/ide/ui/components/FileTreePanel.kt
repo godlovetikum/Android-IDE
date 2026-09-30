@@ -142,6 +142,7 @@ fun FileTreePanel(
     onHideFileSearch: () -> Unit,
     onHideContentSearch: () -> Unit,
     onSearchFileSelect: (FileSearchResult) -> Unit,
+    onExecuteContentSearch: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalIdeColors.current
@@ -174,7 +175,12 @@ fun FileTreePanel(
                         leadingIcon   = { Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(18.dp)) },
                         trailingIcon  = {
                             if (query.isNotEmpty()) {
-                                IconButton(onClick = { if (isContentSearchVisible) onContentSearchQueryChange("") else onSearchQueryChange("") }) {
+                                IconButton(onClick = {
+                                    if (isContentSearchVisible) {
+                                        onContentSearchQueryChange("")
+                                        onClearContentSearchResults()
+                                    } else onSearchQueryChange("")
+                                }) {
                                     Icon(Icons.Default.Close, contentDescription = "Clear search")
                                 }
                             }
@@ -183,6 +189,7 @@ fun FileTreePanel(
                             imeAction = if (isContentSearchVisible && replaceOpen) ImeAction.Next else ImeAction.Search,
                         ),
                         keyboardActions = KeyboardActions(
+                            onSearch = { if (isContentSearchVisible) onExecuteContentSearch() },
                             onNext = { if (isContentSearchVisible && replaceOpen) replaceFocusRequester.requestFocus() },
                         ),
                         textStyle     = MaterialTheme.typography.bodyMedium,
@@ -265,7 +272,7 @@ fun FileTreePanel(
                                             contentDescription = if (allResultsExpanded) "Collapse all matching files" else "Expand all matching files",
                                         )
                                     }
-                                    IconButton(onClick = { onContentSearchQueryChange(query) }) {
+                                    IconButton(onClick = onExecuteContentSearch) {
                                         Icon(Icons.Default.Refresh, contentDescription = "Refresh results")
                                     }
                                     IconButton(onClick = { excludedUris = emptySet(); onClearContentSearchResults() }) {

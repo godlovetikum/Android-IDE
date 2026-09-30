@@ -310,7 +310,7 @@ fun EditorSidebar(
                 onToggleNodeSelection = ideViewModel::toggleNodeSelection,
                 onExitSelectionMode = ideViewModel::exitSelectionMode,
                 onSearchQueryChange = ideViewModel::searchFiles,
-                onContentSearchQueryChange = ideViewModel::searchProjectContents,
+                onContentSearchQueryChange = ideViewModel::setContentSearchQuery,
                 onContentSearchMatchCaseChange = ideViewModel::setContentSearchMatchCase,
                 onContentSearchWholeWordChange = ideViewModel::setContentSearchWholeWord,
                 onContentSearchRegexChange = ideViewModel::setContentSearchRegex,
@@ -321,6 +321,7 @@ fun EditorSidebar(
                 onHideFileSearch = onHideFileSearch,
                 onHideContentSearch = onHideContentSearch,
                 onSearchFileSelect = { result -> onFileSelected(result.documentUri) },
+                onExecuteContentSearch = { ideViewModel.searchProjectContents(state.contentSearchQuery) },
                 modifier = Modifier.weight(1f),
             )
             EditorPanel.FILENAME_SEARCH -> FileTreePanel(
@@ -338,13 +339,13 @@ fun EditorSidebar(
                 onCopyNode = ideViewModel::copyFileNode, onCutNode = ideViewModel::cutFileNode, onPasteInto = ideViewModel::pasteFileNode, onImportFilesAt = { onImport(it.documentUri) }, onExportDirectory = onExportDirectory,
                 onNewFileAtRoot = { ideViewModel.showCreateFileDialog(root) }, onNewFolderAtRoot = { ideViewModel.showCreateFolderDialog(root) }, onImportFilesAtRoot = { onImport(root.documentUri) }, onExportProject = onExportProject,
                 onRefresh = onRefresh, onShowProjectDetails = onShowDetails, onDeleteProject = onDeleteProject, onRemoveProject = onRemoveProject, onPasteAtRoot = { ideViewModel.pasteFileNode(root) }, onCopyPath = ideViewModel::copyPathToClipboard,
-                onToggleNodeSelection = ideViewModel::toggleNodeSelection, onExitSelectionMode = ideViewModel::exitSelectionMode, onSearchQueryChange = ideViewModel::searchFiles, onContentSearchQueryChange = ideViewModel::searchProjectContents,
+                onToggleNodeSelection = ideViewModel::toggleNodeSelection, onExitSelectionMode = ideViewModel::exitSelectionMode, onSearchQueryChange = ideViewModel::searchFiles, onContentSearchQueryChange = ideViewModel::setContentSearchQuery,
                 onContentSearchMatchCaseChange = ideViewModel::setContentSearchMatchCase, onContentSearchWholeWordChange = ideViewModel::setContentSearchWholeWord,
                 onContentSearchRegexChange = ideViewModel::setContentSearchRegex, onContentSearchShowContextChange = ideViewModel::setContentSearchShowContext,
                 onReplaceProjectContents = ideViewModel::replaceProjectContents,
                 onReplaceFileContents = ideViewModel::replaceFileContents,
                 onClearContentSearchResults = ideViewModel::clearContentSearchResults,
-                onHideFileSearch = { onHideFileSearch(); onPanelSelected(EditorPanel.FILES) }, onHideContentSearch = onHideContentSearch, onSearchFileSelect = { result -> onFileSelected(result.documentUri) }, modifier = Modifier.weight(1f),
+                onHideFileSearch = { onHideFileSearch(); onPanelSelected(EditorPanel.FILES) }, onHideContentSearch = onHideContentSearch, onSearchFileSelect = { result -> onFileSelected(result.documentUri) }, onExecuteContentSearch = { ideViewModel.searchProjectContents(state.contentSearchQuery) }, modifier = Modifier.weight(1f),
             )
             EditorPanel.CONTENT_SEARCH -> FileTreePanel(
                 nodes = state.fileTree, clipboardItems = state.clipboardItems, clipboardIsCut = state.clipboardIsCut,
@@ -361,13 +362,13 @@ fun EditorSidebar(
                 onCopyNode = ideViewModel::copyFileNode, onCutNode = ideViewModel::cutFileNode, onPasteInto = ideViewModel::pasteFileNode, onImportFilesAt = { onImport(it.documentUri) }, onExportDirectory = onExportDirectory,
                 onNewFileAtRoot = { ideViewModel.showCreateFileDialog(root) }, onNewFolderAtRoot = { ideViewModel.showCreateFolderDialog(root) }, onImportFilesAtRoot = { onImport(root.documentUri) }, onExportProject = onExportProject,
                 onRefresh = onRefresh, onShowProjectDetails = onShowDetails, onDeleteProject = onDeleteProject, onRemoveProject = onRemoveProject, onPasteAtRoot = { ideViewModel.pasteFileNode(root) }, onCopyPath = ideViewModel::copyPathToClipboard,
-                onToggleNodeSelection = ideViewModel::toggleNodeSelection, onExitSelectionMode = ideViewModel::exitSelectionMode, onSearchQueryChange = ideViewModel::searchFiles, onContentSearchQueryChange = ideViewModel::searchProjectContents,
+                onToggleNodeSelection = ideViewModel::toggleNodeSelection, onExitSelectionMode = ideViewModel::exitSelectionMode, onSearchQueryChange = ideViewModel::searchFiles, onContentSearchQueryChange = ideViewModel::setContentSearchQuery,
                 onContentSearchMatchCaseChange = ideViewModel::setContentSearchMatchCase, onContentSearchWholeWordChange = ideViewModel::setContentSearchWholeWord,
                 onContentSearchRegexChange = ideViewModel::setContentSearchRegex, onContentSearchShowContextChange = ideViewModel::setContentSearchShowContext,
                 onReplaceProjectContents = ideViewModel::replaceProjectContents,
                 onReplaceFileContents = ideViewModel::replaceFileContents,
                 onClearContentSearchResults = ideViewModel::clearContentSearchResults,
-                onHideFileSearch = onHideFileSearch, onHideContentSearch = { onHideContentSearch(); onPanelSelected(EditorPanel.FILES) }, onSearchFileSelect = onSearchResultSelected, modifier = Modifier.weight(1f),
+                onHideFileSearch = onHideFileSearch, onHideContentSearch = { onHideContentSearch(); onPanelSelected(EditorPanel.FILES) }, onSearchFileSelect = onSearchResultSelected, onExecuteContentSearch = { ideViewModel.searchProjectContents(state.contentSearchQuery) }, modifier = Modifier.weight(1f),
             )
         }
     }

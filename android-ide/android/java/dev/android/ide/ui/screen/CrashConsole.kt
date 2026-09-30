@@ -3,6 +3,8 @@ package dev.android.ide.ui.screen
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -33,6 +35,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.android.ide.CrashReportSummary
@@ -84,12 +87,26 @@ fun CrashConsoleSurface(
             ) {
                 Text("Report catalogue", style = MaterialTheme.typography.titleSmall)
                 if (reports.isEmpty()) {
-                    Text("No persisted crash reports are available.")
-                    Text(
-                        if (recoveryCount == 0) "No recovery entries are currently recorded."
-                        else "$recoveryCount recovery entr${if (recoveryCount == 1) "y is" else "ies are"} available to inspect from the editor.",
-                        style = MaterialTheme.typography.bodySmall,
-                    )
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                    ) {
+                        Box(
+                            Modifier.fillMaxWidth().padding(24.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(32.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text("No diagnostics yet", style = MaterialTheme.typography.titleMedium)
+                                Text(
+                                    if (recoveryCount == 0) "Crash reports will appear here when the app records one."
+                                    else "$recoveryCount recovery entr${if (recoveryCount == 1) "y is" else "ies are"} available to inspect from the editor.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                                )
+                            }
+                        }
+                    }
                 } else {
                     reports.forEach { report ->
                         Card(
@@ -131,10 +148,12 @@ fun CrashConsoleSurface(
                                 Text(report.rawJson, style = MaterialTheme.typography.bodySmall, modifier = Modifier.heightIn(max = 300.dp).verticalScroll(rememberScrollState()))
                             }
                         }
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Button(onClick = { onCopy(report); operationFeedback = "Full report copied to the clipboard." }) { Text("Copy") }
-                            OutlinedButton(onClick = { onShare(report); operationFeedback = "Share sheet opened for the full report." }) { Text("Share") }
-                            OutlinedButton(onClick = { exportCandidate = report }) { Text("Export JSON") }
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+                            Button(onClick = { onCopy(report); operationFeedback = "Full report copied to the clipboard." }, modifier = Modifier.fillMaxWidth()) { Text("Copy full report") }
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                                OutlinedButton(onClick = { onShare(report); operationFeedback = "Share sheet opened for the full report." }, modifier = Modifier.weight(1f)) { Text("Share") }
+                                OutlinedButton(onClick = { exportCandidate = report }, modifier = Modifier.weight(1f)) { Text("Export JSON") }
+                            }
                         }
                     }
                 }
