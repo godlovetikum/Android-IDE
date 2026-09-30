@@ -568,23 +568,59 @@ private fun EditorDialogHost(state: IdeUiState, ideViewModel: IdeViewModel, onCh
         is FileOpDialog.BinaryOpenError -> AlertDialog(onDismissRequest = ideViewModel::dismissFileOpDialog, title = { Text("File cannot be edited") }, text = { Text("${dialog.fileName} is not a supported text document. Use the Browser or another provider when available.") }, confirmButton = { TextButton(onClick = ideViewModel::dismissFileOpDialog) { Text("OK") } })
         is FileOpDialog.Delete -> {
             val path = state.fileTree.pathTo(dialog.node.documentUri) ?: "/${dialog.node.displayName}"
-            AlertDialog(onDismissRequest = { if (!dialog.isSubmitting) ideViewModel.dismissFileOpDialog() }, title = { Text("Delete ${dialog.node.displayName}?") }, text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { Text("Project path: $path") ; Text("This permanently removes the selected item and its contents. This action cannot be undone.") ; dialog.errorMessage?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }; if (dialog.isSubmitting) Row(verticalAlignment = Alignment.CenterVertically) { CircularProgressIndicator(Modifier.padding(end = 8.dp), strokeWidth = 2.dp); Text("Deleting…") } } }, confirmButton = { TextButton(onClick = { ideViewModel.deleteNode(dialog.node, dialog.selectedNodes) }, enabled = !dialog.isSubmitting) { Text(if (dialog.isSubmitting) "Deleting…" else if (dialog.errorMessage != null) "Retry delete" else "Delete") } }, dismissButton = { TextButton(onClick = ideViewModel::dismissFileOpDialog, enabled = !dialog.isSubmitting) { Text(if (dialog.isSubmitting) "Please wait" else "Cancel") } })
+            val completed = dialog.resultMessage != null && !dialog.isSubmitting
+            AlertDialog(
+                onDismissRequest = { if (!dialog.isSubmitting) ideViewModel.dismissFileOpDialog() },
+                title = { Text(if (completed) "Delete complete" else "Delete ${dialog.node.displayName}?") },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        if (completed) {
+                            Text(dialog.resultMessage!!, color = MaterialTheme.colorScheme.primary)
+                        } else {
+                            Text("Project path: $path")
+                            Text("This permanently removes the selected item and its contents. This action cannot be undone.")
+                            dialog.errorMessage?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+                            if (dialog.isSubmitting) Row(verticalAlignment = Alignment.CenterVertically) { CircularProgressIndicator(Modifier.padding(end = 8.dp), strokeWidth = 2.dp); Text("Deleting…") }
+                        }
+                    }
+                },
+                confirmButton = { TextButton(onClick = if (completed) ideViewModel::dismissFileOpDialog else ({ ideViewModel.deleteNode(dialog.node, dialog.selectedNodes) }), enabled = !dialog.isSubmitting) { Text(if (completed) "Done" else if (dialog.isSubmitting) "Deleting…" else if (dialog.errorMessage != null) "Retry delete" else "Delete") } },
+                dismissButton = { if (!completed) TextButton(onClick = ideViewModel::dismissFileOpDialog, enabled = !dialog.isSubmitting) { Text(if (dialog.isSubmitting) "Please wait" else "Cancel") } },
+            )
         }
         is FileOpDialog.UnsavedClose -> AlertDialog(onDismissRequest = ideViewModel::dismissFileOpDialog, title = { Text("Unsaved changes") }, text = { Text("${dialog.displayName} has unsaved changes. Choose how to close it.") }, confirmButton = { TextButton(onClick = { ideViewModel.saveAndCloseTab(dialog.tabId) }) { Text("Save and close") } }, dismissButton = { Row { TextButton(onClick = { ideViewModel.confirmCloseTab(dialog.tabId) }) { Text("Discard") }; TextButton(onClick = ideViewModel::dismissFileOpDialog) { Text("Cancel") } } })
-        is FileOpDialog.Rename -> EditorTextDialog("Rename ${dialog.node.displayName}", "New name or path", dialog.node.displayName, dialog.errorMessage, ideViewModel::dismissFileOpDialog, dialog.isSubmitting) { ideViewModel.renameNode(dialog.node, it) }
-        is FileOpDialog.Duplicate -> EditorTextDialog("Duplicate ${dialog.node.displayName}", "New name or path", "Copy of ${dialog.node.displayName}", dialog.errorMessage, ideViewModel::dismissFileOpDialog, dialog.isSubmitting) { ideViewModel.duplicateFile(dialog.node, it) }
-        is FileOpDialog.Export -> AlertDialog(onDismissRequest = { if (!dialog.isSubmitting) ideViewModel.dismissFileOpDialog() }, title = { Text("Export ${dialog.node.displayName}") }, text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { Text("The selected ${if (dialog.node.isDirectory) "folder" else "file"} will be exported as a ZIP without changing the source.") ; dialog.resultMessage?.let { Text(it, color = if (dialog.failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary) }; if (dialog.isSubmitting) Row(verticalAlignment = Alignment.CenterVertically) { CircularProgressIndicator(Modifier.padding(end = 8.dp), strokeWidth = 2.dp); Text("Exporting…") } } }, confirmButton = { Button(onClick = { onChooseExportDestination(dialog) }, enabled = !dialog.isSubmitting) { Text(if (dialog.failed) "Retry export" else "Choose export location") } }, dismissButton = { TextButton(onClick = ideViewModel::dismissFileOpDialog, enabled = !dialog.isSubmitting) { Text(if (dialog.isSubmitting) "Please wait" else "Cancel") } })
-        is FileOpDialog.CreateFile -> EditorTextDialog("Create file", "File path", "", dialog.errorMessage, ideViewModel::dismissFileOpDialog, dialog.isSubmitting) { ideViewModel.createFileInDirectory(dialog.parentNode, it) }
-        is FileOpDialog.CreateFolder -> EditorTextDialog("Create folder", "Folder path", "", dialog.errorMessage, ideViewModel::dismissFileOpDialog, dialog.isSubmitting) { ideViewModel.createFolderInDirectory(dialog.parentNode, it) }
-        is FileOpDialog.SaveAs -> EditorTextDialog("Save As", "Project-relative path", dialog.suggestedName, dialog.errorMessage, ideViewModel::dismissFileOpDialog, dialog.isSubmitting) { ideViewModel.saveAsAtPath(it) }
+        is FileOpDialog.Rename -> EditorTextDialog("Rename ${dialog.node.displayName}", "New name or path", dialog.node.displayName, dialog.errorMessage, dialog.resultMessage, ideViewModel::dismissFileOpDialog, dialog.isSubmitting) { ideViewModel.renameNode(dialog.node, it) }
+        is FileOpDialog.Duplicate -> EditorTextDialog("Duplicate ${dialog.node.displayName}", "New name or path", "Copy of ${dialog.node.displayName}", dialog.errorMessage, dialog.resultMessage, ideViewModel::dismissFileOpDialog, dialog.isSubmitting) { ideViewModel.duplicateFile(dialog.node, it) }
+        is FileOpDialog.Export -> {
+            val completed = dialog.resultMessage != null && !dialog.failed && !dialog.isSubmitting
+            AlertDialog(
+                onDismissRequest = { if (!dialog.isSubmitting) ideViewModel.dismissFileOpDialog() },
+                title = { Text(if (completed) "Export complete" else "Export ${dialog.node.displayName}") },
+                text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (completed) Text(dialog.resultMessage!!, color = MaterialTheme.colorScheme.primary)
+                    else {
+                        Text("The selected ${if (dialog.node.isDirectory) "folder" else "file"} will be exported as a ZIP without changing the source.")
+                        dialog.resultMessage?.let { Text(it, color = if (dialog.failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary) }
+                        if (dialog.isSubmitting) Row(verticalAlignment = Alignment.CenterVertically) { CircularProgressIndicator(Modifier.padding(end = 8.dp), strokeWidth = 2.dp); Text("Exporting…") }
+                    }
+                } },
+                confirmButton = { Button(onClick = if (completed) ideViewModel::dismissFileOpDialog else ({ onChooseExportDestination(dialog) }), enabled = !dialog.isSubmitting) { Text(if (completed) "Done" else if (dialog.failed) "Retry export" else "Choose export location") } },
+                dismissButton = { if (!completed) TextButton(onClick = ideViewModel::dismissFileOpDialog, enabled = !dialog.isSubmitting) { Text(if (dialog.isSubmitting) "Please wait" else "Cancel") } },
+            )
+        }
+        is FileOpDialog.CreateFile -> EditorTextDialog("Create file", "File path", "", dialog.errorMessage, dialog.resultMessage, ideViewModel::dismissFileOpDialog, dialog.isSubmitting) { ideViewModel.createFileInDirectory(dialog.parentNode, it) }
+        is FileOpDialog.CreateFolder -> EditorTextDialog("Create folder", "Folder path", "", dialog.errorMessage, dialog.resultMessage, ideViewModel::dismissFileOpDialog, dialog.isSubmitting) { ideViewModel.createFolderInDirectory(dialog.parentNode, it) }
+        is FileOpDialog.SaveAs -> EditorTextDialog("Save As", "Project-relative path", dialog.suggestedName, dialog.errorMessage, dialog.resultMessage, ideViewModel::dismissFileOpDialog, dialog.isSubmitting) { ideViewModel.saveAsAtPath(it) }
         is FileOpDialog.ReplaceAll -> AlertDialog(
             onDismissRequest = { if (!dialog.isSubmitting) ideViewModel.dismissFileOpDialog() },
             title = { Text("Replace project content?") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Replace all occurrences of \"${dialog.find}\" with \"${dialog.replacement}\"?")
-                    Text("${dialog.matches} match(es) across ${dialog.files} file(s) will be changed.")
-                    dialog.resultMessage?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                    dialog.resultMessage?.let { Text(it, color = if (it.contains("could not", true) || it.contains("failed", true)) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary) }
+                        ?: run {
+                            Text("Replace all occurrences of \"${dialog.find}\" with \"${dialog.replacement}\"?")
+                            Text("${dialog.matches} match(es) across ${dialog.files} file(s) will be changed.")
+                        }
                     if (dialog.isSubmitting) Row(verticalAlignment = Alignment.CenterVertically) {
                         CircularProgressIndicator(Modifier.padding(end = 8.dp), strokeWidth = 2.dp)
                         Text("Replacing…")
@@ -592,8 +628,8 @@ private fun EditorDialogHost(state: IdeUiState, ideViewModel: IdeViewModel, onCh
                 }
             },
             confirmButton = {
-                Button(onClick = ideViewModel::confirmReplaceProjectContents, enabled = !dialog.isSubmitting) {
-                    Text(if (dialog.isSubmitting) "Replacing…" else "Replace all")
+                Button(onClick = if (dialog.resultMessage != null) ideViewModel::dismissFileOpDialog else ideViewModel::confirmReplaceProjectContents, enabled = !dialog.isSubmitting) {
+                    Text(if (dialog.resultMessage != null) "Done" else if (dialog.isSubmitting) "Replacing…" else "Replace all")
                 }
             },
             dismissButton = {
@@ -607,8 +643,8 @@ private fun EditorDialogHost(state: IdeUiState, ideViewModel: IdeViewModel, onCh
             title = { Text("Replace matches in ${dialog.fileName}?") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Replace ${dialog.matches} occurrence(s) of \"${dialog.find}\" with \"${dialog.replacement}\" in this file?")
-                    dialog.resultMessage?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                    dialog.resultMessage?.let { Text(it, color = if (it.contains("could not", true) || it.contains("failed", true)) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary) }
+                        ?: Text("Replace ${dialog.matches} occurrence(s) of \"${dialog.find}\" with \"${dialog.replacement}\" in this file?")
                     if (dialog.isSubmitting) Row(verticalAlignment = Alignment.CenterVertically) {
                         CircularProgressIndicator(Modifier.padding(end = 8.dp), strokeWidth = 2.dp)
                         Text("Replacing…")
@@ -616,8 +652,8 @@ private fun EditorDialogHost(state: IdeUiState, ideViewModel: IdeViewModel, onCh
                 }
             },
             confirmButton = {
-                Button(onClick = ideViewModel::confirmReplaceFileContents, enabled = !dialog.isSubmitting) {
-                    Text(if (dialog.isSubmitting) "Replacing…" else "Replace")
+                Button(onClick = if (dialog.resultMessage != null) ideViewModel::dismissFileOpDialog else ideViewModel::confirmReplaceFileContents, enabled = !dialog.isSubmitting) {
+                    Text(if (dialog.resultMessage != null) "Done" else if (dialog.isSubmitting) "Replacing…" else "Replace")
                 }
             },
             dismissButton = {
@@ -631,13 +667,14 @@ private fun EditorDialogHost(state: IdeUiState, ideViewModel: IdeViewModel, onCh
 }
 
 @Composable
-private fun EditorTextDialog(title: String, label: String, initial: String, error: String?, onDismiss: () -> Unit, submitting: Boolean = false, onConfirm: (String) -> Unit) {
+private fun EditorTextDialog(title: String, label: String, initial: String, error: String?, result: String?, onDismiss: () -> Unit, submitting: Boolean = false, onConfirm: (String) -> Unit) {
     var value by remember(title, initial) { mutableStateOf(initial) }
+    val completed = result != null && !submitting
     AlertDialog(
         onDismissRequest = { if (!submitting) onDismiss() },
-        title = { Text(title) },
-        text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { OutlinedTextField(value, { value = it }, label = { Text(label) }, supportingText = { Text("Relative to the selected project folder, or an absolute path inside it.") }, enabled = !submitting, singleLine = true); if (error != null) Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall); if (submitting) Row(verticalAlignment = Alignment.CenterVertically) { CircularProgressIndicator(Modifier.padding(end = 8.dp), strokeWidth = 2.dp); Text("Working…") } } },
-        confirmButton = { Button(onClick = { if (value.isNotBlank()) onConfirm(value.trim()) }, enabled = value.isNotBlank() && !submitting) { Text(if (submitting) "Working…" else "Confirm") } },
-        dismissButton = { TextButton(onClick = onDismiss, enabled = !submitting) { Text("Cancel") } },
+        title = { Text(if (completed) "Operation complete" else title) },
+        text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { if (completed) Text(result!!, color = MaterialTheme.colorScheme.primary) else { OutlinedTextField(value, { value = it }, label = { Text(label) }, supportingText = { Text("Relative to the selected project folder, or an absolute path inside it.") }, enabled = !submitting, singleLine = true); if (error != null) Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall); if (submitting) Row(verticalAlignment = Alignment.CenterVertically) { CircularProgressIndicator(Modifier.padding(end = 8.dp), strokeWidth = 2.dp); Text("Working…") } } } },
+        confirmButton = { Button(onClick = if (completed) onDismiss else ({ if (value.isNotBlank()) onConfirm(value.trim()) }), enabled = !submitting && (completed || value.isNotBlank())) { Text(if (completed) "Done" else if (submitting) "Working…" else "Confirm") } },
+        dismissButton = { if (!completed) TextButton(onClick = onDismiss, enabled = !submitting) { Text("Cancel") } },
     )
 }

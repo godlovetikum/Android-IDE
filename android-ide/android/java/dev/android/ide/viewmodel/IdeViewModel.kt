@@ -26,8 +26,10 @@ import dev.android.ide.data.model.VolumeKeyMode
 import dev.android.ide.editor.EditorInbound
 import dev.android.ide.editor.EditorLanguageRegistry
 import dev.android.ide.editor.EditorOutbound
+import dev.android.ide.editor.LanguageServerRegistry
 import dev.android.ide.contracts.ApplicationIdentity
 import dev.android.ide.contracts.CapabilityState
+import dev.android.ide.contracts.OperationOutcome
 import dev.android.ide.contracts.ProjectLocation
 import dev.android.ide.lifecycle.LifecycleStateStore
 import dev.android.ide.saf.ChildrenInspectionResult
@@ -36,8 +38,10 @@ import dev.android.ide.saf.ExactCreateResult
 import dev.android.ide.saf.PathResolutionResult
 import dev.android.ide.saf.SafeMutationResult
 import dev.android.ide.saf.SafRepository
+import dev.android.ide.saf.AndroidIdeDocumentsProvider
 import dev.android.ide.project.ProjectFileMutationService
 import dev.android.ide.project.ProjectStorageAdapterImpl
+import dev.android.ide.runtime.LanguageServerRuntimeAdapterImpl
 import dev.android.ide.viewmodel.model.AppScreen
 import dev.android.ide.viewmodel.model.EditorTab
 import dev.android.ide.viewmodel.model.FileNode
@@ -76,6 +80,8 @@ import java.util.UUID
 
 class IdeViewModel(application: Application) : AndroidViewModel(application) {
 
+    private data class LanguageServerContext(val projectId: String, val serverId: String)
+
     private var projectSearchJob: Job? = null
 
     private val safRepository      = SafRepository(application)
@@ -106,11 +112,22 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
     private val _editorCommand = MutableSharedFlow<EditorOutbound>(extraBufferCapacity = 16)
     val editorCommand: SharedFlow<EditorOutbound> = _editorCommand.asSharedFlow()
 
+    private val languageServers = LanguageServerRuntimeAdapterImpl(application) { projectId, serverId, message ->
+        _editorCommand.tryEmit(
+            EditorOutbound.LanguageServerMessage(
+                projectId = projectId,
+                serverId = serverId,
+                message = rewriteLanguageServerResponseUris(message.toString(Charsets.UTF_8)),
+            ),
+        )
+    }
+
     /**
      * Unsaved editor content keyed by tab ID.
      * Kept outside IdeUiState to avoid full Compose recomposition on every keystroke.
      */
     private val pendingContent = mutableMapOf<String, String>()
+    private val lspDocumentVersions = mutableMapOf<String, Int>()
     private var workspaceSaveJob: Job? = null
 
     init {
@@ -124,6 +141,7 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     override fun onCleared() {
+        languageServers.shutdown()
         super.onCleared()
         lifecycleStore.markExplicitExit()
         crashRecovery.markCleanExit()
@@ -1379,6 +1397,7 @@ build/
 
         val content = String(bytes, Charsets.UTF_8)
         val language = EditorLanguageRegistry.languageForFileName(displayName)
+        val languageServer = startLanguageServerForActiveProject(language)
 
         val newTab = EditorTab(
             documentUri = documentUri,
@@ -1403,7 +1422,110 @@ build/
                 editorFileLoading = false,
             )
         }
+        languageServer?.let { context ->
+            lspDocumentVersions[documentUri] = 1
+            sendLanguageServerNotification(
+                context = context,
+                method = "textDocument/didOpen",
+                params = JSONObject().apply {
+                    put("textDocument", JSONObject().apply {
+                        put("uri", languageServerDocumentUri(documentUri))
+                        put("languageId", language)
+                        put("version", 1)
+                        put("text", content)
+                    })
+                },
+            )
+        }
         scheduleWorkspaceSave()
+    }
+
+    private suspend fun startLanguageServerForActiveProject(languageId: String): LanguageServerContext? {
+        val rootUri = _uiState.value.projectRootUri ?: return null
+        val stored = projectRepository.getAll().firstOrNull {
+            it.stableLocationId == rootUri || it.uri == rootUri
+        } ?: return null
+        val project = dev.android.ide.contracts.ProjectIdentity(
+            id = stored.stableLocationId,
+            name = stored.name,
+            description = stored.description,
+            location = ProjectLocation(
+                stableId = stored.stableLocationId,
+                displayLabel = stored.locationLabel,
+                userVisiblePath = stored.uri,
+                capabilityState = stored.capabilityState,
+                capabilityExplanation = stored.capabilityMessage,
+            ),
+            registeredAt = java.time.Instant.ofEpochMilli(stored.createdMs),
+            lastOpenedAt = java.time.Instant.ofEpochMilli(stored.lastOpenedMs),
+        )
+        val status = languageServers.start(project, languageId)
+        if (!status.available && status.explanation != null) {
+            _uiState.update { it.copy(statusMessage = "Language intelligence unavailable: ${status.explanation}") }
+        }
+        return if (status.available && status.initialized) {
+            LanguageServerContext(stored.stableLocationId, status.serverId)
+        } else {
+            null
+        }
+    }
+
+    private fun languageServerDocumentUri(documentUri: String): String =
+        AndroidIdeDocumentsProvider.localFileForUri(getApplication(), documentUri)
+            ?.toURI()
+            ?.toString()
+            ?: documentUri
+
+    /**
+     * Servers operate on native file URIs while Monaco models retain their
+     * provider-backed document identities. Translate every URI-bearing value in
+     * server responses before they reach Monaco so diagnostics, definitions,
+     * references, rename edits, and workspace edits remain actionable.
+     */
+    private fun rewriteLanguageServerResponseUris(raw: String): String {
+        val tabs = _uiState.value.openTabs.associate { tab ->
+            languageServerDocumentUri(tab.documentUri) to tab.documentUri
+        }
+        if (tabs.isEmpty()) return raw
+        val json = runCatching { JSONObject(raw) }.getOrNull() ?: return raw
+        fun rewrite(value: Any?): Any? = when (value) {
+            is JSONObject -> {
+                val keys = value.keys().asSequence().toList()
+                keys.forEach { key -> value.put(key, rewrite(value.opt(key))) }
+                value
+            }
+            is org.json.JSONArray -> {
+                for (index in 0 until value.length()) value.put(index, rewrite(value.opt(index)))
+                value
+            }
+            is String -> tabs[value] ?: value
+            else -> value
+        }
+        return (rewrite(json) as JSONObject).toString()
+    }
+
+    private fun nextLspDocumentVersion(documentUri: String): Int {
+        val next = (lspDocumentVersions[documentUri] ?: 0) + 1
+        lspDocumentVersions[documentUri] = next
+        return next
+    }
+
+    private fun sendLanguageServerNotification(
+        context: LanguageServerContext,
+        method: String,
+        params: JSONObject,
+    ) {
+        viewModelScope.launch {
+            languageServers.send(
+                context.projectId,
+                context.serverId,
+                JSONObject().apply {
+                    put("jsonrpc", "2.0")
+                    put("method", method)
+                    put("params", params)
+                }.toString().toByteArray(Charsets.UTF_8),
+            )
+        }
     }
 
     fun selectTab(tabId: String) {
@@ -1429,6 +1551,15 @@ build/
     /** Close a tab immediately, discarding unsaved changes without confirmation. */
     fun closeTab(tabId: String) {
         val tab = _uiState.value.openTabs.find { it.id == tabId }
+        tab?.let { closedTab ->
+            sendLanguageServerNotificationForTab(
+                closedTab,
+                "textDocument/didClose",
+                JSONObject().apply {
+                    put("textDocument", JSONObject().put("uri", languageServerDocumentUri(closedTab.documentUri)))
+                },
+            )
+        }
         pendingContent.remove(tabId)
         _uiState.value.projectRootUri?.let { projectRootUri ->
             crashRecovery.clearUnsavedContent(projectRootUri, tabId)
@@ -1601,6 +1732,17 @@ build/
                     displayName    = tab.displayName,
                     content        = message.content,
                 )
+                sendLanguageServerNotificationForTab(
+                    tab,
+                    "textDocument/didChange",
+                    JSONObject().apply {
+                        put("textDocument", JSONObject().apply {
+                            put("uri", languageServerDocumentUri(tab.documentUri))
+                            put("version", nextLspDocumentVersion(tab.documentUri))
+                        })
+                        put("contentChanges", org.json.JSONArray().put(JSONObject().put("text", message.content)))
+                    },
+                )
                 if (_uiState.value.editorSettings.autoSave) {
                     saveFile(message.path)
                 }
@@ -1626,6 +1768,8 @@ build/
 
             is EditorInbound.FileSaved -> saveFile(message.path)
 
+            is EditorInbound.LanguageServerMessage -> onLanguageServerMessage(message.message)
+
             // isCut=true means Monaco has already deleted the selection — nothing else
             // to do on the Kotlin side after placing the text in the clipboard.
             is EditorInbound.TextCopied -> {
@@ -1643,6 +1787,42 @@ build/
                     state.copy(tabScrollPositions = updatedScrolls)
                 }
                 scheduleWorkspaceSave()
+            }
+        }
+    }
+
+    private fun sendLanguageServerNotificationForTab(tab: EditorTab, method: String, params: JSONObject) {
+        val rootUri = _uiState.value.projectRootUri ?: return
+        val stored = projectRepository.getAll().firstOrNull {
+            it.stableLocationId == rootUri || it.uri == rootUri
+        } ?: return
+        val definition = LanguageServerRegistry.forLanguage(tab.language) ?: return
+        sendLanguageServerNotification(
+            LanguageServerContext(stored.stableLocationId, definition.id),
+            method,
+            params,
+        )
+    }
+
+    private fun onLanguageServerMessage(rawMessage: String) {
+        val tab = _uiState.value.openTabs.firstOrNull { it.isActive } ?: return
+        val rootUri = _uiState.value.projectRootUri ?: return
+        val stored = projectRepository.getAll().firstOrNull {
+            it.stableLocationId == rootUri || it.uri == rootUri
+        } ?: return
+        val definition = LanguageServerRegistry.forLanguage(tab.language) ?: return
+        val message = runCatching { JSONObject(rawMessage) }.getOrNull() ?: return
+        message.optJSONObject("params")
+            ?.optJSONObject("textDocument")
+            ?.put("uri", languageServerDocumentUri(tab.documentUri))
+        viewModelScope.launch {
+            val report = languageServers.send(
+                stored.stableLocationId,
+                definition.id,
+                message.toString().toByteArray(Charsets.UTF_8),
+            )
+            if (report.outcome != OperationOutcome.COMPLETE) {
+                _uiState.update { it.copy(statusMessage = report.message) }
             }
         }
     }
@@ -1686,6 +1866,14 @@ build/
                         statusMessage = "Saved",
                     )
                 }
+                sendLanguageServerNotificationForTab(
+                    tab,
+                    "textDocument/didSave",
+                    JSONObject().apply {
+                        put("textDocument", JSONObject().put("uri", languageServerDocumentUri(tab.documentUri)))
+                        put("text", content)
+                    },
+                )
             } else {
                 _uiState.update { state ->
                     state.copy(
@@ -1929,13 +2117,12 @@ build/
                 if (changed == original) return@forEach
                 if (fileMutations.write(result.documentUri, changed.toByteArray(Charsets.UTF_8))) changedFiles++ else failedFiles++
             }
-            _uiState.update {
-                it.copy(fileOpDialog = null, statusMessage = if (failedFiles == 0) {
-                    "Replaced matches in $changedFiles file(s)"
-                } else {
-                    "Replaced matches in $changedFiles file(s); $failedFiles file(s) could not be updated"
-                })
+            val message = if (failedFiles == 0) {
+                "Replaced matches in $changedFiles file(s)"
+            } else {
+                "Replaced matches in $changedFiles file(s); $failedFiles file(s) could not be updated"
             }
+            _uiState.update { it.copy(fileOpDialog = dialog.copy(isSubmitting = false, resultMessage = message), statusMessage = message) }
             searchProjectContents(_uiState.value.contentSearchQuery)
         }
     }
@@ -1961,9 +2148,10 @@ build/
             }
             val written = changed != null && fileMutations.write(dialog.documentUri, changed.toByteArray(Charsets.UTF_8))
             _uiState.update {
+                val message = if (written) "Replaced matches in ${dialog.fileName}" else "Could not update ${dialog.fileName}"
                 it.copy(
-                    fileOpDialog = null,
-                    statusMessage = if (written) "Replaced matches in ${dialog.fileName}" else "Could not update ${dialog.fileName}",
+                    fileOpDialog = dialog.copy(isSubmitting = false, resultMessage = message),
+                    statusMessage = message,
                 )
             }
             searchProjectContents(_uiState.value.contentSearchQuery)
@@ -2471,11 +2659,11 @@ build/
                                 refreshProjectNow()
                                 reconcileOpenTabReference(node.documentUri, result.documentUri, resolved.leafName)
                                 _uiState.update { state ->
-                                    state.copy(fileOpDialog = null, statusMessage = "Renamed to ${resolved.leafName}")
+                                    state.copy(fileOpDialog = (state.fileOpDialog as? FileOpDialog.Rename)?.copy(isSubmitting = false, errorMessage = null, resultMessage = "Renamed to ${resolved.leafName}"), statusMessage = "Renamed to ${resolved.leafName}")
                                 }
                             }
                             is SafeMutationResult.Partial -> {
-                                _uiState.update { state -> state.copy(fileOpDialog = (state.fileOpDialog as? FileOpDialog.Rename)?.copy(errorMessage = "Rename partially completed; inspect both source and destination"), statusMessage = "Rename partially completed") }
+                                _uiState.update { state -> state.copy(fileOpDialog = (state.fileOpDialog as? FileOpDialog.Rename)?.copy(errorMessage = "Rename partially completed; inspect both source and destination", isSubmitting = false), statusMessage = "Rename partially completed") }
                             }
                             SafeMutationResult.Duplicate -> {
                                 safRepository.rollbackCreatedDirectories(resolved.createdIntermediateUris)
@@ -2542,9 +2730,10 @@ build/
             }
             _uiState.update { it.copy(
                 fileMutationLoading = false,
-                fileOpDialog = if (complete) null else (it.fileOpDialog as? FileOpDialog.Delete)?.copy(
+                fileOpDialog = (it.fileOpDialog as? FileOpDialog.Delete)?.copy(
                     isSubmitting = false,
-                    errorMessage = "$message. Some items could not be removed; inspect the project and retry.",
+                    errorMessage = if (complete) null else "$message. Some items could not be removed; inspect the project and retry.",
+                    resultMessage = if (complete) message else null,
                 ),
                 isMultiSelectMode = false,
                 selectedUris = emptySet(),
@@ -2735,7 +2924,8 @@ build/
                     }
                     refreshProjectNow()
                     _uiState.update { state ->
-                        state.copy(fileOpDialog = null, statusMessage = "Created $normalizedName")
+                        state.copy(fileOpDialog = (state.fileOpDialog as? FileOpDialog.CreateFolder)?.copy(isSubmitting = false, errorMessage = null, resultMessage = "Created $normalizedName")
+                            ?: (state.fileOpDialog as? FileOpDialog.CreateFile)?.copy(isSubmitting = false, errorMessage = null, resultMessage = "Created $normalizedName"), statusMessage = "Created $normalizedName")
                     }
                     if (openFileAfterCreate) openFile(result.documentUri)
                 }
@@ -2796,7 +2986,7 @@ build/
             }
             refreshProjectNow()
             openFilePermanent(newUri)
-            _uiState.update { it.copy(fileOpDialog = null, statusMessage = "Duplicated as $newName") }
+            _uiState.update { it.copy(fileOpDialog = (it.fileOpDialog as? FileOpDialog.Duplicate)?.copy(isSubmitting = false, errorMessage = null, resultMessage = "Duplicated as $newName"), statusMessage = "Duplicated as $newName") }
         }
     }
 
@@ -2940,7 +3130,7 @@ build/
                             language = newLang, isDirty = false, isBlank = false,
                         ) else it
                     },
-                    fileOpDialog  = null,
+                    fileOpDialog  = (state.fileOpDialog as? FileOpDialog.SaveAs)?.copy(isSubmitting = false, errorMessage = null, resultMessage = "Saved as $leafName"),
                     fileMutationLoading = false,
                     statusMessage = "Saved as $leafName",
                 )

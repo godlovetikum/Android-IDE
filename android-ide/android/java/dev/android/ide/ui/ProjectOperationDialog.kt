@@ -36,58 +36,37 @@ internal fun ProjectOperationDialog(
     onSubmit: () -> Unit,
     onDismiss: () -> Unit,
 ) {
+    val completed = operationReport?.outcome == OperationOutcome.COMPLETE && !operationInProgress
     AlertDialog(
         onDismissRequest = { if (!operationInProgress) onDismiss() },
-        title = { Text(if (kind == ProjectOperationKind.DUPLICATE) "Copy and duplicate project" else "Change project location") },
+        title = { Text(if (completed) "Operation complete" else if (kind == ProjectOperationKind.DUPLICATE) "Copy and duplicate project" else "Change project location") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                sourceLocation?.takeIf { it.isNotBlank() }?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
-                OutlinedTextField(
-                    value = name,
-                    onValueChange = onNameChange,
-                    label = { Text(if (kind == ProjectOperationKind.DUPLICATE) "Project name" else "Display name") },
-                    enabled = !operationInProgress,
-                    singleLine = true,
-                )
-                if (kind == ProjectOperationKind.DUPLICATE) {
-                    OutlinedTextField(
-                        value = description,
-                        onValueChange = onDescriptionChange,
-                        label = { Text("Description") },
-                        enabled = !operationInProgress,
-                    )
-                }
-                destination?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
-                Button(onClick = onChooseDestination, enabled = !operationInProgress) {
-                    Text(if (destination == null) "Choose destination" else "Choose another location")
-                }
-                operationReport?.let { report ->
-                    Text(
-                        report.message,
-                        color = if (report.outcome == OperationOutcome.COMPLETE) {
-                            MaterialTheme.colorScheme.primary
-                        } else {
-                            MaterialTheme.colorScheme.error
-                        },
-                    )
-                }
-                if (operationInProgress) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        CircularProgressIndicator(Modifier, strokeWidth = 2.dp)
-                        Text("Working…")
+                if (completed) {
+                    Text(operationReport!!.message, color = MaterialTheme.colorScheme.primary)
+                } else {
+                    sourceLocation?.takeIf { it.isNotBlank() }?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+                    OutlinedTextField(value = name, onValueChange = onNameChange, label = { Text(if (kind == ProjectOperationKind.DUPLICATE) "Project name" else "Display name") }, enabled = !operationInProgress, singleLine = true)
+                    if (kind == ProjectOperationKind.DUPLICATE) OutlinedTextField(value = description, onValueChange = onDescriptionChange, label = { Text("Description") }, enabled = !operationInProgress)
+                    destination?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+                    Button(onClick = onChooseDestination, enabled = !operationInProgress) { Text(if (destination == null) "Choose destination" else "Choose another location") }
+                    operationReport?.let { report -> Text(report.message, color = MaterialTheme.colorScheme.error) }
+                    if (operationInProgress) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            CircularProgressIndicator(Modifier, strokeWidth = 2.dp)
+                            Text("Working…")
+                        }
                     }
                 }
             }
         },
         confirmButton = {
-            Button(onClick = onSubmit, enabled = projectName != null && name.isNotBlank() && destination != null && !operationInProgress) {
-                Text(if (operationInProgress) "Working…" else if (kind == ProjectOperationKind.DUPLICATE) "Copy and duplicate" else "Change location")
+            Button(onClick = if (completed) onDismiss else onSubmit, enabled = !operationInProgress && (completed || (projectName != null && name.isNotBlank() && destination != null))) {
+                Text(if (completed) "Done" else if (operationInProgress) "Working…" else if (kind == ProjectOperationKind.DUPLICATE) "Copy and duplicate" else "Change location")
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss, enabled = !operationInProgress) {
-                Text(if (operationInProgress) "Please wait" else "Cancel")
-            }
+            if (!completed) TextButton(onClick = onDismiss, enabled = !operationInProgress) { Text(if (operationInProgress) "Please wait" else "Cancel") }
         },
     )
 }

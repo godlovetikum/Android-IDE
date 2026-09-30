@@ -335,6 +335,8 @@ class SafRepository(private val context: Context) {
     fun localFilesystemPath(uriString: String): String? = runCatching {
         val file = if (isFileUri(uriString)) {
             fileFromUri(uriString)
+        } else if (AndroidIdeDocumentsProvider.isProviderUri(uriString)) {
+            AndroidIdeDocumentsProvider.localFileForUri(context, uriString)
         } else if (Uri.parse(uriString).authority == "com.android.externalstorage.documents") {
             localFileForExternalDocument(uriString)
         } else null

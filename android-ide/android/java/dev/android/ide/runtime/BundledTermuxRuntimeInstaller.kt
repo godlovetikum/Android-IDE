@@ -14,6 +14,14 @@ import java.util.zip.ZipInputStream
 class BundledTermuxRuntimeInstaller(private val context: Context) {
     private val prefix = File(context.filesDir, "termux-prefix")
     private val home = File(context.filesDir, "termux-home")
+    private val userFiles = File(context.filesDir, "android-ide-files")
+    private val defaultPackagesMarker = File(context.filesDir, ".android-ide-default-packages-2026.09.30")
+
+    /** Runtime packages are installed through the terminal's own package manager; no second UI is needed. */
+    val defaultPackagePlan: List<String> = listOf(
+        "curl", "git", "nodejs", "python", "zip", "unzip", "live-server",
+        "typescript-language-server", "pyright", "vscode-langservers-extracted",
+    )
 
     fun initialize(): OperationReport {
         val assetName = when (Build.SUPPORTED_ABIS.firstOrNull()) {
@@ -77,6 +85,7 @@ class BundledTermuxRuntimeInstaller(private val context: Context) {
                 marker.parentFile?.mkdirs()
                 marker.writeText(assetName)
                 home.mkdirs()
+                userFiles.mkdirs()
                 OperationReport(OperationOutcome.COMPLETE, "Bundled Termux runtime initialized")
             }.getOrElse {
                 staging.deleteRecursively()
@@ -84,6 +93,7 @@ class BundledTermuxRuntimeInstaller(private val context: Context) {
             }
         } else {
             home.mkdirs()
+            userFiles.mkdirs()
             if (!repairRuntimeExecutables()) {
                 unavailable("The bundled terminal runtime files are not executable")
             } else {
@@ -94,6 +104,47 @@ class BundledTermuxRuntimeInstaller(private val context: Context) {
 
     fun prefix(): File = prefix
     fun home(): File = home
+    fun userFilesRoot(): File = userFiles
+
+    fun ensureDefaultPackages(): OperationReport {
+        userFiles.mkdirs()
+        if (defaultPackagesMarker.isFile) {
+            return OperationReport(OperationOutcome.COMPLETE, "Default terminal packages are available")
+        }
+        val shell = File(prefix, "bin/sh")
+        val pkg = File(prefix, "bin/pkg")
+        val npm = File(prefix, "bin/npm")
+        if (!shell.canExecute() || !pkg.canExecute()) {
+            return OperationReport(OperationOutcome.BLOCKED, "Default terminal packages cannot be installed until the package manager is available", ErrorCategory.UNAVAILABLE_RUNTIME)
+        }
+        val packageInstall = runCommand(
+            shell,
+            "pkg install -y curl git nodejs python zip unzip",
+        )
+        if (packageInstall != 0) {
+            return OperationReport(OperationOutcome.PARTIAL, "The baseline terminal packages could not be installed (exit $packageInstall)", ErrorCategory.PACKAGE_FAILURE)
+        }
+        if (npm.canExecute() && runCommand(shell, "npm install -g live-server typescript-language-server pyright vscode-langservers-extracted") != 0) {
+            return OperationReport(OperationOutcome.PARTIAL, "Core terminal packages are installed, but language servers or live-server could not be installed", ErrorCategory.PACKAGE_FAILURE)
+        }
+        defaultPackagesMarker.writeText(defaultPackagePlan.joinToString("\n"))
+        return OperationReport(OperationOutcome.COMPLETE, "Default terminal packages installed")
+    }
+
+    private fun runCommand(shell: File, command: String): Int = runCatching {
+        ProcessBuilder(shell.absolutePath, "-c", command)
+            .directory(home)
+            .redirectErrorStream(true)
+            .apply {
+                environment()["HOME"] = home.absolutePath
+                environment()["PREFIX"] = prefix.absolutePath
+                environment()["PATH"] = "${File(prefix, "bin").absolutePath}:/system/bin:/system/xbin"
+                environment()["TERM"] = "xterm-256color"
+            }
+            .start()
+            .also { process -> process.inputStream.bufferedReader().readText(); process.waitFor() }
+            .exitValue()
+    }.getOrDefault(-1)
 
     private fun repairRuntimeExecutables(): Boolean {
         val bin = File(prefix, "bin")

@@ -46,7 +46,7 @@ data class EditorSettings(
     val showKeyboardToolbar: Boolean = true,
     /** Show the symbol shortcut bar above the keyboard toolbar. */
     val showSymbolBar: Boolean       = true,
-    /** Ordered keyboard-toolbar action IDs; unknown or missing IDs use defaults. */
+    /** Enabled keyboard-toolbar action IDs in user-defined order; pages are derived in groups of five. */
     val keyboardToolbarOrder: List<String> = DEFAULT_KEYBOARD_TOOLBAR_ORDER,
     /** Show the optional document-information row below the editor. */
     val showStatusBar: Boolean       = true,
@@ -69,12 +69,14 @@ data class EditorSettings(
 ) {
     companion object {
         val DEFAULT_SYMBOLS = listOf("<", ">", "/", "=", "(", ")", "{", "}", "[", "]", "\"", "`")
+        /**
+         * Practical mobile defaults. Find and close-search remain in the editor
+         * top bar and are intentionally not duplicated in this list.
+         */
         val DEFAULT_KEYBOARD_TOOLBAR_ORDER = listOf(
-            "indent", "outdent", "cursorUp", "cursorDown", "cursorLeft", "cursorRight", "undo", "redo",
-            "cut", "copy", "paste", "selectAll", "keyboardToggle",
-            "selectLeft", "selectRight", "selectUp", "selectDown", "selectWordLeft", "selectWordRight", "selectToStart", "selectToEnd",
-            "formatDocument", "commentLine", "duplicateLine", "moveLineUp", "moveLineDown", "fold", "unfold",
-            "previousMatch", "nextMatch", "closeSearch",
+            "indent", "outdent", "cursorLeft", "cursorRight", "cursorUp", "cursorDown", "cursorHome", "cursorEnd",
+            "undo", "redo", "cut", "copy", "paste", "selectAll", "selectWord", "selectLine",
+            "formatDocument", "commentLine", "fold", "unfold", "triggerSuggest", "quickFix", "toggleKeyboard",
         )
         const val UI_FONT_SCALE_MIN = 0.75f
         const val UI_FONT_SCALE_MAX = 1.50f

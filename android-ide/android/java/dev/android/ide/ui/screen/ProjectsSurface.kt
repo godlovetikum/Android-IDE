@@ -14,8 +14,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Archive
@@ -72,6 +70,7 @@ import dev.android.ide.app.AppShellState
 import dev.android.ide.app.AppShellViewModel
 import dev.android.ide.contracts.ProjectIdentity
 import dev.android.ide.contracts.CapabilityState
+import dev.android.ide.contracts.OperationReport
 import dev.android.ide.ui.ProjectActionsMenu
 import java.time.Duration
 import java.time.Instant
@@ -109,6 +108,7 @@ fun ProjectsSurface(
     var filterOpen by remember { mutableStateOf(false) }
     var filterMode by rememberSaveable { mutableStateOf(ProjectFilter.ALL) }
     var addActionsExpanded by remember { mutableStateOf(false) }
+    var selectionMenuOpen by remember { mutableStateOf(false) }
     val fabScale by animateFloatAsState(if (addActionsExpanded) 1.08f else 1f, label = "project-fab-scale")
     val listBusy = state.operationInProgress || state.restoring
     var confirmBatchRemove by remember { mutableStateOf(false) }
@@ -137,10 +137,24 @@ fun ProjectsSurface(
             }
         }
 
-    BackHandler(enabled = addActionsExpanded) { addActionsExpanded = false }
+    BackHandler(enabled = addActionsExpanded || state.selectedProjectIds.isNotEmpty()) {
+        when {
+            addActionsExpanded -> addActionsExpanded = false
+            else -> {
+                selectionMenuOpen = false
+                viewModel.clearProjectSelection()
+            }
+        }
+    }
     Box(modifier.fillMaxSize()) {
     if (addActionsExpanded) {
         Box(Modifier.fillMaxSize().clickable { addActionsExpanded = false })
+    }
+    if (state.selectedProjectIds.isNotEmpty() && !listBusy) {
+        Box(Modifier.fillMaxSize().clickable {
+            selectionMenuOpen = false
+            viewModel.clearProjectSelection()
+        })
     }
     Column(Modifier.fillMaxSize().padding(20.dp).padding(bottom = 88.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -203,62 +217,75 @@ fun ProjectsSurface(
             Text(state.statusMessage!!, color = statusColor, style = MaterialTheme.typography.bodySmall)
         }
         if (state.selectedProjectIds.isNotEmpty()) {
-            Row(
-                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text("${state.selectedProjectIds.size} selected")
-                TextButton(onClick = { confirmBatchRemove = true }) { Text("Remove from Registry") }
-                TextButton(onClick = { batchDeleteCode = Random.nextInt(100, 1000).toString(); enteredBatchDeleteCode = ""; confirmBatchDelete = true }, colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)) { Text("Permanently Delete") }
-                TextButton(onClick = { confirmBatchExport = true }) { Text("Export or Share") }
-                TextButton(onClick = { copyPaths(state.selectedProjectIds) }) { Text("Copy Storage Path") }
-                TextButton(onClick = viewModel::clearProjectSelection) { Text("Cancel") }
+                Spacer(Modifier.weight(1f))
+                Box {
+                    IconButton(onClick = { selectionMenuOpen = true }) {
+                        Icon(Icons.Default.MoreVert, contentDescription = "Selected project actions")
+                    }
+                    DropdownMenu(expanded = selectionMenuOpen, onDismissRequest = { selectionMenuOpen = false }) {
+                        DropdownMenuItem(text = { Text("Select all") }, onClick = { selectionMenuOpen = false; viewModel.selectAllProjects() })
+                        DropdownMenuItem(text = { Text("Unselect all") }, onClick = { selectionMenuOpen = false; viewModel.clearProjectSelection() })
+                        DropdownMenuItem(text = { Text("Export or share") }, onClick = { selectionMenuOpen = false; viewModel.clearOperationFeedback(); confirmBatchExport = true })
+                        DropdownMenuItem(text = { Text("Copy storage path") }, onClick = { selectionMenuOpen = false; copyPaths(state.selectedProjectIds) })
+                        DropdownMenuItem(text = { Text("Remove from registry") }, onClick = { selectionMenuOpen = false; viewModel.clearOperationFeedback(); confirmBatchRemove = true })
+                        DropdownMenuItem(text = { Text("Permanently delete", color = MaterialTheme.colorScheme.error) }, onClick = { selectionMenuOpen = false; viewModel.clearOperationFeedback(); batchDeleteCode = Random.nextInt(100, 1000).toString(); enteredBatchDeleteCode = ""; confirmBatchDelete = true })
+                    }
+                }
             }
         }
         if (confirmBatchDelete) {
+            val completed = state.operationReport?.outcome == dev.android.ide.contracts.OperationOutcome.COMPLETE && !state.operationInProgress
             AlertDialog(
                 onDismissRequest = { if (!state.operationInProgress) confirmBatchDelete = false },
-                title = { Text("Permanently delete selected projects?") },
+                title = { Text(if (completed) "Deletion complete" else "Permanently delete selected projects?") },
                 text = {
                     Column {
-                        Text("This permanently removes ${state.selectedProjectIds.size} selected project location(s). This action cannot be undone.")
-                        Text("Selected projects: ${state.projects.filter { it.id in state.selectedProjectIds }.joinToString { it.name }}")
-                        Text("Type $batchDeleteCode to confirm")
-                        OutlinedTextField(enteredBatchDeleteCode, { enteredBatchDeleteCode = it }, label = { Text("Confirmation code") }, singleLine = true)
+                        if (completed) Text(state.operationReport!!.message, color = MaterialTheme.colorScheme.primary)
+                        else {
+                            Text("This permanently removes ${state.selectedProjectIds.size} selected project location(s). This action cannot be undone.")
+                            Text("Selected projects: ${state.projects.filter { it.id in state.selectedProjectIds }.joinToString { it.name }}")
+                            Text("Type $batchDeleteCode to confirm")
+                            OutlinedTextField(enteredBatchDeleteCode, { enteredBatchDeleteCode = it }, label = { Text("Confirmation code") }, singleLine = true)
+                        }
                     }
                 },
-                confirmButton = { Button(onClick = { viewModel.permanentlyDeleteProjects(state.selectedProjectIds.toList()) }, enabled = enteredBatchDeleteCode == batchDeleteCode && !state.operationInProgress, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)) { if (state.operationInProgress) CircularProgressIndicator(Modifier.padding(end = 8.dp), strokeWidth = 2.dp); Text(if (state.operationInProgress) "Deleting…" else "Delete permanently") } },
-                dismissButton = { TextButton(onClick = { confirmBatchDelete = false }, enabled = !state.operationInProgress) { Text("Cancel") } },
+                confirmButton = { Button(onClick = if (completed) ({ confirmBatchDelete = false }) else ({ viewModel.permanentlyDeleteProjects(state.selectedProjectIds.toList()) }), enabled = !state.operationInProgress && (completed || enteredBatchDeleteCode == batchDeleteCode), colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)) { Text(if (completed) "Done" else if (state.operationInProgress) "Deleting…" else "Delete permanently") } },
+                dismissButton = { if (!completed) TextButton(onClick = { confirmBatchDelete = false }, enabled = !state.operationInProgress) { Text(if (state.operationInProgress) "Please wait" else "Cancel") } },
             )
         }
         if (confirmBatchRemove) {
+            val completed = state.operationReport?.outcome == dev.android.ide.contracts.OperationOutcome.COMPLETE && !state.operationInProgress
             AlertDialog(
                 onDismissRequest = { if (!state.operationInProgress) confirmBatchRemove = false },
-                title = { Text("Remove selected projects from registry?") },
-                text = { Text("${state.selectedProjectIds.size} project record(s) will be removed from Android IDE. User files, Git data, and locations remain unchanged.") },
-                confirmButton = { Button(onClick = { viewModel.removeProjectsFromRegistry(state.selectedProjectIds.toList()) }, enabled = !state.operationInProgress) { if (state.operationInProgress) CircularProgressIndicator(Modifier.padding(end = 8.dp), strokeWidth = 2.dp); Text(if (state.operationInProgress) "Removing…" else "Remove from Registry") } },
-                dismissButton = { TextButton(onClick = { confirmBatchRemove = false }, enabled = !state.operationInProgress) { Text("Cancel") } },
+                title = { Text(if (completed) "Removal complete" else "Remove selected projects from registry?") },
+                text = { if (completed) Text(state.operationReport!!.message, color = MaterialTheme.colorScheme.primary) else Text("${state.selectedProjectIds.size} project record(s) will be removed from Android IDE. User files, Git data, and locations remain unchanged.") },
+                confirmButton = { Button(onClick = if (completed) ({ confirmBatchRemove = false }) else ({ viewModel.removeProjectsFromRegistry(state.selectedProjectIds.toList()) }), enabled = !state.operationInProgress) { Text(if (completed) "Done" else if (state.operationInProgress) "Removing…" else "Remove from Registry") } },
+                dismissButton = { if (!completed) TextButton(onClick = { confirmBatchRemove = false }, enabled = !state.operationInProgress) { Text(if (state.operationInProgress) "Please wait" else "Cancel") } },
             )
         }
         if (confirmBatchExport) {
             val selectedNames = state.projects.filter { it.id in state.selectedProjectIds }.joinToString { it.name }
+            val completed = state.operationReport?.outcome == dev.android.ide.contracts.OperationOutcome.COMPLETE && !state.operationInProgress
             AlertDialog(
                 onDismissRequest = { confirmBatchExport = false },
-                title = { Text("Export selected projects as ZIP") },
+                title = { Text(if (completed) "Export complete" else "Export selected projects as ZIP") },
                 text = {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("Selected projects: $selectedNames\n\nOne ZIP archive per project will be created in a destination you choose. Source projects remain unchanged.")
-                        state.operationReport?.let { report ->
-                            Text(report.message, color = if (report.outcome == dev.android.ide.contracts.OperationOutcome.COMPLETE) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error)
-                        }
-                        if (state.operationInProgress) Row(verticalAlignment = Alignment.CenterVertically) {
-                            CircularProgressIndicator(Modifier.padding(end = 8.dp), strokeWidth = 2.dp)
-                            Text("Exporting…")
+                        if (completed) Text(state.operationReport!!.message, color = MaterialTheme.colorScheme.primary)
+                        else {
+                            Text("Selected projects: $selectedNames\n\nOne ZIP archive per project will be created in a destination you choose. Source projects remain unchanged.")
+                            state.operationReport?.let { report -> Text(report.message, color = MaterialTheme.colorScheme.error) }
+                            if (state.operationInProgress) Row(verticalAlignment = Alignment.CenterVertically) {
+                                CircularProgressIndicator(Modifier.padding(end = 8.dp), strokeWidth = 2.dp)
+                                Text("Exporting…")
+                            }
                         }
                     }
                 },
-                confirmButton = { Button(onClick = { onExportProjects(state.selectedProjectIds) }, enabled = !state.operationInProgress) { Text("Choose export location") } },
-                dismissButton = { TextButton(onClick = { confirmBatchExport = false }, enabled = !state.operationInProgress) { Text(if (state.operationInProgress) "Please wait" else "Cancel") } },
+                confirmButton = { Button(onClick = if (completed) ({ confirmBatchExport = false }) else ({ onExportProjects(state.selectedProjectIds) }), enabled = !state.operationInProgress) { Text(if (completed) "Done" else "Choose export location") } },
+                dismissButton = { if (!completed) TextButton(onClick = { confirmBatchExport = false }, enabled = !state.operationInProgress) { Text(if (state.operationInProgress) "Please wait" else "Cancel") } },
             )
         }
         if (visibleProjects.isEmpty()) {
@@ -289,6 +316,7 @@ fun ProjectsSurface(
                         onDelete = viewModel::permanentlyDeleteSelectedProject,
                         onRename = viewModel::renameSelectedProject,
                         selected = project.id in state.selectedProjectIds,
+                        selectionMode = state.selectedProjectIds.isNotEmpty(),
                         onToggleSelection = viewModel::toggleProjectSelection,
                         onCopyPath = { copyPaths(setOf(it)) },
                         onExport = onExportProject,
@@ -297,6 +325,8 @@ fun ProjectsSurface(
                         onCopyRemoteUrls = onCopyRemoteUrls,
                         onOpenTerminal = onOpenTerminal,
                         operationInProgress = listBusy,
+                        operationReport = state.operationReport,
+                        onPrepareOperation = viewModel::clearOperationFeedback,
                     )
                 }
             }
@@ -319,18 +349,16 @@ fun ProjectsSurface(
     ) { androidx.compose.material3.Icon(if (addActionsExpanded) Icons.Default.Close else Icons.Default.Add, contentDescription = if (addActionsExpanded) "Close project actions" else "Add project") }
     if (addActionsExpanded) {
         Card(
-            modifier = Modifier.align(Alignment.BottomEnd).padding(end = 16.dp, bottom = 84.dp).animateContentSize(),
+            modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(horizontal = 16.dp, bottom = 84.dp).animateContentSize(),
             elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
         ) {
         Column(
-            modifier = Modifier.padding(8.dp),
+            modifier = Modifier.fillMaxWidth().padding(8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
-            horizontalAlignment = Alignment.End,
         ) {
-            ProjectAcquisitionAction(Icons.Default.Code, "Create blank project") { addActionsExpanded = false; onCreateProject(null) }
-            ProjectAcquisitionAction(Icons.Default.FolderOpen, "Import existing folder") { addActionsExpanded = false; onImportFolder() }
-            ProjectAcquisitionAction(Icons.Default.Archive, "Import ZIP archive") { addActionsExpanded = false; onImportZip() }
-            ProjectAcquisitionAction(Icons.Default.MergeType, "Clone remote Git repository") { addActionsExpanded = false; onCloneGit() }
+            ProjectAcquisitionAction(Icons.Default.Code, "Create New Project") { addActionsExpanded = false; onCreateProject(null) }
+            ProjectAcquisitionAction(Icons.Default.FolderOpen, "Load an Existing Project") { addActionsExpanded = false; onImportFolder() }
+            ProjectAcquisitionAction(Icons.Default.Archive, "Import from Zip Archive") { addActionsExpanded = false; onImportZip() }
         }
         }
     }
@@ -339,9 +367,10 @@ fun ProjectsSurface(
 
 @Composable
 private fun ProjectAcquisitionAction(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, onClick: () -> Unit) {
-    Card(onClick = onClick, colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-        Row(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    Card(onClick = onClick, modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
             androidx.compose.material3.Icon(icon, contentDescription = label, tint = MaterialTheme.colorScheme.primary)
+            Spacer(Modifier.weight(1f))
             Text(label, style = MaterialTheme.typography.labelLarge)
         }
     }
@@ -377,6 +406,7 @@ private fun ProjectCard(
     onDelete: () -> Unit,
     onRename: (String) -> Unit,
     selected: Boolean,
+    selectionMode: Boolean,
     onToggleSelection: (String) -> Unit,
     onCopyPath: (String) -> Unit,
     onExport: (String) -> Unit,
@@ -385,6 +415,8 @@ private fun ProjectCard(
     onCopyRemoteUrls: (String) -> Unit,
     onOpenTerminal: (String) -> Unit,
     operationInProgress: Boolean,
+    operationReport: OperationReport?,
+    onPrepareOperation: () -> Unit,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
     var confirmRemove by remember { mutableStateOf(false) }
@@ -395,7 +427,7 @@ private fun ProjectCard(
     var renameValue by remember { mutableStateOf(project.name) }
     Card(
         modifier = Modifier.fillMaxWidth().combinedClickable(
-            onClick = { if (selected) onToggleSelection(project.id) else onOpen(project.id) },
+            onClick = { if (selectionMode) onToggleSelection(project.id) else onOpen(project.id) },
             onLongClick = { onToggleSelection(project.id) },
         ),
         border = androidx.compose.foundation.BorderStroke(
@@ -438,68 +470,84 @@ private fun ProjectCard(
                 }
             }
             Box {
-                IconButton(onClick = { onSelect(project.id); menuOpen = true }) { Icon(Icons.Default.MoreVert, contentDescription = "Project actions") }
-                ProjectActionsMenu(
-                    expanded = menuOpen,
-                    onDismiss = { menuOpen = false },
-                    onDetails = { onDetails(project.id) },
-                    onRefresh = { onSelect(project.id); onRefresh() },
-                    onChangeDisplayName = { renameValue = project.name; renameVisible = true },
-                    onChangeLocation = { onRelocate(project.id) },
-                    onDuplicate = { onDuplicate(project.id) },
-                    onExport = { onExport(project.id) },
-                    onCopyPath = { onCopyPath(project.id) },
-                    onCopyRemoteUrls = { onCopyRemoteUrls(project.id) },
-                    onOpenEditor = { onOpen(project.id) },
-                    onOpenGit = { onFeedback("Git is coming soon") },
-                    onOpenTerminal = { onOpenTerminal(project.id) },
-                    onOpenBrowser = { onFeedback("Browser preview is coming soon") },
-                    onRemoveFromRegistry = { onSelect(project.id); confirmRemove = true },
-                    onDeletePermanently = {
-                        onSelect(project.id)
-                        deleteCode = Random.nextInt(100, 1000).toString()
-                        enteredDeleteCode = ""
-                        confirmDelete = true
-                    },
-                )
+                IconButton(onClick = { if (!selectionMode) onSelect(project.id); menuOpen = true }) { Icon(Icons.Default.MoreVert, contentDescription = "Project actions") }
+                if (selectionMode) {
+                    DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                        DropdownMenuItem(
+                            text = { Text(if (selected) "Unselect" else "Select") },
+                            onClick = { menuOpen = false; onToggleSelection(project.id) },
+                        )
+                    }
+                } else {
+                    ProjectActionsMenu(
+                        expanded = menuOpen,
+                        onDismiss = { menuOpen = false },
+                        onDetails = { onDetails(project.id) },
+                        onRefresh = { onSelect(project.id); onRefresh() },
+                        onChangeDisplayName = { onPrepareOperation(); renameValue = project.name; renameVisible = true },
+                        onChangeLocation = { onPrepareOperation(); onRelocate(project.id) },
+                        onDuplicate = { onPrepareOperation(); onDuplicate(project.id) },
+                        onExport = { onPrepareOperation(); onExport(project.id) },
+                        onCopyPath = { onCopyPath(project.id) },
+                        onCopyRemoteUrls = { onCopyRemoteUrls(project.id) },
+                        onOpenEditor = { onOpen(project.id) },
+                        onOpenGit = { onFeedback("Git is managed through the project Terminal for now. Open Terminal and run git commands in this project.") },
+                        onOpenTerminal = { onOpenTerminal(project.id) },
+                        onOpenBrowser = { onFeedback("Browser preview is coming soon") },
+                        onRemoveFromRegistry = { onPrepareOperation(); onSelect(project.id); confirmRemove = true },
+                        onDeletePermanently = {
+                            onPrepareOperation()
+                            onSelect(project.id)
+                            deleteCode = Random.nextInt(100, 1000).toString()
+                            enteredDeleteCode = ""
+                            confirmDelete = true
+                        },
+                    )
+                }
             }
         }
         if (confirmRemove) {
+            val completed = operationReport?.outcome == dev.android.ide.contracts.OperationOutcome.COMPLETE && !operationInProgress
             AlertDialog(
                 onDismissRequest = { confirmRemove = false },
-                title = { Text("Remove project from registry?") },
-                text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { Text("${project.name} will be removed from Android IDE, but its files, Git data, and location will remain unchanged.\n\nLocation: ${humanReadableStorageLocation(project.location.userVisiblePath ?: project.location.displayLabel)}") }; if (operationInProgress) Row(verticalAlignment = Alignment.CenterVertically) { CircularProgressIndicator(Modifier.padding(end = 8.dp), strokeWidth = 2.dp); Text("Removing…") } },
-                confirmButton = { Button(onClick = onRemove, enabled = !operationInProgress) { Text(if (operationInProgress) "Removing…" else "Remove from Registry") } },
-                dismissButton = { TextButton(onClick = { confirmRemove = false }, enabled = !operationInProgress) { Text(if (operationInProgress) "Please wait" else "Cancel") } },
+                title = { Text(if (completed) "Removal complete" else "Remove project from registry?") },
+                text = { if (completed) Text(operationReport!!.message, color = MaterialTheme.colorScheme.primary) else Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { Text("${project.name} will be removed from Android IDE, but its files, Git data, and location will remain unchanged.\n\nLocation: ${humanReadableStorageLocation(project.location.userVisiblePath ?: project.location.displayLabel)}") }; if (operationInProgress) Row(verticalAlignment = Alignment.CenterVertically) { CircularProgressIndicator(Modifier.padding(end = 8.dp), strokeWidth = 2.dp); Text("Removing…") } },
+                confirmButton = { Button(onClick = if (completed) ({ confirmRemove = false }) else onRemove, enabled = !operationInProgress) { Text(if (completed) "Done" else if (operationInProgress) "Removing…" else "Remove from Registry") } },
+                dismissButton = { if (!completed) TextButton(onClick = { confirmRemove = false }, enabled = !operationInProgress) { Text(if (operationInProgress) "Please wait" else "Cancel") } },
             )
         }
         if (confirmDelete) {
+            val completed = operationReport?.outcome == dev.android.ide.contracts.OperationOutcome.COMPLETE && !operationInProgress
             AlertDialog(
                 onDismissRequest = { confirmDelete = false },
-                title = { Text("Permanently delete ${project.name}?") },
+                title = { Text(if (completed) "Deletion complete" else "Permanently delete ${project.name}?") },
                 text = {
                     Column {
-                        Text("This permanently removes the project data from its selected storage location. This action cannot be undone.")
-                        Text("Project: ${project.name}")
-                        Text("Location: ${humanReadableStorageLocation(project.location.userVisiblePath ?: project.location.displayLabel)}")
-                        Text("Type $deleteCode to confirm")
-                        OutlinedTextField(enteredDeleteCode, { enteredDeleteCode = it }, label = { Text("Confirmation code") }, singleLine = true, enabled = !operationInProgress)
-                        if (operationInProgress) Row(verticalAlignment = Alignment.CenterVertically) { CircularProgressIndicator(Modifier.padding(end = 8.dp), strokeWidth = 2.dp); Text("Deleting…") }
+                        if (completed) Text(operationReport!!.message, color = MaterialTheme.colorScheme.primary)
+                        else {
+                            Text("This permanently removes the project data from its selected storage location. This action cannot be undone.")
+                            Text("Project: ${project.name}")
+                            Text("Location: ${humanReadableStorageLocation(project.location.userVisiblePath ?: project.location.displayLabel)}")
+                            Text("Type $deleteCode to confirm")
+                            OutlinedTextField(enteredDeleteCode, { enteredDeleteCode = it }, label = { Text("Confirmation code") }, singleLine = true, enabled = !operationInProgress)
+                            if (operationInProgress) Row(verticalAlignment = Alignment.CenterVertically) { CircularProgressIndicator(Modifier.padding(end = 8.dp), strokeWidth = 2.dp); Text("Deleting…") }
+                        }
                     }
                 },
-                confirmButton = { Button(onClick = onDelete, enabled = enteredDeleteCode == deleteCode && !operationInProgress, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)) { Text(if (operationInProgress) "Deleting…" else "Delete permanently") } },
-                dismissButton = { TextButton(onClick = { confirmDelete = false }, enabled = !operationInProgress) { Text(if (operationInProgress) "Please wait" else "Cancel") } },
+                confirmButton = { Button(onClick = if (completed) ({ confirmDelete = false }) else onDelete, enabled = !operationInProgress && (completed || enteredDeleteCode == deleteCode), colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)) { Text(if (completed) "Done" else if (operationInProgress) "Deleting…" else "Delete permanently") } },
+                dismissButton = { if (!completed) TextButton(onClick = { confirmDelete = false }, enabled = !operationInProgress) { Text(if (operationInProgress) "Please wait" else "Cancel") } },
             )
         }
         if (renameVisible) {
+            val completed = operationReport?.outcome == dev.android.ide.contracts.OperationOutcome.COMPLETE && !operationInProgress
             AlertDialog(
                 onDismissRequest = { renameVisible = false },
-                title = { Text("Change project display name") },
-                text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { OutlinedTextField(renameValue, { renameValue = it }, label = { Text("Project name") }, singleLine = true, enabled = !operationInProgress); if (operationInProgress) Row(verticalAlignment = Alignment.CenterVertically) { CircularProgressIndicator(Modifier.padding(end = 8.dp), strokeWidth = 2.dp); Text("Renaming…") } } },
+                title = { Text(if (completed) "Rename complete" else "Change project display name") },
+                text = { if (completed) Text(operationReport!!.message, color = MaterialTheme.colorScheme.primary) else Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { OutlinedTextField(renameValue, { renameValue = it }, label = { Text("Project name") }, singleLine = true, enabled = !operationInProgress); if (operationInProgress) Row(verticalAlignment = Alignment.CenterVertically) { CircularProgressIndicator(Modifier.padding(end = 8.dp), strokeWidth = 2.dp); Text("Renaming…") } } },
                 confirmButton = {
-                    Button(onClick = { onSelect(project.id); onRename(renameValue) }, enabled = renameValue.isNotBlank() && !operationInProgress) { Text(if (operationInProgress) "Saving…" else "Save") }
+                    Button(onClick = if (completed) ({ renameVisible = false }) else ({ onSelect(project.id); onRename(renameValue) }), enabled = !operationInProgress && (completed || renameValue.isNotBlank())) { Text(if (completed) "Done" else if (operationInProgress) "Saving…" else "Save") }
                 },
-                dismissButton = { TextButton(onClick = { renameVisible = false }, enabled = !operationInProgress) { Text(if (operationInProgress) "Please wait" else "Cancel") } },
+                dismissButton = { if (!completed) TextButton(onClick = { renameVisible = false }, enabled = !operationInProgress) { Text(if (operationInProgress) "Please wait" else "Cancel") } },
             )
         }
         }

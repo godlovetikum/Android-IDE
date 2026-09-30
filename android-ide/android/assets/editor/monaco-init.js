@@ -100,10 +100,232 @@ var editor = null;          // monaco.editor.IStandaloneCodeEditor
 var currentPath = null;     // SAF URI of the currently loaded file
 var contentChangeTimer = null;
 var CONTENT_CHANGE_DEBOUNCE_MS = 150;   // faster dirty-marking (was 300)
+var lspRequestId = 1;
+var lspPending = Object.create(null);
+var lspProviderDisposables = [];
 
 // ---------------------------------------------------------------------------
 // Monaco loader
 // ---------------------------------------------------------------------------
+
+function postLspMessage(message) {
+  postToNative({ type: 'languageServerMessage', message: JSON.stringify(message) });
+}
+
+function requestLsp(method, params) {
+  var id = lspRequestId++;
+  return new Promise(function (resolve, reject) {
+    lspPending[id] = { resolve: resolve, reject: reject };
+    postLspMessage({ jsonrpc: '2.0', id: id, method: method, params: params });
+    // A failed or unavailable runtime must not leave Monaco's completion UI hanging.
+    setTimeout(function () {
+      if (lspPending[id]) {
+        delete lspPending[id];
+        reject(new Error('Language server request timed out'));
+      }
+    }, 8000);
+  });
+}
+
+function lspPosition(position) {
+  return { line: Math.max(0, position.lineNumber - 1), character: Math.max(0, position.column - 1) };
+}
+
+function monacoPosition(position) {
+  return { lineNumber: Math.max(1, (position.line || 0) + 1), column: Math.max(1, (position.character || 0) + 1) };
+}
+
+function lspRange(range) {
+  if (!range) return undefined;
+  return new monaco.Range(
+    monacoPosition(range.start).lineNumber,
+    monacoPosition(range.start).column,
+    monacoPosition(range.end).lineNumber,
+    monacoPosition(range.end).column
+  );
+}
+
+function normalizeCompletionItems(result) {
+  var items = Array.isArray(result) ? result : (result && result.items) || [];
+  return items.map(function (item) {
+    var textEdit = item.textEdit;
+    var insertText = item.insertText || item.label || '';
+    var range = textEdit && textEdit.range ? lspRange(textEdit.range) : undefined;
+    if (textEdit && textEdit.newText != null) insertText = textEdit.newText;
+    return {
+      label: item.label || insertText,
+      kind: item.kind || monaco.languages.CompletionItemKind.Text,
+      detail: item.detail,
+      documentation: item.documentation,
+      filterText: item.filterText,
+      sortText: item.sortText,
+      insertText: insertText,
+      range: range,
+      insertTextRules: item.insertTextFormat === 2
+        ? monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet
+        : undefined,
+    };
+  });
+}
+
+function localSnippetItems(language) {
+  var snippets = {
+    javascript: [
+      ['fn', 'function ${1:name}(${2:args}) {\n\t$0\n}', 'Function'],
+      ['log', 'console.log(${1:value});', 'Console log'],
+      ['async', 'async function ${1:name}(${2:args}) {\n\t$0\n}', 'Async function'],
+    ],
+    typescript: [
+      ['fn', 'function ${1:name}(${2:args}): ${3:void} {\n\t$0\n}', 'Function'],
+      ['iface', 'interface ${1:Name} {\n\t$0\n}', 'Interface'],
+      ['type', 'type ${1:Name} = ${2:unknown};', 'Type alias'],
+    ],
+    python: [
+      ['def', 'def ${1:name}(${2:args}):\n\t$0', 'Function'],
+      ['class', 'class ${1:Name}:\n\tdef __init__(self${2:, args}):\n\t\t$0', 'Class'],
+      ['ifmain', 'if __name__ == "__main__":\n\t$0', 'Main guard'],
+    ],
+    html: [
+      ['html5', '<!doctype html>\n<html lang="en">\n<head>\n\t<meta charset="UTF-8">\n\t<meta name="viewport" content="width=device-width, initial-scale=1.0">\n\t<title>${1:Document}</title>\n</head>\n<body>\n\t$0\n</body>\n</html>', 'HTML document'],
+      ['div', '<div class="${1:container}">\n\t$0\n</div>', 'Div container'],
+    ],
+    css: [
+      ['rule', '${1:.selector} {\n\t${2:property}: ${3:value};\n}', 'CSS rule'],
+      ['media', '@media (${1:max-width: 600px}) {\n\t$0\n}', 'Media query'],
+    ],
+    json: [
+      ['object', '"${1:key}": ${2:value}', 'JSON property'],
+    ],
+  };
+  return (snippets[language] || []).map(function (item) {
+    return {
+      label: item[0],
+      kind: monaco.languages.CompletionItemKind.Snippet,
+      detail: item[2],
+      insertText: item[1],
+      insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+      range: undefined,
+    };
+  });
+}
+
+function handleLanguageServerMessage(raw) {
+  var message;
+  try { message = typeof raw === 'string' ? JSON.parse(raw) : raw; } catch (e) { return; }
+  if (message.id != null && lspPending[message.id]) {
+    var pending = lspPending[message.id];
+    delete lspPending[message.id];
+    if (message.error) pending.reject(new Error(message.error.message || 'Language server error'));
+    else pending.resolve(message.result);
+    return;
+  }
+  if (message.method === 'textDocument/publishDiagnostics') {
+    var model = editor && editor.getModel();
+    var diagnostics = (message.params && message.params.diagnostics) || [];
+    if (model) {
+      monaco.editor.setModelMarkers(model, 'androidide-lsp', diagnostics.map(function (diagnostic) {
+        return {
+          severity: diagnostic.severity === 1 ? monaco.MarkerSeverity.Error
+            : diagnostic.severity === 2 ? monaco.MarkerSeverity.Warning
+            : diagnostic.severity === 3 ? monaco.MarkerSeverity.Info
+            : monaco.MarkerSeverity.Hint,
+          message: diagnostic.message || '',
+          source: diagnostic.source,
+          startLineNumber: monacoPosition(diagnostic.range.start).lineNumber,
+          startColumn: monacoPosition(diagnostic.range.start).column,
+          endLineNumber: monacoPosition(diagnostic.range.end).lineNumber,
+          endColumn: monacoPosition(diagnostic.range.end).column,
+        };
+      }));
+    }
+  }
+}
+
+function registerLanguageProviders() {
+  var languages = ['javascript', 'typescript', 'python', 'html', 'css', 'json', 'kotlin', 'java'];
+  languages.forEach(function (language) {
+    lspProviderDisposables.push(monaco.languages.registerCompletionItemProvider(language, {
+      triggerCharacters: ['.', ':', '/', '<', '"', "'"],
+      provideCompletionItems: function (model, position) {
+        var local = localSnippetItems(language);
+        return requestLsp('textDocument/completion', {
+          textDocument: { uri: model.uri.toString() },
+          position: lspPosition(position),
+          context: { triggerKind: 1 },
+        }).then(function (result) {
+          return { suggestions: normalizeCompletionItems(result).concat(local) };
+        }).catch(function () {
+          return { suggestions: local };
+        });
+      },
+    }));
+    lspProviderDisposables.push(monaco.languages.registerHoverProvider(language, {
+      provideHover: function (model, position) {
+        return requestLsp('textDocument/hover', {
+          textDocument: { uri: model.uri.toString() },
+          position: lspPosition(position),
+        }).then(function (result) {
+          if (!result) return null;
+          var contents = Array.isArray(result.contents) ? result.contents : [result.contents];
+          return { contents: contents.map(function (content) {
+            return typeof content === 'string' ? { value: content } : { value: content.value || '' };
+          }), range: lspRange(result.range) };
+        }).catch(function () { return null; });
+      },
+    }));
+    lspProviderDisposables.push(monaco.languages.registerDefinitionProvider(language, {
+      provideDefinition: function (model, position) {
+        return requestLsp('textDocument/definition', {
+          textDocument: { uri: model.uri.toString() },
+          position: lspPosition(position),
+        }).then(function (result) {
+          var locations = Array.isArray(result) ? result : (result ? [result] : []);
+          return locations.filter(function (location) { return location.range; }).map(function (location) {
+            return { uri: model.uri, range: lspRange(location.range) };
+          });
+        }).catch(function () { return []; });
+      },
+    }));
+    lspProviderDisposables.push(monaco.languages.registerReferenceProvider(language, {
+      provideReferences: function (model, position, context) {
+        return requestLsp('textDocument/references', {
+          textDocument: { uri: model.uri.toString() },
+          position: lspPosition(position),
+          context: { includeDeclaration: !!context.includeDeclaration },
+        }).then(function (result) {
+          return (result || []).filter(function (location) { return location.range; }).map(function (location) {
+            return { uri: model.uri, range: lspRange(location.range) };
+          });
+        }).catch(function () { return []; });
+      },
+    }));
+    lspProviderDisposables.push(monaco.languages.registerDocumentFormattingEditProvider(language, {
+      provideDocumentFormattingEdits: function (model, options) {
+        return requestLsp('textDocument/formatting', {
+          textDocument: { uri: model.uri.toString() },
+          options: { tabSize: options.tabSize, insertSpaces: options.insertSpaces },
+        }).then(function (result) {
+          return (result || []).filter(function (edit) { return edit.range; }).map(function (edit) {
+            return { range: lspRange(edit.range), text: edit.newText || '' };
+          });
+        }).catch(function () { return []; });
+      },
+    }));
+    lspProviderDisposables.push(monaco.languages.registerCodeActionProvider(language, {
+      provideCodeActions: function (model, range, context) {
+        return requestLsp('textDocument/codeAction', {
+          textDocument: { uri: model.uri.toString() },
+          range: { start: lspPosition({ lineNumber: range.startLineNumber, column: range.startColumn }), end: lspPosition({ lineNumber: range.endLineNumber, column: range.endColumn }) },
+          context: { diagnostics: context.markers || [] },
+        }).then(function (result) {
+          return { actions: (result || []).filter(function (action) { return action.title; }).map(function (action) {
+            return { title: action.title, kind: action.kind, isPreferred: action.isPreferred, edit: action.edit };
+          }), dispose: function () {} };
+        }).catch(function () { return { actions: [], dispose: function () {} }; });
+      },
+    }));
+  });
+}
 
 require.config({ paths: { vs: 'vs' } });
 
@@ -176,19 +398,21 @@ require(['vs/editor/editor.main'], function () {
     // context menu is slow and duplicates functionality.
     contextmenu: false,
 
-    // Suggestion computation on every keystroke adds latency on low-RAM devices.
-    quickSuggestions: false,
-    suggestOnTriggerCharacters: false,
-    acceptSuggestionOnCommit: 'off',
-    snippetSuggestions: 'none',
-    parameterHints: { enabled: false },
+    // LSP-backed suggestions are debounced and cancelled by the native session;
+    // keep Monaco's lightweight local suggestion UI enabled on mobile.
+    quickSuggestions: { other: true, comments: false, strings: true },
+    suggestOnTriggerCharacters: true,
+    acceptSuggestionOnCommitCharacter: true,
+    acceptSuggestionOnEnter: 'smart',
+    snippetSuggestions: 'inline',
+    parameterHints: { enabled: true },
 
     folding: false,
 
     // Link detection runs a regex over every visible line on every edit.
     links: false,
 
-    renderValidationDecorations: 'off',
+    renderValidationDecorations: 'on',
 
     // Smooth caret animation adds GPU compositing overhead on Android.
     cursorSmoothCaretAnimation: 'off',
@@ -213,6 +437,8 @@ require(['vs/editor/editor.main'], function () {
     // next to line numbers without spending DOM/paint budget.
     lineDecorationsWidth: 5,
   });
+
+  registerLanguageProviders();
 
   // Initial layout — best-effort.
   applyLayout();
@@ -354,6 +580,7 @@ window.androidIDE = {
 
       // from the previous project cannot leak into the new one.
       case 'closeAllModels':
+        lspPending = Object.create(null);
         monaco.editor.getModels().forEach(function (m) { m.dispose(); });
         if (editor) editor.setModel(null);
         currentPath = null;
@@ -526,6 +753,17 @@ window.androidIDE = {
         }
         break;
 
+      case 'languageServerMessage':
+        handleLanguageServerMessage(msg.message);
+        window.dispatchEvent(new CustomEvent('androidide-language-server-message', {
+          detail: {
+            projectId: msg.projectId,
+            serverId: msg.serverId,
+            message: msg.message,
+          },
+        }));
+        break;
+
       default:
         console.warn('[androidIDE] Unknown message type:', msg.type);
     }
@@ -557,8 +795,8 @@ window.androidIDE = {
  */
 function loadFile(path, content, language) {
   if (!editor) return;
-
   currentPath = path;
+  if (editor.getModel()) monaco.editor.setModelMarkers(editor.getModel(), 'androidide-lsp', []);
 
   var safeSegment = encodeURIComponent(path);
   var uri         = monaco.Uri.parse('androidide:///files/' + safeSegment);

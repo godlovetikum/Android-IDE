@@ -308,6 +308,12 @@ fun AppShell(
                         onImportFiles = { target -> importTargetUri = target; importFilesLauncher.launch(arrayOf("*/*")) },
                         onExportDirectory = { node -> exportTargetUri = node.documentUri; exportDirectoryLauncher.launch("${node.displayName}.zip") },
                         onExportProject = onExportProject,
+                        onDeleteProject = {
+                            viewModel.clearOperationFeedback()
+                            projectDeleteCode = (100..999).random().toString()
+                            enteredProjectDeleteCode = ""
+                            projectDeleteConfirmation = true
+                        },
                     )
                 }
             }
@@ -388,31 +394,35 @@ fun AppShell(
     }
     if (projectDeleteConfirmation) {
         val projectName = state.projects.firstOrNull { it.id == state.selectedProjectId }?.name ?: "this project"
+        val completed = state.operationReport?.outcome == dev.android.ide.contracts.OperationOutcome.COMPLETE && !state.operationInProgress
         AlertDialog(
             onDismissRequest = { if (!state.operationInProgress) projectDeleteConfirmation = false },
-            title = { Text("Permanently delete $projectName?") },
+            title = { Text(if (completed) "Deletion complete" else "Permanently delete $projectName?") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("This permanently removes the project data from its selected storage location. This action cannot be undone.")
-                    Text("Type $projectDeleteCode to confirm")
-                    androidx.compose.material3.OutlinedTextField(
-                        value = enteredProjectDeleteCode,
-                        onValueChange = { enteredProjectDeleteCode = it },
-                        label = { Text("Confirmation code") },
-                        singleLine = true,
-                        enabled = !state.operationInProgress,
-                    )
+                    if (completed) Text(state.operationReport!!.message, color = MaterialTheme.colorScheme.primary)
+                    else {
+                        Text("This permanently removes the project data from its selected storage location. This action cannot be undone.")
+                        Text("Type $projectDeleteCode to confirm")
+                        androidx.compose.material3.OutlinedTextField(
+                            value = enteredProjectDeleteCode,
+                            onValueChange = { enteredProjectDeleteCode = it },
+                            label = { Text("Confirmation code") },
+                            singleLine = true,
+                            enabled = !state.operationInProgress,
+                        )
+                    }
                 }
             },
             confirmButton = {
                 Button(
-                    onClick = { projectDeleteConfirmation = false; viewModel.permanentlyDeleteSelectedProject() },
-                    enabled = enteredProjectDeleteCode == projectDeleteCode && !state.operationInProgress,
+                    onClick = if (completed) ({ projectDeleteConfirmation = false }) else ({ projectDeleteConfirmation = false; viewModel.permanentlyDeleteSelectedProject() }),
+                    enabled = !state.operationInProgress && (completed || enteredProjectDeleteCode == projectDeleteCode),
                     colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
-                ) { Text("Delete permanently") }
+                ) { Text(if (completed) "Done" else "Delete permanently") }
             },
             dismissButton = {
-                TextButton(onClick = { projectDeleteConfirmation = false }, enabled = !state.operationInProgress) { Text("Cancel") }
+                if (!completed) TextButton(onClick = { projectDeleteConfirmation = false }, enabled = !state.operationInProgress) { Text("Cancel") }
             },
         )
     }
@@ -442,6 +452,7 @@ private fun ContextualNavigation(
     onImportFiles: (String) -> Unit,
     onExportDirectory: (FileNode) -> Unit,
     onExportProject: (String) -> Unit,
+    onDeleteProject: () -> Unit,
 ) {
     val editorState by ideViewModel.uiState.collectAsState()
     Column(
@@ -459,9 +470,6 @@ private fun ContextualNavigation(
             }
             NavigationTopItem(Icons.Default.Terminal, "Terminal", section == SidebarSection.TERMINAL) {
                 onSectionNavigate(SidebarSection.TERMINAL, Surface.TERMINAL)
-            }
-            NavigationTopItem(Icons.Default.MergeType, "Git", state.surface == Surface.GIT) {
-                onSectionNavigate(SidebarSection.NAVIGATION, Surface.GIT)
             }
             NavigationTopItem(Icons.Default.Language, "Browser", state.surface == Surface.BROWSER) {
                 onSectionNavigate(SidebarSection.NAVIGATION, Surface.BROWSER)
@@ -555,11 +563,7 @@ private fun ContextualNavigation(
                             onExportDirectory = { node -> onExportDirectory(node); onDismissDrawer() },
                             onExportProject = { state.selectedProjectId?.let { onExportProject(it); onDismissDrawer() } },
                             onShowDetails = { state.selectedProjectId?.let { appViewModel.showProjectDetails(it); onDismissDrawer() } },
-                            onDeleteProject = {
-                                projectDeleteCode = (100..999).random().toString()
-                                enteredProjectDeleteCode = ""
-                                projectDeleteConfirmation = true
-                            },
+                            onDeleteProject = onDeleteProject,
                             onRemoveProject = appViewModel::removeSelectedProject,
                             onOpenSettings = { onNavigate(Surface.SETTINGS, true) },
                             onFeedback = onFeedback,
@@ -582,7 +586,9 @@ private fun ContextualNavigation(
                                 TerminalSessionSidebarItem(
                                     session = session,
                                     selected = session.id == state.selectedTerminalSessionId,
+                                    feedback = state.terminalFeedback,
                                     onSelect = { appViewModel.selectTerminalSession(session.id); onDismissDrawer() },
+                                    onPrepareRename = appViewModel::clearTerminalFeedback,
                                     onRename = { appViewModel.renameTerminalSession(session.id, it) },
                                     onClose = { appViewModel.closeTerminalSession(session.id) },
                                 )
@@ -665,7 +671,9 @@ private fun NavigationItem(
 private fun TerminalSessionSidebarItem(
     session: dev.android.ide.contracts.SessionDescriptor,
     selected: Boolean,
+    feedback: dev.android.ide.contracts.OperationReport?,
     onSelect: () -> Unit,
+    onPrepareRename: () -> Unit,
     onRename: (String) -> Unit,
     onClose: () -> Unit,
 ) {
@@ -681,7 +689,7 @@ private fun TerminalSessionSidebarItem(
             DropdownMenuItem(
                 leadingIcon = { Icon(Icons.Default.Edit, null) },
                 text = { Text("Rename session") },
-                onClick = { menuOpen = false; renameValue = session.name; renameOpen = true },
+                onClick = { menuOpen = false; onPrepareRename(); renameValue = session.name; renameOpen = true },
             )
             DropdownMenuItem(
                 leadingIcon = { Icon(Icons.Default.Close, null) },
@@ -691,19 +699,24 @@ private fun TerminalSessionSidebarItem(
         }
     }
     if (renameOpen) {
+        val completed = feedback?.outcome == dev.android.ide.contracts.OperationOutcome.COMPLETE
         AlertDialog(
             onDismissRequest = { renameOpen = false },
-            title = { Text("Rename session") },
+            title = { Text(if (completed) "Rename complete" else "Rename session") },
             text = {
-                androidx.compose.material3.OutlinedTextField(
-                    value = renameValue,
-                    onValueChange = { renameValue = it },
-                    label = { Text("Session name") },
-                    singleLine = true,
-                )
+                if (completed) Text(feedback!!.message, color = MaterialTheme.colorScheme.primary)
+                else {
+                    androidx.compose.material3.OutlinedTextField(
+                            value = renameValue,
+                            onValueChange = { renameValue = it },
+                            label = { Text("Session name") },
+                            singleLine = true,
+                        )
+                    feedback?.let { Text(it.message, color = MaterialTheme.colorScheme.error) }
+                }
             },
-            confirmButton = { Button(onClick = { onRename(renameValue); renameOpen = false }, enabled = renameValue.isNotBlank()) { Text("Rename") } },
-            dismissButton = { TextButton(onClick = { renameOpen = false }) { Text("Cancel") } },
+            confirmButton = { Button(onClick = if (completed) ({ renameOpen = false }) else ({ onRename(renameValue) }), enabled = completed || renameValue.isNotBlank()) { Text(if (completed) "Done" else "Rename") } },
+            dismissButton = { if (!completed) TextButton(onClick = { renameOpen = false }) { Text("Cancel") } },
         )
     }
 }

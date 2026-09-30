@@ -38,42 +38,41 @@ fun ProjectExportDialog(
     if (!visible) return
 
     val name = projectName?.takeIf { it.isNotBlank() } ?: "project"
+    val completed = operationReport?.outcome == OperationOutcome.COMPLETE && !operationInProgress
     AlertDialog(
         onDismissRequest = { if (!operationInProgress) onDismiss() },
-        title = { Text("Export project as ZIP") },
+        title = { Text(if (completed) "Export complete" else "Export project as ZIP") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                storageLocation?.takeIf { it.isNotBlank() }?.let { Text(it) }
-                operationReport?.let { report ->
-                    Text(
-                        report.message,
-                        color = if (report.outcome == OperationOutcome.COMPLETE) {
-                            MaterialTheme.colorScheme.primary
-                        } else {
-                            MaterialTheme.colorScheme.error
-                        },
-                    )
-                }
-                if (operationInProgress) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        CircularProgressIndicator(Modifier.padding(end = 8.dp), strokeWidth = 2.dp)
-                        Text("Exporting…")
+                if (completed) {
+                    Text(operationReport!!.message, color = MaterialTheme.colorScheme.primary)
+                } else {
+                    storageLocation?.takeIf { it.isNotBlank() }?.let { Text(it) }
+                    operationReport?.let { report ->
+                        Text(
+                            report.message,
+                            color = if (report.outcome == OperationOutcome.COMPLETE) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                        )
+                    }
+                    if (operationInProgress) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            CircularProgressIndicator(Modifier.padding(end = 8.dp), strokeWidth = 2.dp)
+                            Text("Exporting…")
+                        }
                     }
                 }
             }
         },
         confirmButton = {
             Button(
-                onClick = { onChooseDestination("$name.zip") },
-                enabled = projectName != null && !operationInProgress,
+                onClick = if (completed) onDismiss else ({ onChooseDestination("$name.zip") }),
+                enabled = !operationInProgress && (completed || projectName != null),
             ) {
-                Text("Choose export location")
+                Text(if (completed) "Done" else "Choose export location")
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss, enabled = !operationInProgress) {
-                Text(if (operationInProgress) "Please wait" else "Cancel")
-            }
+            if (!completed) TextButton(onClick = onDismiss, enabled = !operationInProgress) { Text(if (operationInProgress) "Please wait" else "Cancel") }
         },
     )
 }

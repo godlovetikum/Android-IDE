@@ -20,6 +20,8 @@ import dev.android.ide.contracts.SessionAvailability
 import dev.android.ide.contracts.SessionDescriptor
 import dev.android.ide.contracts.TerminalProjectAccess
 import dev.android.ide.contracts.TerminalRuntimeAdapter
+import dev.android.ide.saf.AndroidIdeDocumentsProvider
+import dev.android.ide.saf.SafBackedFileSystem
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -40,6 +42,7 @@ class TerminalRuntimeAdapterImpl(context: Context) : TerminalRuntimeAdapter, Run
     private val appContext = context.applicationContext
     private val sessionStore = RuntimeSessionStore(appContext)
     private val bundledInstaller = BundledTermuxRuntimeInstaller(appContext)
+    private val fileSystem = SafBackedFileSystem(appContext)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val sessions = ConcurrentHashMap<String, LiveSession>()
     private val viewInvalidators = ConcurrentHashMap<String, () -> Unit>()
@@ -61,16 +64,26 @@ class TerminalRuntimeAdapterImpl(context: Context) : TerminalRuntimeAdapter, Run
             )
         }
         runtimeHome.mkdirs()
+        bundledInstaller.userFilesRoot().mkdirs()
+        val packages = bundledInstaller.ensureDefaultPackages()
         // A TerminalSession owns an in-process PTY and cannot be reattached after
-        // Android recreates the process. Drop stale descriptors and let the UI
-        // create one fresh home-directory session instead of piling up dead rows.
-        sessionStore.clear()
-        return OperationReport(OperationOutcome.COMPLETE, "Terminal is available")
+        // Android recreates the process. Preserve the descriptor as unavailable so
+        // the UI can explain what happened and the user can explicitly close it.
+        sessionStore.markAvailableUnavailable("The Android process was recreated; start a new terminal session")
+        return if (packages.outcome == OperationOutcome.COMPLETE) {
+            OperationReport(OperationOutcome.COMPLETE, "Terminal and baseline packages are available")
+        } else {
+            OperationReport(OperationOutcome.PARTIAL, "Terminal is available, but baseline packages need attention", packages.errorCategory, recoveryHint = packages.message)
+        }
     }
 
     override suspend fun providerRootLocation(): ProjectLocation? =
-        runtimeHome.takeIf { it.exists() }?.let {
-            ProjectLocation(it.canonicalPath, "Terminal workspace", it.canonicalPath)
+        bundledInstaller.userFilesRoot().takeIf { it.exists() }?.let {
+            ProjectLocation(
+                stableId = AndroidIdeDocumentsProvider.rootTreeUri(),
+                displayLabel = "Android IDE files",
+                userVisiblePath = AndroidIdeDocumentsProvider.rootTreeUri(),
+            )
         }
 
     override suspend fun capabilities(): RuntimeCapabilities {
@@ -89,21 +102,17 @@ class TerminalRuntimeAdapterImpl(context: Context) : TerminalRuntimeAdapter, Run
 
     override suspend fun inspectProjectAccess(project: ProjectIdentity): TerminalProjectAccess {
         if (capabilities().availability != RuntimeAvailability.AVAILABLE) return TerminalProjectAccess(false, "Terminal is unavailable")
-        val path = project.location.userVisiblePath ?: return TerminalProjectAccess(false, "This project has no terminal working location")
-        // Android SAF locations are content URIs, not POSIX paths. They remain
-        // valid project locations, but cannot be passed as cwd to a native PTY.
-        // The session will start in the Terminal workspace instead of reporting
-        // the selected project as an invalid directory.
-        if (path.startsWith("content://")) {
-            return TerminalProjectAccess(true, "This project uses Android document storage, so the command-line terminal will open in its Terminal home workspace instead of the project folder")
-        }
-        val directory = File(path)
-        return TerminalProjectAccess(directory.isDirectory, "The selected project location is not an accessible folder".takeUnless { directory.isDirectory })
+        val resolution = fileSystem.resolveProject(project)
+        return TerminalProjectAccess(
+            available = resolution.terminalAccessible,
+            explanation = resolution.explanation ?: "The selected project location is not an accessible terminal folder".takeUnless { resolution.terminalAccessible },
+        )
     }
 
-    override suspend fun workingDirectory(project: ProjectIdentity): String? = project.location.userVisiblePath?.takeIf {
-        !it.startsWith("content://") && File(it).isDirectory
-    }
+    override suspend fun workingDirectory(project: ProjectIdentity): String? =
+        fileSystem.resolveProject(project).node?.localPath
+            ?.let(::File)
+            ?.takeIf { it.isDirectory && it.canRead() && it.canWrite() }
 
     override suspend fun createSession(workingDirectory: String?, name: String): SessionDescriptor {
         val id = UUID.randomUUID().toString()
@@ -147,7 +156,8 @@ class TerminalRuntimeAdapterImpl(context: Context) : TerminalRuntimeAdapter, Run
 
     override suspend fun listSessions(): List<SessionDescriptor> {
         sessions.values.filterNot { it.session.isRunning() }.forEach { markUnavailable(it.descriptor.id, "The terminal process ended") }
-        return sessions.values.map { it.descriptor }.sortedBy { it.createdAt }
+        val live = sessions.values.map { it.descriptor }.associateBy { it.id }
+        return (sessionStore.readAll().filterNot { it.id in live } + live.values).sortedBy { it.createdAt }
     }
 
     override suspend fun renameSession(sessionId: String, name: String): OperationReport {
@@ -219,9 +229,13 @@ class TerminalRuntimeAdapterImpl(context: Context) : TerminalRuntimeAdapter, Run
     override suspend fun closeSession(sessionId: String): OperationReport {
         val live = sessions.remove(sessionId)
         live?.let(::terminateOwnedProcessGroup)
-        sessionStore.remove(sessionId)
+        val removed = sessionStore.remove(sessionId)
         if (sessions.isEmpty()) appContext.stopService(Intent(appContext, TerminalForegroundService::class.java))
-        return OperationReport(OperationOutcome.COMPLETE, "Terminal session closed")
+        return if (live != null || removed) {
+            OperationReport(OperationOutcome.COMPLETE, "Terminal session closed", affectedIds = listOf(sessionId))
+        } else {
+            OperationReport(OperationOutcome.BLOCKED, "The terminal session was not found", ErrorCategory.PROCESS_LOSS)
+        }
     }
 
     override suspend fun closeAllSessions(): OperationReport {
@@ -258,7 +272,12 @@ class TerminalRuntimeAdapterImpl(context: Context) : TerminalRuntimeAdapter, Run
 
     private fun markUnavailable(sessionId: String, reason: String) {
         val live = sessions.remove(sessionId) ?: return
-        sessionStore.remove(live.descriptor.id)
+        val unavailable = live.descriptor.copy(
+            availability = SessionAvailability.UNAVAILABLE,
+            terminationReason = reason,
+        )
+        live.descriptor = unavailable
+        sessionStore.upsert(unavailable)
         viewInvalidators.remove(sessionId)?.invoke()
     }
 

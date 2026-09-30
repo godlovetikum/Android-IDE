@@ -8,7 +8,6 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Language
-import androidx.compose.material.icons.filled.MergeType
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Terminal
@@ -88,24 +87,12 @@ fun ProjectActionsMenu(
             enabled = enabled,
             onClick = { onDismiss(); onCopyPath() },
         )
-        DropdownMenuItem(
-            leadingIcon = { Icon(Icons.Default.MergeType, contentDescription = null) },
-            text = { Text("Copy remote URLs") },
-            enabled = enabled,
-            onClick = { onDismiss(); onCopyRemoteUrls() },
-        )
         HorizontalDivider()
         DropdownMenuItem(
             leadingIcon = { Icon(Icons.Default.Code, contentDescription = null) },
             text = { Text("Open in editor") },
             enabled = enabled,
             onClick = { onDismiss(); onOpenEditor() },
-        )
-        DropdownMenuItem(
-            leadingIcon = { Icon(Icons.Default.MergeType, contentDescription = null) },
-            text = { Text("Open Git") },
-            enabled = enabled,
-            onClick = { onDismiss(); onOpenGit() },
         )
         DropdownMenuItem(
             leadingIcon = { Icon(Icons.Default.Terminal, contentDescription = null) },

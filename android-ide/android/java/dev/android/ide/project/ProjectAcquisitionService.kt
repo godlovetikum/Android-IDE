@@ -94,7 +94,7 @@ class ProjectAcquisitionService(
             ))
         }
         val packageName = cleanName.lowercase().replace(Regex("[^a-z0-9-]"), "-")
-        val productIntro = """Android IDE is a mobile development environment for creating, editing, organizing, and running software projects directly from an Android device. It gives you a project workspace with a file tree, code editor, terminal, Git tools, and project management features so you can continue working without needing a desktop computer."""
+        val productIntro = """Android IDE is a mobile development environment for creating, editing, organizing, and running software projects directly from an Android device. It gives you a project workspace with a file tree, code editor, terminal, terminal-managed Git, and project management features so you can continue working without needing a desktop computer."""
         val continuation = """## Continue with Android IDE
 
 Open this project in Android IDE to browse and edit its files, use the terminal to install dependencies and run development commands, manage the project through the Projects screen, and use Git when repository tooling is available. When this project provides browser-ready output or a development server, use the Android IDE browser to inspect it.

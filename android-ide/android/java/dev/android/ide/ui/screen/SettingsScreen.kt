@@ -74,6 +74,8 @@ import androidx.compose.ui.platform.LocalContext
 import dev.android.ide.data.model.AppTheme
 import dev.android.ide.data.model.EditorSettings
 import dev.android.ide.data.model.VolumeKeyMode
+import dev.android.ide.ui.components.EDITOR_TOOLBAR_ACTIONS
+import dev.android.ide.ui.components.normalizeEditorToolbarOrder
 import dev.android.ide.ui.theme.LocalIdeColors
 import dev.android.ide.viewmodel.IdeViewModel
 import dev.android.ide.viewmodel.model.IdeUiState
@@ -378,12 +380,24 @@ private fun EditorSettingsContent(uiState: IdeUiState, s: EditorSettings, ideVie
 @Composable
 private fun KeyboardSettingsContent(uiState: IdeUiState, s: EditorSettings, ideViewModel: IdeViewModel) {
     var toolbarOrderSheetOpen by rememberSaveable { mutableStateOf(false) }
-    var draftOrder by rememberSaveable { mutableStateOf(s.keyboardToolbarOrder) }
+    var draftOrder by rememberSaveable { mutableStateOf(normalizeEditorToolbarOrder(s.keyboardToolbarOrder)) }
+    val actionById = EDITOR_TOOLBAR_ACTIONS.associateBy { it.id }
+
     SettingsCard {
         Text("Keyboard and input", style = MaterialTheme.typography.titleSmall)
-        VisibilitySettingRow("Keyboard toolbar", "Show cursor, selection, and editing controls above the keyboard.", s.showKeyboardToolbar, { ideViewModel.setEditorSettings(s.copy(showKeyboardToolbar = it)) })
+        VisibilitySettingRow(
+            "Keyboard toolbar",
+            "Show cursor, selection, and editing controls above the keyboard.",
+            s.showKeyboardToolbar,
+            { ideViewModel.setEditorSettings(s.copy(showKeyboardToolbar = it)) },
+        )
         HorizontalDivider()
-        VisibilitySettingRow("Symbol bar", "Show one-tap common character shortcuts above the keyboard.", s.showSymbolBar, { ideViewModel.setEditorSettings(s.copy(showSymbolBar = it)) })
+        VisibilitySettingRow(
+            "Symbol bar",
+            "Show one-tap common character shortcuts above the keyboard.",
+            s.showSymbolBar,
+            { ideViewModel.setEditorSettings(s.copy(showSymbolBar = it)) },
+        )
         HorizontalDivider()
         Text("Volume keys in editor", style = MaterialTheme.typography.bodyMedium)
         Column(Modifier.selectableGroup()) {
@@ -392,12 +406,25 @@ private fun KeyboardSettingsContent(uiState: IdeUiState, s: EditorSettings, ideV
             VolumeKeyOption("Disabled (system volume)", VolumeKeyMode.DISABLED, uiState.volumeKeyMode, ideViewModel)
         }
         HorizontalDivider()
-        Text("Keyboard toolbar order", style = MaterialTheme.typography.bodyMedium)
-        Text("The toolbar order is managed in a separate drag-and-drop editor.", style = MaterialTheme.typography.bodySmall, color = LocalIdeColors.current.textSecondary)
-        TextButton(onClick = { draftOrder = s.keyboardToolbarOrder; toolbarOrderSheetOpen = true }) {
-            Text("Customize toolbar order")
+        Text("Keyboard toolbar shortcuts", style = MaterialTheme.typography.bodyMedium)
+        Text(
+            "The toolbar always shows five shortcuts per page. Enable the actions you use, then drag the enabled list into the order you want. Page breaks are calculated from that single list.",
+            style = MaterialTheme.typography.bodySmall,
+            color = LocalIdeColors.current.textSecondary,
+        )
+        Text(
+            "Find and search controls stay in the editor top bar. Language-server actions are available here, but they may do nothing when the matching language server is unavailable or not installed.",
+            style = MaterialTheme.typography.bodySmall,
+            color = LocalIdeColors.current.textSecondary,
+        )
+        TextButton(onClick = {
+            draftOrder = normalizeEditorToolbarOrder(s.keyboardToolbarOrder)
+            toolbarOrderSheetOpen = true
+        }) {
+            Text("Customize toolbar shortcuts")
         }
     }
+
     if (toolbarOrderSheetOpen) {
         ModalBottomSheet(onDismissRequest = { toolbarOrderSheetOpen = false }) {
             Column(
@@ -405,9 +432,17 @@ private fun KeyboardSettingsContent(uiState: IdeUiState, s: EditorSettings, ideV
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Text("Customize keyboard toolbar", style = MaterialTheme.typography.titleMedium)
-                Text("Long-press an action, then drag it to a new position.", style = MaterialTheme.typography.bodySmall, color = LocalIdeColors.current.textSecondary)
-                LazyColumn(Modifier.fillMaxWidth().heightIn(max = 480.dp)) {
-                    itemsIndexed(draftOrder, key = { _, id -> id }) { index, actionId ->
+                Text(
+                    "Five actions fit on each page. Drag enabled actions to reorder them. Turn actions on or off to choose what appears. Monaco or a language server may be required for some actions.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = LocalIdeColors.current.textSecondary,
+                )
+                LazyColumn(Modifier.fillMaxWidth().heightIn(max = 560.dp)) {
+                    item {
+                        Text("Enabled shortcuts", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(top = 4.dp, bottom = 2.dp))
+                    }
+                    itemsIndexed(draftOrder, key = { _, id -> "enabled-$id" }) { index, actionId ->
+                        val action = actionById[actionId] ?: return@itemsIndexed
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -435,8 +470,47 @@ private fun KeyboardSettingsContent(uiState: IdeUiState, s: EditorSettings, ideV
                                 .padding(vertical = 6.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Icon(Icons.Default.DragHandle, contentDescription = "Drag ${keyboardToolbarLabel(actionId)}")
-                            Text("${index + 1}. ${keyboardToolbarLabel(actionId)}", Modifier.padding(start = 12.dp))
+                            Icon(Icons.Default.DragHandle, contentDescription = "Drag ${action.label}")
+                            Icon(action.icon, contentDescription = null, modifier = Modifier.padding(start = 8.dp).size(22.dp))
+                            Column(Modifier.weight(1f).padding(start = 10.dp)) {
+                                Text("${index + 1}. ${action.label}")
+                                action.shortcut?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = LocalIdeColors.current.textSecondary) }
+                                if (action.languageServerDependent) {
+                                    Text("Language server", style = MaterialTheme.typography.labelSmall, color = LocalIdeColors.current.textSecondary)
+                                }
+                            }
+                            Switch(
+                                checked = true,
+                                onCheckedChange = { draftOrder = draftOrder - action.id },
+                                modifier = Modifier.semantics { contentDescription = "Disable ${action.label}" },
+                            )
+                        }
+                    }
+                    item {
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                        Text("Available shortcuts", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(bottom = 2.dp))
+                    }
+                    items(
+                        EDITOR_TOOLBAR_ACTIONS.filterNot { draftOrder.contains(it.id) },
+                        key = { "available-${it.id}" },
+                    ) { action ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(action.icon, contentDescription = null, modifier = Modifier.size(22.dp))
+                            Column(Modifier.weight(1f).padding(start = 10.dp)) {
+                                Text(action.label)
+                                action.shortcut?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = LocalIdeColors.current.textSecondary) }
+                                if (action.languageServerDependent) {
+                                    Text("Language server", style = MaterialTheme.typography.labelSmall, color = LocalIdeColors.current.textSecondary)
+                                }
+                            }
+                            Switch(
+                                checked = false,
+                                onCheckedChange = { draftOrder = draftOrder + action.id },
+                                modifier = Modifier.semantics { contentDescription = "Enable ${action.label}" },
+                            )
                         }
                     }
                 }
@@ -444,7 +518,7 @@ private fun KeyboardSettingsContent(uiState: IdeUiState, s: EditorSettings, ideV
                     TextButton(onClick = { draftOrder = EditorSettings.DEFAULT_KEYBOARD_TOOLBAR_ORDER }) { Text("Reset") }
                     TextButton(onClick = { toolbarOrderSheetOpen = false }) { Text("Cancel") }
                     TextButton(onClick = {
-                        ideViewModel.setEditorSettings(s.copy(keyboardToolbarOrder = draftOrder))
+                        ideViewModel.setEditorSettings(s.copy(keyboardToolbarOrder = normalizeEditorToolbarOrder(draftOrder)))
                         toolbarOrderSheetOpen = false
                     }) { Text("Done") }
                 }
@@ -453,40 +527,6 @@ private fun KeyboardSettingsContent(uiState: IdeUiState, s: EditorSettings, ideV
     }
 }
 
-private fun keyboardToolbarLabel(id: String): String = when (id) {
-    "indent" -> "Indent"
-    "outdent" -> "Outdent"
-    "cursorUp" -> "Cursor up"
-    "cursorDown" -> "Cursor down"
-    "cursorLeft" -> "Cursor left"
-    "cursorRight" -> "Cursor right"
-    "undo" -> "Undo"
-    "redo" -> "Redo"
-    "cut" -> "Cut"
-    "copy" -> "Copy"
-    "paste" -> "Paste"
-    "selectAll" -> "Select all"
-    "keyboardToggle" -> "Toggle keyboard"
-    "selectLeft" -> "Select left"
-    "selectRight" -> "Select right"
-    "selectUp" -> "Select up"
-    "selectDown" -> "Select down"
-    "selectWordLeft" -> "Select word left"
-    "selectWordRight" -> "Select word right"
-    "selectToStart" -> "Select to start"
-    "selectToEnd" -> "Select to end"
-    "formatDocument" -> "Format document"
-    "commentLine" -> "Comment or uncomment"
-    "duplicateLine" -> "Duplicate line"
-    "moveLineUp" -> "Move line up"
-    "moveLineDown" -> "Move line down"
-    "fold" -> "Fold"
-    "unfold" -> "Unfold"
-    "previousMatch" -> "Previous match"
-    "nextMatch" -> "Next match"
-    "closeSearch" -> "Close find"
-    else -> id
-}
 
 @Composable
 private fun FileTreeSettingsContent(s: EditorSettings, ideViewModel: IdeViewModel) {

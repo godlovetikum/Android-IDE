@@ -6,9 +6,9 @@ The project brings project management, SAF-backed file access, a Monaco-based ed
 
 ## Current status
 
-The active application shell provides Home, project registration state, location capability reporting, portable metadata handling, lifecycle state, and navigation placeholders. The editor and project-management implementation inherited from the earlier application remains reference code until it is rebuilt behind the application contracts.
+The active application shell provides Home, project registration state, location capability reporting, portable metadata handling, lifecycle state, and navigation. The source now also includes an Android IDE `DocumentsProvider` user-files root, provider-backed terminal working directories, a Termux-managed baseline package plan, and initial stdio language-server runtime wiring.
 
-Terminal sessions, persistent background processes, integrated Git mutations, language intelligence, and extensions remain unavailable until their owning services and provider boundaries are implemented.
+Terminal sessions and extensions still require their remaining service gates. Git UI/acquisition is intentionally deferred; Git remains available through the terminal package. Language-server process startup is present, while Monaco request/notification binding and diagnostics/completion presentation remain follow-up work.
 
 ## Technology
 
@@ -47,14 +47,15 @@ APK builds are also available through the repository’s GitHub Actions workflow
 
 ## Documentation
 
-- [Project plan](docs/PROJECT_PLAN.md) — product scope, architecture, milestones, and phase definitions.
-- [Status tracker](docs/STATUS_TRACKER.md) — current implementation status and task history.
+- [Approved product definition](docs/ANDROID_IDE_PRODUCT_DEFINITION_APPROVED.md) — product scope, supported domains, and user-facing behavior.
+- [Approved provider research](docs/ANDROID_IDE_PROVIDER_RESEARCH_APPROVED.md) — provider direction, integration facts, and technical constraints.
+- [Approved implementation roadmap](docs/ANDROID_IDE_IMPLEMENTATION_ROADMAP_APPROVED.md) — phase order, deliverables, and acceptance gates.
+- [Phase 0 implementation guidance](docs/PHASE_0_IMPLEMENTATION_GUIDANCE.md) — contract/bootstrap outputs and entry checklist.
 - [Application architecture contracts](docs/ARCHITECTURE_CONTRACTS.md) — accepted ownership, lifecycle, adapter, event, error, and identity contracts.
-- [Phase 1 production readiness](docs/PHASE1_PRODUCTION_READINESS.md) — open hardening gates for the editor and project workspace.
-- [Product requirements](docs/PRODUCT_REQUIREMENTS.md) — editor access, text scaling, and independent background-session requirements.
-- [QA workflow](docs/QA_WORKFLOW.md) — validation and change-review process.
+- [Termux-backed project filesystem concept report](docs/TERMUX_PROJECT_FILESYSTEM_CONCEPT_REPORT.md) — provider-first storage model, runtime/package separation, package baseline, and LSP direction.
+- [Status tracker](docs/STATUS_TRACKER.md) — current implementation status and task history.
 - [Debug log](docs/DEBUG_LOG.md) — historical defect analysis and fixes.
-- [Tech-stack migration](docs/TECH_STACK_MIGRATION.md) — archival record of the migration from Rust/Slint to Kotlin/Compose.
+- Superseded planning documents are retained in [`docs/archive/`](docs/archive/).
 
 ## Product direction
 
@@ -64,7 +65,7 @@ The next major product area after Phase 1 hardening is the integrated runtime: t
 
 ## Contributing
 
-Before changing code, review the [QA workflow](docs/QA_WORKFLOW.md), [status tracker](docs/STATUS_TRACKER.md), and the relevant architecture or readiness document. Keep user-facing behavior, storage semantics, and Android lifecycle behavior explicit in the documentation.
+Before changing code, review the [Phase 0 implementation guidance](docs/PHASE_0_IMPLEMENTATION_GUIDANCE.md), [status tracker](docs/STATUS_TRACKER.md), and the relevant approved architecture or product document. Keep user-facing behavior, storage semantics, and Android lifecycle behavior explicit in the documentation.
 
 ## License
 

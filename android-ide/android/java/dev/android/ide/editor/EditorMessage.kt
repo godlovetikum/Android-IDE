@@ -8,6 +8,7 @@
 //   { type: "cursorMoved",    line, column }
 //   { type: "fileSaved",      path }
 //   { type: "selectionChanged", hasSelection }
+//   { type: "languageServerMessage", message }
 //
 // Outbound (Kotlin → Monaco, via window.androidIDE.receiveMessage):
 //   { type: "loadFile",         path, content, language }
@@ -44,6 +45,9 @@ sealed class EditorInbound {
     /** User pressed Ctrl+S / Cmd+S in Monaco. */
     data class FileSaved(val path: String) : EditorInbound()
 
+    /** A JSON-RPC request or notification from Monaco to the active server. */
+    data class LanguageServerMessage(val message: String) : EditorInbound()
+
     /**
      * [text] on the Android clipboard.  [isCut] is true when Monaco has already
      * deleted the selection (cut); false for a plain copy.
@@ -78,6 +82,7 @@ sealed class EditorInbound {
                     hasSelection = obj.optBoolean("hasSelection", false),
                 )
                 "fileSaved"            -> FileSaved(path = obj.getString("path"))
+                "languageServerMessage" -> LanguageServerMessage(message = obj.getString("message"))
                 "textCopied"           -> TextCopied(
                     text  = obj.getString("text"),
                     isCut = obj.optBoolean("isCut", false),
@@ -204,6 +209,13 @@ sealed class EditorOutbound {
      */
     data class SetScrollPosition(val scrollTop: Int) : EditorOutbound()
 
+    /** Deliver one framed JSON-RPC message from a native language server to Monaco. */
+    data class LanguageServerMessage(
+        val projectId: String,
+        val serverId: String,
+        val message: String,
+    ) : EditorOutbound()
+
     /**
      * Sent at the start of [openProjectInternal] before tabs are cleared, so stale
      * models from project A cannot leak into project B (would cause wrong content
@@ -253,6 +265,12 @@ sealed class EditorOutbound {
             is SetCursorPosition  -> { put("type", "setCursorPosition"); put("line", msg.line); put("column", msg.column) }
             is SelectMatch        -> { put("type", "selectMatch"); put("line", msg.line); put("column", msg.column); put("length", msg.length) }
             is SetScrollPosition  -> { put("type", "setScrollPosition"); put("scrollTop", msg.scrollTop) }
+            is LanguageServerMessage -> {
+                put("type", "languageServerMessage")
+                put("projectId", msg.projectId)
+                put("serverId", msg.serverId)
+                put("message", msg.message)
+            }
             is CloseAllModels     -> put("type", "closeAllModels")
         }
     }

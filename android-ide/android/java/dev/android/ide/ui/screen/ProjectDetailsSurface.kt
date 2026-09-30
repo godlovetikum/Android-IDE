@@ -94,10 +94,10 @@ fun ProjectDetailsSurface(
                 onDismiss = { menuOpen = false },
                 enabled = !state.operationInProgress,
                 onRefresh = { viewModel.refreshSelectedProjectDetails() },
-                onChangeDisplayName = { renameValue = project?.name.orEmpty(); renameVisible = true },
-                onChangeLocation = { project?.id?.let(onRelocateProject) },
-                onDuplicate = { project?.id?.let(onDuplicateProject) },
-                onExport = { project?.id?.let(onExportProject) },
+                onChangeDisplayName = { viewModel.clearOperationFeedback(); renameValue = project?.name.orEmpty(); renameVisible = true },
+                onChangeLocation = { viewModel.clearOperationFeedback(); project?.id?.let(onRelocateProject) },
+                onDuplicate = { viewModel.clearOperationFeedback(); project?.id?.let(onDuplicateProject) },
+                onExport = { viewModel.clearOperationFeedback(); project?.id?.let(onExportProject) },
                 onCopyPath = {
                     val path = humanReadableStorageLocation(project?.location?.userVisiblePath ?: project?.location?.displayLabel)
                     if (path != null) {
@@ -130,11 +130,12 @@ fun ProjectDetailsSurface(
                     }
                 },
                 onOpenEditor = { viewModel.navigate(Surface.EDITOR) },
-                onOpenGit = { viewModel.navigate(Surface.GIT) },
+                onOpenGit = { viewModel.reportStatus("Git is managed through the project Terminal for now. Open Terminal and run git commands in this project.") },
                 onOpenTerminal = { project?.id?.let(viewModel::openTerminalForProject) },
                 onOpenBrowser = { viewModel.navigate(Surface.BROWSER) },
-                onRemoveFromRegistry = { confirmRemove = true },
+                onRemoveFromRegistry = { viewModel.clearOperationFeedback(); confirmRemove = true },
                 onDeletePermanently = {
+                    viewModel.clearOperationFeedback()
                     deleteCode = Random.nextInt(100, 1000).toString()
                     enteredDeleteCode = ""
                     confirmDelete = true
@@ -142,21 +143,23 @@ fun ProjectDetailsSurface(
             )
         }
         if (confirmRemove) {
+            val completed = state.operationReport?.outcome == dev.android.ide.contracts.OperationOutcome.COMPLETE && !state.operationInProgress
             AlertDialog(
                 onDismissRequest = { if (!state.operationInProgress) confirmRemove = false },
-                title = { Text("Remove project from registry?") },
-                text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { Text("${project?.name ?: "This project"} will be removed from Android IDE, but its files, Git data, and location will remain unchanged.\n\nLocation: ${humanReadableStorageLocation(project?.location?.userVisiblePath ?: project?.location?.displayLabel)}"); state.operationReport?.let { Text(it.message, color = if (it.outcome == dev.android.ide.contracts.OperationOutcome.COMPLETE) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error) } } },
-                confirmButton = { Button(onClick = { viewModel.removeSelectedProject() }, enabled = !state.operationInProgress, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary)) { if (state.operationInProgress) CircularProgressIndicator(Modifier.padding(end = 8.dp), strokeWidth = 2.dp); Text(if (state.operationInProgress) "Removing…" else "Remove from Registry") } },
-                dismissButton = { TextButton(onClick = { confirmRemove = false }, enabled = !state.operationInProgress) { Text(if (state.operationInProgress) "Please wait" else "Cancel") } },
+                title = { Text(if (completed) "Removal complete" else "Remove project from registry?") },
+                text = { if (completed) Text(state.operationReport!!.message, color = MaterialTheme.colorScheme.primary) else Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { Text("${project?.name ?: "This project"} will be removed from Android IDE, but its files, Git data, and location will remain unchanged.\n\nLocation: ${humanReadableStorageLocation(project?.location?.userVisiblePath ?: project?.location?.displayLabel)}"); state.operationReport?.let { Text(it.message, color = MaterialTheme.colorScheme.error) } } },
+                confirmButton = { Button(onClick = if (completed) ({ confirmRemove = false }) else viewModel::removeSelectedProject, enabled = !state.operationInProgress, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary)) { Text(if (completed) "Done" else if (state.operationInProgress) "Removing…" else "Remove from Registry") } },
+                dismissButton = { if (!completed) TextButton(onClick = { confirmRemove = false }, enabled = !state.operationInProgress) { Text(if (state.operationInProgress) "Please wait" else "Cancel") } },
             )
         }
         if (renameVisible) {
+            val completed = state.operationReport?.outcome == dev.android.ide.contracts.OperationOutcome.COMPLETE && !state.operationInProgress
             AlertDialog(
                 onDismissRequest = { if (!state.operationInProgress) renameVisible = false },
-                title = { Text("Change project display name") },
-                text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { androidx.compose.material3.OutlinedTextField(renameValue, { renameValue = it }, label = { Text("Project name") }, enabled = !state.operationInProgress, singleLine = true); if (state.operationReport != null) Text(state.operationReport.message, color = if (state.operationReport.outcome == dev.android.ide.contracts.OperationOutcome.COMPLETE) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error) } },
-                confirmButton = { TextButton(onClick = { viewModel.renameSelectedProject(renameValue) }, enabled = renameValue.isNotBlank() && !state.operationInProgress) { if (state.operationInProgress) CircularProgressIndicator(Modifier.padding(end = 8.dp), strokeWidth = 2.dp); Text(if (state.operationInProgress) "Saving…" else "Save") } },
-                dismissButton = { TextButton(onClick = { renameVisible = false }, enabled = !state.operationInProgress) { Text(if (state.operationInProgress) "Please wait" else "Cancel") } },
+                title = { Text(if (completed) "Rename complete" else "Change project display name") },
+                text = { if (completed) Text(state.operationReport!!.message, color = MaterialTheme.colorScheme.primary) else Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { androidx.compose.material3.OutlinedTextField(renameValue, { renameValue = it }, label = { Text("Project name") }, enabled = !state.operationInProgress, singleLine = true); state.operationReport?.let { Text(it.message, color = MaterialTheme.colorScheme.error) } } },
+                confirmButton = { TextButton(onClick = if (completed) ({ renameVisible = false }) else ({ viewModel.renameSelectedProject(renameValue) }), enabled = !state.operationInProgress && (completed || renameValue.isNotBlank())) { Text(if (completed) "Done" else if (state.operationInProgress) "Saving…" else "Save") } },
+                dismissButton = { if (!completed) TextButton(onClick = { renameVisible = false }, enabled = !state.operationInProgress) { Text(if (state.operationInProgress) "Please wait" else "Cancel") } },
             )
         }
         actionFeedback?.let { action ->
@@ -168,23 +171,27 @@ fun ProjectDetailsSurface(
             )
         }
         if (confirmDelete) {
+            val completed = state.operationReport?.outcome == dev.android.ide.contracts.OperationOutcome.COMPLETE && !state.operationInProgress
             AlertDialog(
                 onDismissRequest = { if (!state.operationInProgress) confirmDelete = false },
-                title = { Text("Permanently delete ${project?.name ?: "this project"}?") },
+                title = { Text(if (completed) "Deletion complete" else "Permanently delete ${project?.name ?: "this project"}?") },
                 text = {
                     Column {
-                        Text("This permanently removes the project data from its selected storage location. This action cannot be undone.")
-                        Text("Project: ${project?.name ?: "Unavailable"}")
-                        Text("Location: ${humanReadableStorageLocation(project?.location?.userVisiblePath ?: project?.location?.displayLabel)}")
-                        Text("Type $deleteCode to confirm")
-                        androidx.compose.material3.OutlinedTextField(enteredDeleteCode, { enteredDeleteCode = it }, label = { Text("Confirmation code") }, enabled = !state.operationInProgress, singleLine = true)
-                        if (state.operationReport != null) Text(state.operationReport.message, color = if (state.operationReport.outcome == dev.android.ide.contracts.OperationOutcome.COMPLETE) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error)
+                        if (completed) Text(state.operationReport!!.message, color = MaterialTheme.colorScheme.primary)
+                        else {
+                            Text("This permanently removes the project data from its selected storage location. This action cannot be undone.")
+                            Text("Project: ${project?.name ?: "Unavailable"}")
+                            Text("Location: ${humanReadableStorageLocation(project?.location?.userVisiblePath ?: project?.location?.displayLabel)}")
+                            Text("Type $deleteCode to confirm")
+                            androidx.compose.material3.OutlinedTextField(enteredDeleteCode, { enteredDeleteCode = it }, label = { Text("Confirmation code") }, enabled = !state.operationInProgress, singleLine = true)
+                            state.operationReport?.let { Text(it.message, color = MaterialTheme.colorScheme.error) }
+                        }
                     }
                 },
                 confirmButton = {
-                    Button(onClick = { viewModel.permanentlyDeleteSelectedProject() }, enabled = enteredDeleteCode == deleteCode && !state.operationInProgress, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)) { if (state.operationInProgress) CircularProgressIndicator(Modifier.padding(end = 8.dp), strokeWidth = 2.dp); Text(if (state.operationInProgress) "Deleting…" else "Delete permanently") }
+                    Button(onClick = if (completed) ({ confirmDelete = false }) else viewModel::permanentlyDeleteSelectedProject, enabled = !state.operationInProgress && (completed || enteredDeleteCode == deleteCode), colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)) { Text(if (completed) "Done" else if (state.operationInProgress) "Deleting…" else "Delete permanently") }
                 },
-                dismissButton = { TextButton(onClick = { confirmDelete = false }, enabled = !state.operationInProgress) { Text(if (state.operationInProgress) "Please wait" else "Cancel") } },
+                dismissButton = { if (!completed) TextButton(onClick = { confirmDelete = false }, enabled = !state.operationInProgress) { Text(if (state.operationInProgress) "Please wait" else "Cancel") } },
             )
         }
         DetailSection("Identity") {

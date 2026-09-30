@@ -191,6 +191,37 @@ typealias ProjectRelativePath = String
 /** Stable provider location identity used only for same-root/ancestry comparisons. */
 typealias ProjectLocationId = String
 
+/**
+ * Stable application-facing view of a mounted filesystem node. The provider URI
+ * remains an adapter detail; virtualPath is the identity exchanged between
+ * domains and localPath is present only when the runtime can access the node.
+ */
+data class FileSystemNode(
+    val virtualPath: String,
+    val providerUri: String,
+    val localPath: String?,
+    val displayLabel: String,
+    val isDirectory: Boolean,
+    val parentVirtualPath: String? = null,
+    val providerAuthority: String? = null,
+)
+
+data class FileSystemResolution(
+    val node: FileSystemNode?,
+    val readable: Boolean,
+    val writable: Boolean,
+    val terminalAccessible: Boolean,
+    val explanation: String? = null,
+)
+
+/** One filesystem boundary for SAF, local files, removable storage, and providers. */
+interface ProjectFileSystemAdapter {
+    suspend fun resolve(location: ProjectLocation): FileSystemResolution
+    suspend fun resolveProject(project: ProjectIdentity): FileSystemResolution = resolve(project.location)
+    suspend fun mountedRoots(): List<FileSystemNode> = emptyList()
+    suspend fun children(parent: FileSystemNode): List<FileSystemNode> = emptyList()
+}
+
 interface ProjectStorageAdapter {
     suspend fun inspectProjectStorage(location: ProjectLocation): ProjectStorageCapabilities
     /** Returns null when the provider cannot safely inspect either location. */
@@ -263,6 +294,34 @@ interface EditorDocumentAdapter {
     suspend fun load(project: ProjectIdentity, path: ProjectRelativePath): ByteArray
     suspend fun save(project: ProjectIdentity, path: ProjectRelativePath, content: ByteArray): OperationReport
     suspend fun reportExternalChange(projectId: String, path: ProjectRelativePath): OperationReport
+}
+
+data class LanguageServerDefinition(
+    val id: String,
+    val languageIds: Set<String>,
+    val command: List<String>,
+    val requiredExecutable: String,
+)
+
+data class LanguageServerStatus(
+    val serverId: String,
+    val projectId: String,
+    val languageId: String,
+    val available: Boolean,
+    val initialized: Boolean = false,
+    val explanation: String? = null,
+)
+
+/**
+ * LSP processes are terminal-runtime children. They use the selected project
+ * working directory, provider-backed files, package paths, and environment.
+ * No language-server process may maintain a second project copy.
+ */
+interface LanguageServerAdapter {
+    suspend fun start(project: ProjectIdentity, languageId: String): LanguageServerStatus
+    suspend fun send(projectId: String, serverId: String, message: ByteArray): OperationReport
+    suspend fun stop(projectId: String, serverId: String): OperationReport
+    suspend fun status(projectId: String): List<LanguageServerStatus>
 }
 
 interface GitAdapter {

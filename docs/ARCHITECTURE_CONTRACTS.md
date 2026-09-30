@@ -2,7 +2,7 @@
 
 **Status:** Accepted architecture contract set for the `dev` branch
 **Primary responsibility:** Define the ownership and provider boundaries that application services must preserve.
-**Scope:** Contracts and decisions only; this document does not claim that terminal, browser, Git, language intelligence, credentials, or extensions are implemented.
+**Scope:** Contracts and decisions for the application domains; implementation claims are limited to the explicitly recorded source-level foundation and editor-intelligence work.
 
 ## 1. Goal and active references
 
@@ -23,12 +23,18 @@ A screen may query another owner through an adapter or state contract, but it mu
 
 ## 3. Project-location and storage authority
 
-Android IDE has exactly two supported project-location classes:
+Android IDE treats every persistent file provider as the same product-level project-location type. Supported examples include shared device storage, removable storage, cloud/document providers that satisfy the live-edit contract, and the Android IDE filesystem provider.
 
-1. **User-visible local location:** a device, removable, or other local provider location that passes capability checks for the required editor and runtime operations on the same files.
-2. **Private development workspace:** an explicitly selected location inside the integrated Termux-based runtime. It is authoritative when selected; it is not a hidden duplicate or cache.
+The Android IDE filesystem provider is a user-visible `DocumentsProvider` root backed by a durable filesystem with stronger development capabilities than ordinary emulated shared storage. It is selectable through SAF and can be browsed or edited by other applications after the user grants URI access. It is not a private project class, hidden workspace, shadow copy, or automatic fallback.
 
-Cloud-backed or remote document providers are import/export sources, not live editable project locations. A location that can be selected but cannot support the required read, write, mutation, execution, or change-observation behavior is rejected with an actionable result. The application must never silently change location class, overwrite, merge, rename, or redirect a requested destination.
+The provider has two deliberately separate areas:
+
+1. **User-files root:** persistent project files exposed through SAF and usable by the editor, terminal, language servers, previews, and other applications with user-granted access.
+2. **Protected runtime/package root:** the Termux bootstrap, package database, shell libraries, runtime state, PTYs, and process/session infrastructure. This root is not exposed as a general document-provider root.
+
+In-memory editor buffers and application state are transient state, not a storage provider and never an authoritative project location.
+
+Cloud-backed or remote document providers are live project locations only when they satisfy the required read, write, mutation, and observation contract; otherwise they are import/export sources. A location that can be selected but cannot support the required operations is rejected with an actionable result. The application must never silently change provider, overwrite, merge, rename, migrate, or redirect a requested destination.
 
 Every acquisition or relocation operation follows: validate input; inspect destination and capabilities; review the exact operation; execute; verify returned identity and state; report complete, partial, blocked, interrupted, failed, or cancelled outcome; offer supported recovery or cleanup.
 
@@ -75,12 +81,15 @@ Higher-level domains depend on these logical contracts, not on SAF, Termux, WebV
 | `RuntimeWorkspaceAdapter` | Private workspace initialization, root identity, and project working directories |
 | `TerminalRuntimeAdapter` | Sessions, PTY I/O, resize, child tracking, termination, and availability |
 | `EditorDocumentAdapter` | Stable project-relative document identity, load/save, external-change reporting, and recovery separation |
+| `LanguageServerAdapter` | Terminal-managed LSP process lifecycle, provider-backed workspace, framed JSON-RPC transport, and availability reporting |
 | `GitAdapter` | Canonical runtime Git status, mutations, configuration, output, and errors |
 | `BrowserPreviewAdapter` | Global browser/preview state and failure isolation from project and runtime ownership |
 | `CredentialVaultAdapter` | Secure credential lifecycle, redaction, revocation, and provider access without exposing secrets |
 | `LifecycleCoordinator` | Restoration, foreground work, runtime availability, invalidation, and explicit exit semantics |
 
 The initial Kotlin contract types live in `dev.android.ide.contracts`. Implementations may be added by later phases without changing the ownership vocabulary.
+
+Language intelligence is an editor consumer of the selected project location, not a second project authority. A language server may run only when the terminal/runtime can access the selected provider-backed directory. The editor synchronizes open documents through LSP `didOpen`, `didChange`, `didSave`, and `didClose`; Monaco requests and server responses cross the existing editor bridge; diagnostics and supported language features are capability- and availability-gated. A server that cannot initialize is reported unavailable and must not receive a silently substituted project path.
 
 ## 7. Identity and metadata decision
 
@@ -128,7 +137,8 @@ Application foundation may begin. The smallest Phase 1 scope is:
 3. persist storage permission and location identity;
 4. provide capability inspection and unavailable-state reporting;
 5. add lifecycle coordination and restoration records;
-6. verify that no hidden project copy is created.
+6. expose the Android IDE user-files root through SAF without exposing the runtime/package root;
+7. verify that no hidden project copy is created and no project is silently migrated.
 
 Application foundation must not prematurely implement terminal runtime, editor feature expansion, browser, Git, language intelligence, credentials, or extensions.
 
@@ -136,4 +146,37 @@ Application foundation must not prematurely implement terminal runtime, editor f
 
 Architecture contracts are accepted when the contract record and Kotlin contract types agree, active documents point to the approved references, legacy documents are clearly archived, identity migration is isolated and visible, and targeted checks find no active claim that cloud storage is live-editable, sessions are project-owned by default, credentials belong in project metadata, desktop mode is required, or processes are unkillable.
 
-This contract set does not claim that any provider integration or runtime feature is implemented. Android builds and device validation are separate acceptance activities and are intentionally not run as part of this lightweight contract verification.
+This contract set does not claim that every provider integration or runtime feature is implemented. Android builds and device validation are separate acceptance activities and are intentionally not run as part of this lightweight contract verification.
+
+## 12. Implementation audit and clarified correction
+
+### 12.1 What is currently wrong with the implementation or behavior
+
+The source-level implementation has the following cross-domain defects and misleading behaviors:
+
+1. **Filesystem identity is fragmented.** Project storage, the terminal, the language server, and the editor independently interpret `content://`, `file://`, and provider-specific paths. A project can therefore be editable through SAF while its terminal or language server cannot resolve the same location. Capability reporting is consequently broader than actual runtime support.
+2. **The Android IDE provider is not yet an application-wide filesystem bridge.** The DocumentsProvider exposes the Android IDE user-files root, but external storage, removable storage, and other SAF providers are still consumed as raw provider URIs instead of as nodes in one navigable Android IDE filesystem model.
+3. **Project terminal access can silently substitute a different directory.** A project session can fall back to the Termux home when its requested working directory is unavailable. That hides a project-access failure and can cause commands to run against the wrong location.
+4. **Session cleanup is too aggressive for temporary process loss.** Runtime initialization and stale-session handling can clear descriptors that should be restorable after Android temporarily kills the application process, while the intended product behavior is to discard state only on a true new launch, explicit close, or device restart/exit boundary.
+5. **LSP routing is not fully document-safe.** Diagnostics and navigation results are not consistently routed by their returned document URI, and native lifecycle request IDs can overlap with Monaco request IDs. Provider URI conversion, server readiness, and workspace-edit handling are incomplete.
+6. **Toolbar customization is not authoritative.** Saved orders can be repopulated with defaults, so disabled actions may return. Settings do not consistently show each action's icon, description, and current position, making command identity and ordering difficult to understand.
+7. **Git is in an inconsistent intermediate state.** Some Git placeholders remain interactive while other paths imply that a Git UI is implemented or remove the entry point. The intended behavior is a visible placeholder that directs users to the terminal without pretending to provide Git controls.
+8. **Existing-folder acquisition asks for too much and mixes concerns.** Import should inspect and register the selected folder, not act as the project rename/description editor. Managed Android IDE metadata is intentional, but user files must never be overwritten and optional initial files must not be recreated after the user deletes them.
+
+These findings are source-level findings. Android lint, compilation, and device behavior remain unverified because those checks are intentionally not run in this task.
+
+### 12.2 Clarification: the permanent-fix direction
+
+The correction is to make Android IDE's filesystem the common application boundary rather than passing raw provider URLs between domains:
+
+1. **Build one Android IDE filesystem tree.** Treat Android IDE storage, Android shared storage, removable storage, and user-granted document providers as child locations in a provider-backed filesystem. Expose stable virtual nodes/paths and resolve them to the underlying SAF or local provider only inside the filesystem adapter. Keep permissions explicit; the bridge does not bypass SAF grants.
+2. **Use the same resolver everywhere.** Project management, file browsing, editor documents, terminal working directories, language-server workspaces, Git placeholders, and browser/preview integrations must resolve the selected node through the same filesystem contract. A virtual filesystem identity is not a second copy of project data.
+3. **Report capabilities per resolved node.** File editing can be available through SAF even when a terminal path is unavailable. Terminal and LSP are available only when the selected node can be resolved to a directory accessible by the Termux runtime. No project operation may silently substitute the runtime home or another provider.
+4. **Separate new terminal sessions from project sessions.** A newly created terminal session may inherit the previous directory or use the runtime home. Opening a project/folder in Terminal must validate and use that project's resolved directory, or show a failure in the originating modal/surface.
+5. **Preserve recoverable state only within the application lifecycle boundary.** Temporary Android process loss while the app remains restorable should preserve descriptors and UI state. True exit, device restart, explicit close, or invalidation should not resurrect obsolete PTYs. Unavailable descriptors should report their reason rather than being silently erased.
+6. **Keep Git placeholders interactive.** Home and the Git surface remain navigable. The Git surface explains that no Git UI is implemented and offers navigation to Terminal; the sidebar explains the same limitation but does not offer the Terminal control. Git operations remain terminal operations.
+7. **Treat project metadata as portable managed state.** Import may initialize the Android IDE metadata directory and may create a missing initial root README without overwriting an existing one. Opening later repairs only managed metadata and never recreates an optional user-deleted README. Rename and description changes belong to project details and context actions.
+8. **Make toolbar customization explicit.** Keep the flat Monaco action catalog and fixed five-action pages. Persist the user's enabled ordered list as authoritative. Each settings row shows its distinct icon, label, description, current position, and enabled state. LSP-dependent actions are marked as potentially unavailable.
+9. **Complete LSP on top of the filesystem boundary.** Route diagnostics, definitions, references, and workspace edits by stable document identity; separate native and Monaco request IDs; queue document events until initialization; and report unavailable runtime access without substituting a different path.
+
+The first implementation step after this clarification is the shared filesystem resolution contract and adapter. Later terminal, LSP, project-acquisition, Git-placeholder, and toolbar corrections must consume that boundary instead of adding more URI-specific logic.

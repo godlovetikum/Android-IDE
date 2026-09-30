@@ -5,7 +5,7 @@
 // Layout: Column
 //   Content area (editor) — weight(1f)
 //   SymbolBar    (optional, above keyboard toolbar) — horizontally scrollable symbol chips
-//   KeyboardToolbar (optional, 2-page pager of icon buttons, NO horizontal scroll)
+//   KeyboardToolbar (optional, fixed five-item pages of icon buttons, NO horizontal scroll)
 //
 // Keyboard toolbar pages:
 //
@@ -287,11 +287,10 @@ fun EditorPane(
             SymbolBar(symbols = EditorSettings.DEFAULT_SYMBOLS, onInsertSymbol = onInsertText)
         }
 
-        // Keyboard toolbar — 2-page pager, no horizontal scrolling
+        // Keyboard toolbar — fixed five-item pages, no horizontal scrolling
         if (activeTab != null && showKeyboardToolbar) {
             HorizontalDivider(thickness = 1.dp, color = colors.separator)
             KeyboardToolbar(
-                onInsertText         = onInsertText,
                 onExecuteCommand     = onExecuteCommand,
                 onPasteFromClipboard = onPasteFromClipboard,
                 hasEditorSelection   = hasEditorSelection,
@@ -376,95 +375,33 @@ private fun SymbolBar(
     }
 }
 
-// ── Keyboard toolbar — explicit page controls, no swipe pager or indicators ────
+// ── Keyboard toolbar — one ordered list, rendered five actions per page ────────
 
-private data class KeyboardAction(
-    val id: String,
-    val icon: ImageVector,
-    val label: String,
-    val commandId: String?,            // null for special Kotlin-side actions
-    val isPaste: Boolean = false,      // triggers onPasteFromClipboard instead of executeCommand
-    val requiresSelection: Boolean = false,
-    val isKeyboardToggle: Boolean = false,
-)
-
-// Page 1: navigation + indent/outdent + undo/redo (8 actions)
-private val TOOLBAR_PAGE_1 = listOf(
-    KeyboardAction("indent", Icons.Default.FormatIndentIncrease, "Indent",       "smartIndent"),
-    KeyboardAction("outdent", Icons.Default.FormatIndentDecrease, "Outdent",      "smartOutdent"),
-    KeyboardAction("cursorUp", Icons.Default.KeyboardArrowUp,      "Cursor Up",    "cursorUp"),
-    KeyboardAction("cursorDown", Icons.Default.KeyboardArrowDown,    "Cursor Down",  "cursorDown"),
-    KeyboardAction("cursorLeft", Icons.Default.KeyboardArrowLeft,    "Cursor Left",  "cursorLeft"),
-    KeyboardAction("cursorRight", Icons.Default.KeyboardArrowRight,   "Cursor Right", "cursorRight"),
-    KeyboardAction("undo", Icons.Default.Undo,                 "Undo",         "undo"),
-    KeyboardAction("redo", Icons.Default.Redo,                 "Redo",         "redo"),
-)
-
-// Page 2: clipboard + selection + keyboard toggle (5 actions)
-// text to the Kotlin layer where it is written to the Android ClipboardManager.
-// The old editor.action.clipboardCutAction / clipboardCopyAction use the browser
-// Clipboard API which is gated behind a user-permission prompt and fails silently.
-private val TOOLBAR_PAGE_2 = listOf(
-    KeyboardAction("cut", Icons.Default.ContentCut,    "Cut",              "requestCut", requiresSelection = true),
-    KeyboardAction("copy", Icons.Default.ContentCopy,   "Copy",             "requestCopy", requiresSelection = true),
-    KeyboardAction("paste", Icons.Default.ContentPaste,  "Paste",            null, isPaste = true),
-    KeyboardAction("selectAll", Icons.Default.SelectAll,     "Select All",       "editor.action.selectAll"),
-    KeyboardAction("keyboardToggle", Icons.Default.Keyboard,      "Toggle Keyboard",  null, isKeyboardToggle = true),
-)
-
-private val TOOLBAR_PAGE_3 = listOf(
-    KeyboardAction("selectLeft", Icons.Default.KeyboardArrowLeft,  "Select Left",       "cursorLeftSelect"),
-    KeyboardAction("selectRight", Icons.Default.KeyboardArrowRight, "Select Right",      "cursorRightSelect"),
-    KeyboardAction("selectUp", Icons.Default.KeyboardArrowUp,    "Select Up",         "cursorUpSelect"),
-    KeyboardAction("selectDown", Icons.Default.KeyboardArrowDown,  "Select Down",        "cursorDownSelect"),
-    KeyboardAction("selectWordLeft", Icons.Default.KeyboardArrowLeft,  "Select Word Left",  "cursorWordLeftSelect"),
-    KeyboardAction("selectWordRight", Icons.Default.KeyboardArrowRight, "Select Word Right", "cursorWordRightSelect"),
-    KeyboardAction("selectToStart", Icons.Default.KeyboardArrowLeft,  "Select to Start",   "cursorHomeSelect"),
-    KeyboardAction("selectToEnd", Icons.Default.KeyboardArrowRight, "Select to End",     "cursorEndSelect"),
-)
-
-// Developer actions remain on a dedicated page so the primary navigation and
-// clipboard controls stay stable and easy to reach on a phone.
-private val TOOLBAR_PAGE_4 = listOf(
-    KeyboardAction("formatDocument", Icons.Default.FormatIndentIncrease, "Format Document", "editor.action.formatDocument"),
-    KeyboardAction("commentLine", Icons.Default.ContentCopy, "Comment / Uncomment", "editor.action.commentLine"),
-    KeyboardAction("duplicateLine", Icons.Default.ContentCopy, "Duplicate Line", "editor.action.duplicateSelection"),
-    KeyboardAction("moveLineUp", Icons.Default.KeyboardArrowUp, "Move Line Up", "editor.action.moveLinesUpAction"),
-    KeyboardAction("moveLineDown", Icons.Default.KeyboardArrowDown, "Move Line Down", "editor.action.moveLinesDownAction"),
-    KeyboardAction("fold", Icons.Default.KeyboardArrowUp, "Fold", "editor.action.fold"),
-    KeyboardAction("unfold", Icons.Default.KeyboardArrowDown, "Unfold", "editor.action.unfold"),
-)
-
-private val TOOLBAR_PAGE_5 = listOf(
-    KeyboardAction("previousMatch", Icons.Default.KeyboardArrowUp, "Previous Match", "editor.action.previousMatchFindAction"),
-    KeyboardAction("nextMatch", Icons.Default.KeyboardArrowDown, "Next Match", "editor.action.nextMatchFindAction"),
-    KeyboardAction("closeSearch", Icons.Default.KeyboardArrowLeft, "Close Find", "closeSearch"),
-)
-
-private val TOOLBAR_PAGES = listOf(TOOLBAR_PAGE_1, TOOLBAR_PAGE_2, TOOLBAR_PAGE_3, TOOLBAR_PAGE_4, TOOLBAR_PAGE_5)
-
-@OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
 private fun KeyboardToolbar(
-    onInsertText: (String) -> Unit,
     onExecuteCommand: (String) -> Unit,
     onPasteFromClipboard: () -> Unit,
     hasEditorSelection: Boolean,
     actionOrder: List<String>,
     onToggleKeyboard: (Boolean) -> Unit,
 ) {
-    val colors     = LocalIdeColors.current
-    val actionCatalog = TOOLBAR_PAGES.flatten().associateBy { it.id }
-    val orderedActions = (actionOrder + EditorSettings.DEFAULT_KEYBOARD_TOOLBAR_ORDER)
+    val colors = LocalIdeColors.current
+    val actionCatalog = EDITOR_TOOLBAR_ACTIONS.associateBy { it.id }
+    val orderedActions = actionOrder
         .distinct()
         .mapNotNull(actionCatalog::get)
-    val pages = orderedActions.chunked(8)
+        .ifEmpty {
+            EditorSettings.DEFAULT_KEYBOARD_TOOLBAR_ORDER.mapNotNull(actionCatalog::get)
+        }
+    val pages = orderedActions.chunked(KEYBOARD_TOOLBAR_PAGE_SIZE)
     var selectedPage by rememberSaveable { mutableIntStateOf(0) }
     val pageIndex = selectedPage.coerceIn(0, pages.lastIndex.coerceAtLeast(0))
-    // used previously goes out of sync when the system dismisses the keyboard (Back
-    // button, predictive-back gesture, navigation) without our code knowing.
-    val density         = LocalDensity.current
+    val density = LocalDensity.current
     val keyboardShowing = WindowInsets.ime.getBottom(density) > 0
+
+    LaunchedEffect(actionOrder) {
+        selectedPage = selectedPage.coerceIn(0, pages.lastIndex.coerceAtLeast(0))
+    }
 
     Column(
         modifier = Modifier
@@ -489,12 +426,12 @@ private fun KeyboardToolbar(
             ) {
                 pages.getOrElse(pageIndex) { emptyList() }.forEach { action ->
                     ToolbarIconButton(
-                        icon = if (action.isKeyboardToggle) {
-                            if (keyboardShowing) Icons.Default.KeyboardHide else action.icon
-                        } else action.icon,
-                        label = action.label,
-                        isPaste = action.isPaste,
-                        commandId = action.commandId,
+                        action = action,
+                        icon = if (action.isKeyboardToggle && keyboardShowing) {
+                            Icons.Default.KeyboardHide
+                        } else {
+                            action.icon
+                        },
                         enabled = !action.requiresSelection || hasEditorSelection,
                         onExecuteCommand = onExecuteCommand,
                         onPaste = onPasteFromClipboard,
@@ -512,55 +449,58 @@ private fun KeyboardToolbar(
                 Icon(Icons.Default.KeyboardArrowRight, contentDescription = "Next toolbar page")
             }
         }
+        if (pages.size > 1) {
+            Text(
+                text = "Page ${pageIndex + 1} of ${pages.size}",
+                style = MaterialTheme.typography.labelSmall,
+                color = colors.textSecondary,
+                modifier = Modifier.align(Alignment.CenterHorizontally).padding(bottom = 2.dp),
+            )
+        }
     }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ToolbarIconButton(
+    action: EditorToolbarAction,
     icon: ImageVector,
-    label: String,
-    commandId: String?,
-    isPaste: Boolean,
     enabled: Boolean = true,
     onExecuteCommand: (String) -> Unit,
     onPaste: () -> Unit,
     onCustomClick: (() -> Unit)? = null,
 ) {
-    val colors       = LocalIdeColors.current
+    val colors = LocalIdeColors.current
     val tooltipState = rememberTooltipState()
-    val repeatable = commandId in setOf(
-        "cursorUp", "cursorDown", "cursorLeft", "cursorRight",
-        "cursorLeftSelect", "cursorRightSelect", "cursorUpSelect", "cursorDownSelect",
-        "cursorWordLeftSelect", "cursorWordRightSelect", "cursorHomeSelect", "cursorEndSelect",
-    )
+
     fun performAction() {
         when {
             onCustomClick != null -> onCustomClick()
-            isPaste -> onPaste()
-            commandId != null -> onExecuteCommand(commandId)
+            action.isPaste -> onPaste()
+            action.commandId != null -> onExecuteCommand(action.commandId)
         }
     }
+
     TooltipBox(
         positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
         tooltip = {
             PlainTooltip {
-                Text(label, style = MaterialTheme.typography.labelSmall)
+                Text(action.label, style = MaterialTheme.typography.labelSmall)
             }
         },
         state = tooltipState,
     ) {
         IconButton(
             onClick = ::performAction,
-            enabled  = enabled,
+            enabled = enabled,
             modifier = Modifier
                 .size(44.dp)
                 .semantics {
                     role = Role.Button
-                    onClick(label) { performAction(); true }
+                    onClick(action.label) { performAction(); true }
                 }
-                .pointerInput(enabled, repeatable, commandId) {
-                    if (!enabled || !repeatable) return@pointerInput
+                .pointerInput(enabled, action.repeatable, action.commandId) {
+                    if (!enabled || !action.repeatable) return@pointerInput
                     kotlinx.coroutines.coroutineScope {
                         val gestureScope = this
                         awaitPointerEventScope {
@@ -581,10 +521,10 @@ private fun ToolbarIconButton(
                 },
         ) {
             Icon(
-                imageVector        = icon,
-                contentDescription = label,
-                tint               = if (enabled) colors.textSecondary else colors.textDisabled,
-                modifier           = Modifier.size(24.dp),
+                imageVector = icon,
+                contentDescription = action.label,
+                tint = if (enabled) colors.textSecondary else colors.textDisabled,
+                modifier = Modifier.size(24.dp),
             )
         }
     }

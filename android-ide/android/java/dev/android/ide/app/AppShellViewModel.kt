@@ -15,6 +15,8 @@ import dev.android.ide.contracts.Surface
 import dev.android.ide.contracts.CapabilityState
 import dev.android.ide.contracts.ProjectLocation
 import dev.android.ide.contracts.OperationReport
+import dev.android.ide.contracts.OperationOutcome
+import dev.android.ide.contracts.ErrorCategory
 import dev.android.ide.lifecycle.LifecycleCoordinatorImpl
 import dev.android.ide.project.ProjectStateService
 import dev.android.ide.project.ProjectRestoreResult
@@ -158,8 +160,29 @@ class AppShellViewModel(application: Application) : AndroidViewModel(application
     fun openTerminalForProject(projectId: String) {
         viewModelScope.launch {
             val project = _state.value.projects.firstOrNull { it.id == projectId }
-            val directory = project?.let { terminalRuntime.workingDirectory(it) }
-            val session = terminalRuntime.createSession(directory, project?.name ?: "Untitled session")
+            if (project == null) {
+                _state.update { it.copy(terminalFeedback = OperationReport(OperationOutcome.BLOCKED, "The selected project is no longer available", ErrorCategory.PERMISSION_LOST)) }
+                return@launch
+            }
+            val access = terminalRuntime.inspectProjectAccess(project)
+            if (!access.available) {
+                _state.update {
+                    it.copy(
+                        terminalFeedback = OperationReport(
+                            OperationOutcome.BLOCKED,
+                            access.explanation ?: "The selected project cannot be opened in Terminal",
+                            ErrorCategory.UNSUPPORTED_PROVIDER_CAPABILITY,
+                        ),
+                    )
+                }
+                return@launch
+            }
+            val directory = terminalRuntime.workingDirectory(project)
+            if (directory == null) {
+                _state.update { it.copy(terminalFeedback = OperationReport(OperationOutcome.BLOCKED, "The selected project has no accessible terminal working directory", ErrorCategory.PERMISSION_LOST)) }
+                return@launch
+            }
+            val session = terminalRuntime.createSession(directory, project.name)
             _state.update { it.copy(selectedTerminalSessionId = session.id, terminalFeedback = null) }
             refreshTerminalSessions()
             navigate(Surface.TERMINAL)
@@ -227,6 +250,10 @@ class AppShellViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
+    fun clearTerminalFeedback() {
+        _state.update { it.copy(terminalFeedback = null) }
+    }
+
     fun closeAllTerminalSessions() {
         viewModelScope.launch {
             _state.update { it.copy(terminalFeedback = terminalRuntime.closeAllSessions()) }
@@ -281,6 +308,12 @@ class AppShellViewModel(application: Application) : AndroidViewModel(application
                 if (!add(projectId)) remove(projectId)
             }
             current.copy(selectedProjectIds = next, selectedProjectId = projectId)
+        }
+    }
+
+    fun selectAllProjects() {
+        _state.update { current ->
+            current.copy(selectedProjectIds = current.projects.map { it.id }.toSet())
         }
     }
 

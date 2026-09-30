@@ -16,9 +16,9 @@ Superseded planning notes, earlier research reports, and working versions are re
 
 ## Completed discovery gate
 
-The first implementation-planning objective—defining and clarifying the product—has been satisfied. The approved definition covers the six product domains, mobile-first navigation, project acquisition, storage ownership, the private Termux development workspace, global terminal behavior, browser and preview behavior, Git levels, editor behavior, lifecycle expectations, security boundaries, and the extensions placeholder.
+The first implementation-planning objective—defining and clarifying the product—has been satisfied. The approved definition covers the six product domains, mobile-first navigation, project acquisition, storage ownership, the SAF-accessible Android IDE filesystem provider, protected Termux runtime behavior, global terminal behavior, browser and preview behavior, Git levels, editor behavior, lifecycle expectations, security boundaries, and the extensions placeholder.
 
-The approved provider research covers obtainable provider choices, versions, licenses, acquisition routes, customization boundaries, Termux runtime initialization, the private development filesystem, Monaco integration, GeckoView, browser tooling, Git, LSP, Keystore, and Android lifecycle constraints.
+The approved provider research covers obtainable provider choices, versions, licenses, acquisition routes, customization boundaries, Termux runtime initialization, the SAF-accessible Android IDE filesystem provider, Monaco integration, GeckoView, browser tooling, Git, LSP, Keystore, and Android lifecycle constraints.
 
 The approved roadmap establishes the implementation order and acceptance gates. No feature-domain implementation is authorized merely by the existence of these documents.
 
@@ -56,7 +56,7 @@ Terminal runtime, browser, Git, language intelligence, credentials, extensions, 
 
 ### Project and workspace management
 
-The product behavior is defined. Implementation remains future work and must follow Phase 2 of the approved roadmap. Required acceptance coverage includes acquisition, conflict preflight, metadata initialization, project registry, file and folder mutations, project location classes, export, duplication, relocation, removal, deletion, and permission loss.
+The acquisition and project-operation source slice is implemented: destination and containment preflight, exact-name creation, bounded ZIP validation/extraction, portable metadata initialization, identity read-back verification, registry registration, cleanup on failure, and result-only operation feedback. Existing-folder import preserves the project’s existing creation timestamp and unknown portable metadata fields instead of silently replacing them. Android/device acceptance remains deferred because no build or compilation was run.
 
 ### Code editing
 
@@ -64,7 +64,7 @@ The product behavior and Monaco provider direction are defined. Implementation r
 
 ### Terminal, runtime, dependencies, and background processes
 
-The Termux runtime direction and private development workspace model are defined. Implementation remains future work and must follow Phase 3. Required acceptance coverage includes bootstrap initialization, package capability reporting, PTYs, global sessions, project working directories, child-process ownership, foreground lifecycle, process-loss reporting, and explicit close behavior.
+The Termux runtime and SAF-accessible Android IDE filesystem provider now share one filesystem adapter. It exposes the Android IDE provider root and persisted SAF grants as mounted roots, resolves child nodes, preserves provider identity, and returns an optional native path only when the runtime can actually access it. Runtime initialization declares and installs the baseline toolchain through Termux commands. PTY descriptors survive process recreation as explicitly unavailable records rather than being falsely reported as live or silently discarded; project terminal launch refuses inaccessible working directories.
 
 ### Browser, previews, and developer tools
 
@@ -72,11 +72,19 @@ The unified browser behavior and GeckoView/console direction are defined. Implem
 
 ### Git integration
 
-Repository-level and global Git behavior, credential boundaries, and terminal interoperability are defined. Implementation remains future work and must follow Phase 6.
+Repository-level and global Git behavior, credential boundaries, and terminal interoperability are defined. A separate Git UI remains intentionally deferred; project Git actions now explain that Git is managed through the project Terminal rather than navigating to a misleading unfinished surface. Git operations remain terminal operations.
 
 ### Language intelligence
 
-The LSP client and runtime-managed language-server direction are defined. Implementation remains future work and must follow Phase 7.
+The source-level editor-intelligence slice is implemented through the shared filesystem resolver: language-server definitions, lifecycle-aware Termux stdio JSON-RPC sessions, initialize/initialized/shutdown handling, Monaco request routing, document open/change/save/close synchronization, completion, hover, definition, references, formatting, code actions, diagnostics, and snippets. Server responses now translate native file URIs back to provider-backed Monaco document identities, including nested diagnostics and workspace edits. Projects without a runtime-accessible directory remain explicitly unavailable. Android/device behavior and remaining language-specific server coverage remain acceptance work; no build or compilation was run.
+
+### Editor toolbar
+
+The toolbar uses a flat real-command catalog with a fixed five-action page size. The confirmed 23-action default is persisted in user order, stale IDs are normalized in settings, invalid saved orders fall back safely at render time, and language-server-dependent actions are labelled as such. Search and close remain in the editor top bar.
+
+## Clarified implementation audit
+
+The current cross-domain defects and the agreed filesystem-first correction are recorded in section 12 of `docs/ARCHITECTURE_CONTRACTS.md`. That section is the authoritative record of the audit findings and the permanent-fix direction; this tracker records only implementation status and does not duplicate the full decision text.
 
 ### Settings, security, credentials, and customization
 

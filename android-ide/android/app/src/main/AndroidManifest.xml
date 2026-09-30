@@ -77,6 +77,22 @@
                 android:value="Visible terminal session input and output" />
         </service>
 
+        <!--
+            User-files storage provider. This exposes only the durable Android
+            IDE user-files root through SAF. The Termux bootstrap, package
+            database, PTYs, and runtime state remain outside this provider.
+        -->
+        <provider
+            android:name="dev.android.ide.saf.AndroidIdeDocumentsProvider"
+            android:authorities="dev.android.ide.documents"
+            android:exported="true"
+            android:grantUriPermissions="true"
+            android:permission="android.permission.MANAGE_DOCUMENTS">
+            <intent-filter>
+                <action android:name="android.content.action.DOCUMENTS_PROVIDER" />
+            </intent-filter>
+        </provider>
+
     </application>
 
 </manifest>

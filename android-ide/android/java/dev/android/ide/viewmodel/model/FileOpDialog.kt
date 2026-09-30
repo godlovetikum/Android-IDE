@@ -10,13 +10,14 @@ sealed class FileOpDialog {
     data class BinaryOpenError(val fileName: String) : FileOpDialog()
 
     /** Rename dialog for [node]. [errorMessage] is shown inline when non-null. */
-    data class Rename(val node: FileNode, val errorMessage: String? = null, val isSubmitting: Boolean = false) : FileOpDialog()
+    data class Rename(val node: FileNode, val errorMessage: String? = null, val resultMessage: String? = null, val isSubmitting: Boolean = false) : FileOpDialog()
 
     /** Delete confirmation dialog for [node] or the snapshotted [selectedNodes]. */
     data class Delete(
         val node: FileNode,
         val selectedNodes: List<FileNode> = emptyList(),
         val errorMessage: String? = null,
+        val resultMessage: String? = null,
         val isSubmitting: Boolean = false,
     ) : FileOpDialog()
 
@@ -24,6 +25,7 @@ sealed class FileOpDialog {
     data class CreateFile(
         val parentNode: FileNode,
         val errorMessage: String? = null,
+        val resultMessage: String? = null,
         val isSubmitting: Boolean = false,
     ) : FileOpDialog()
 
@@ -31,6 +33,7 @@ sealed class FileOpDialog {
     data class CreateFolder(
         val parentNode: FileNode,
         val errorMessage: String? = null,
+        val resultMessage: String? = null,
         val isSubmitting: Boolean = false,
     ) : FileOpDialog()
 
@@ -39,7 +42,7 @@ sealed class FileOpDialog {
      * The UI pre-fills the name field with a user-facing "Copy of <displayName>" suggestion.
      * [errorMessage] is shown inline when non-null.
      */
-    data class Duplicate(val node: FileNode, val errorMessage: String? = null, val isSubmitting: Boolean = false) : FileOpDialog()
+    data class Duplicate(val node: FileNode, val errorMessage: String? = null, val resultMessage: String? = null, val isSubmitting: Boolean = false) : FileOpDialog()
 
     /** Export confirmation for a file-tree file or folder. */
     data class Export(val node: FileNode, val resultMessage: String? = null, val failed: Boolean = false, val isSubmitting: Boolean = false) : FileOpDialog()
@@ -78,6 +81,7 @@ sealed class FileOpDialog {
     data class SaveAs(
         val suggestedName: String,
         val errorMessage: String? = null,
+        val resultMessage: String? = null,
         val isSubmitting: Boolean = false,
     ) : FileOpDialog()
 }

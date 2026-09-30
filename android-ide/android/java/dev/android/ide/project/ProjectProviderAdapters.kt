@@ -170,12 +170,13 @@ class ProjectMetadataAdapterImpl(
     }
 
     override suspend fun writeIdentity(project: ProjectIdentity): OperationReport {
+        val existing = saf.readProjectMetadataFile(project.location.stableId, "project.json")
         val manifest = JSONObject().apply {
-            put("schemaVersion", 1)
-            put("project", JSONObject().apply {
+            put("schemaVersion", existing?.optInt("schemaVersion", 1) ?: 1)
+            put("project", (existing?.optJSONObject("project") ?: JSONObject()).apply {
                 put("name", project.name)
                 put("description", project.description)
-                put("createdAt", project.registeredAt.toEpochMilli())
+                if (!has("createdAt")) put("createdAt", project.registeredAt.toEpochMilli())
                 put("updatedAt", System.currentTimeMillis())
             })
         }

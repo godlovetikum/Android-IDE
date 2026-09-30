@@ -39,46 +39,47 @@ internal fun CreateNewProjectDialog(
     onLocation: (String) -> String,
     validName: (String) -> Boolean,
 ) {
+    val acquiredId = state.acquiredProjectId
     if (!reviewVisible) {
         AlertDialog(
             onDismissRequest = { if (!state.operationInProgress) onDismiss() },
-            title = { Text("Create new project") },
+            title = { Text("Choose a project template") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Choose a starting point for your project.", style = MaterialTheme.typography.bodyMedium)
                     CreateTemplateChoices(template, onTemplateChange, state.operationInProgress)
-                    OutlinedTextField(name, onNameChange, label = { Text("Project name") }, enabled = !state.operationInProgress, singleLine = true)
-                    OutlinedTextField(description, onDescriptionChange, label = { Text("Description") }, enabled = !state.operationInProgress, minLines = 2)
-                    AcquisitionPicker(destination, onLocation, "Choose storage location", "Choose another location", onDestination, state.operationInProgress)
-                    AcquisitionStatus(
-                        message = when {
-                            state.operationInProgress -> "Creating project…"
-                            name.isBlank() -> "Enter a project name"
-                            !validName(name) -> "Use a valid project name"
-                            destination == null -> "Choose a storage location"
-                            else -> "Ready"
-                        },
-                        busy = state.operationInProgress,
-                    )
                 }
             },
-            confirmButton = { Button(onClick = { onReviewVisibleChange(true) }, enabled = !state.operationInProgress && validName(name) && destination != null) { Text("Review") } },
+            confirmButton = { Button(onClick = { onReviewVisibleChange(true) }, enabled = !state.operationInProgress) { Text("Continue") } },
             dismissButton = { TextButton(onClick = onDismiss, enabled = !state.operationInProgress) { Text("Cancel") } },
         )
     } else {
         AlertDialog(
             onDismissRequest = { if (!state.operationInProgress) onReviewVisibleChange(false) },
-            title = { Text("Review project") },
+            title = { Text(if (acquiredId != null) "Project ready" else "Project details") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(name, style = MaterialTheme.typography.titleMedium)
-                    Text(template.title, style = MaterialTheme.typography.bodyMedium)
-                    if (description.isNotBlank()) Text(description, style = MaterialTheme.typography.bodyMedium)
-                    destination?.let { Text(onLocation(it), style = MaterialTheme.typography.bodySmall) }
-                    AcquisitionStatus(state.operationReport?.message ?: "Ready", state.operationInProgress)
+                    if (acquiredId != null) {
+                        Text(state.operationReport?.message ?: "Project created successfully.", color = MaterialTheme.colorScheme.primary)
+                    } else {
+                        Text(template.title, style = MaterialTheme.typography.bodyMedium)
+                        OutlinedTextField(name, onNameChange, label = { Text("Project name") }, enabled = !state.operationInProgress, singleLine = true)
+                        OutlinedTextField(description, onDescriptionChange, label = { Text("Description") }, enabled = !state.operationInProgress, minLines = 2)
+                        AcquisitionPicker(destination, onLocation, "Choose storage location", "Choose another location", onDestination, state.operationInProgress)
+                        AcquisitionStatus(
+                            message = when {
+                                state.operationInProgress -> "Creating project…"
+                                name.isBlank() -> "Enter a project name"
+                                !validName(name) -> "Use a valid project name"
+                                destination == null -> "Choose a storage location"
+                                else -> "Ready"
+                            },
+                            busy = state.operationInProgress,
+                        )
+                    }
                 }
             },
             confirmButton = {
-                val acquiredId = state.acquiredProjectId
                 Button(onClick = {
                     if (acquiredId != null) {
                         viewModel.dismissAcquisitionPrompt()
@@ -90,7 +91,7 @@ internal fun CreateNewProjectDialog(
                     Text(if (acquiredId != null) "Open project" else "Create project")
                 }
             },
-            dismissButton = { TextButton(onClick = { if (state.acquiredProjectId == null) onReviewVisibleChange(false) else { viewModel.dismissAcquisitionPrompt(); onDismiss() } }, enabled = !state.operationInProgress) { Text(if (state.acquiredProjectId == null) "Back" else "Close") } },
+            dismissButton = { TextButton(onClick = { if (acquiredId == null) onReviewVisibleChange(false) else { viewModel.dismissAcquisitionPrompt(); onDismiss() } }, enabled = !state.operationInProgress) { Text(if (acquiredId == null) "Back" else "Close") } },
         )
     }
 }
@@ -125,20 +126,24 @@ internal fun LoadExistingProjectDialog(
     val acquiredId = state.acquiredProjectId
     AlertDialog(
         onDismissRequest = { if (!state.operationInProgress) onCancel() },
-        title = { Text("Load an existing project") },
+        title = { Text(if (acquiredId != null) "Project ready" else "Load an existing project") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                folderUri?.let { Text(onLocation(it), style = MaterialTheme.typography.bodySmall) }
-                OutlinedTextField(description, onDescriptionChange, label = { Text("Description") }, enabled = !state.operationInProgress, minLines = 2)
-                AcquisitionStatus(
-                    message = state.operationReport?.message ?: when {
-                        state.operationInProgress -> "Loading project…"
-                        inspection == null -> "Inspecting project location…"
-                        !ready -> "Choose another folder"
-                        else -> "Ready"
-                    },
-                    busy = state.operationInProgress || inspection == null,
-                )
+                if (acquiredId != null) {
+                    Text(state.operationReport?.message ?: "Project loaded successfully.", color = MaterialTheme.colorScheme.primary)
+                } else {
+                    folderUri?.let { Text(onLocation(it), style = MaterialTheme.typography.bodySmall) }
+                    OutlinedTextField(description, onDescriptionChange, label = { Text("Description") }, enabled = !state.operationInProgress, minLines = 2)
+                    AcquisitionStatus(
+                        message = state.operationReport?.message ?: when {
+                            state.operationInProgress -> "Loading project…"
+                            inspection == null -> "Inspecting project location…"
+                            !ready -> "Choose another folder"
+                            else -> "Ready"
+                        },
+                        busy = state.operationInProgress || inspection == null,
+                    )
+                }
             }
         },
         confirmButton = {
@@ -177,23 +182,27 @@ internal fun ImportZipProjectDialog(
     val acquiredId = state.acquiredProjectId
     AlertDialog(
         onDismissRequest = { if (!state.operationInProgress) onCancel() },
-        title = { Text("Import ZIP project") },
+        title = { Text(if (acquiredId != null) "Project ready" else "Import ZIP project") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                archiveUri?.let { Text(onLocation(it), style = MaterialTheme.typography.bodySmall) }
-                OutlinedTextField(name, onNameChange, label = { Text("Project name") }, enabled = !state.operationInProgress, singleLine = true)
-                OutlinedTextField(description, onDescriptionChange, label = { Text("Description") }, enabled = !state.operationInProgress, minLines = 2)
-                AcquisitionPicker(destination, onLocation, "Choose storage location", "Choose another location", onDestination, state.operationInProgress)
-                AcquisitionStatus(
-                    state.operationReport?.message ?: when {
-                        state.operationInProgress -> "Importing project…"
-                        archiveUri == null -> "Choose a ZIP archive"
-                        !validName(name) -> "Enter a valid project name"
-                        destination == null -> "Choose a storage location"
-                        else -> "Ready"
-                    },
-                    state.operationInProgress,
-                )
+                if (acquiredId != null) {
+                    Text(state.operationReport?.message ?: "Project imported successfully.", color = MaterialTheme.colorScheme.primary)
+                } else {
+                    archiveUri?.let { Text(onLocation(it), style = MaterialTheme.typography.bodySmall) }
+                    OutlinedTextField(name, onNameChange, label = { Text("Project name") }, enabled = !state.operationInProgress, singleLine = true)
+                    OutlinedTextField(description, onDescriptionChange, label = { Text("Description") }, enabled = !state.operationInProgress, minLines = 2)
+                    AcquisitionPicker(destination, onLocation, "Choose storage location", "Choose another location", onDestination, state.operationInProgress)
+                    AcquisitionStatus(
+                        state.operationReport?.message ?: when {
+                            state.operationInProgress -> "Importing project…"
+                            archiveUri == null -> "Choose a ZIP archive"
+                            !validName(name) -> "Enter a valid project name"
+                            destination == null -> "Choose a storage location"
+                            else -> "Ready"
+                        },
+                        state.operationInProgress,
+                    )
+                }
             }
         },
         confirmButton = {
