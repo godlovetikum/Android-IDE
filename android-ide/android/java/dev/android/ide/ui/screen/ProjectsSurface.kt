@@ -319,6 +319,10 @@ fun ProjectsSurface(
                         onDuplicate = onDuplicateProject,
                         onRelocate = onRelocateProject,
                         onCopyRemoteUrls = onCopyRemoteUrls,
+                        onOpenGit = { id ->
+                            viewModel.selectProject(id)
+                            viewModel.navigate(dev.android.ide.contracts.Surface.GIT)
+                        },
                         onOpenTerminal = onOpenTerminal,
                         operationInProgress = listBusy,
                         operationReport = state.operationReport,
@@ -409,6 +413,7 @@ private fun ProjectCard(
     onDuplicate: (String) -> Unit,
     onRelocate: (String) -> Unit,
     onCopyRemoteUrls: (String) -> Unit,
+    onOpenGit: (String) -> Unit,
     onOpenTerminal: (String) -> Unit,
     operationInProgress: Boolean,
     operationReport: OperationReport?,
@@ -487,7 +492,7 @@ private fun ProjectCard(
                         onCopyPath = { onCopyPath(project.id) },
                         onCopyRemoteUrls = { onCopyRemoteUrls(project.id) },
                         onOpenEditor = { onOpen(project.id) },
-                        onOpenGit = { viewModel.selectProject(project.id); viewModel.navigate(dev.android.ide.contracts.Surface.GIT) },
+                        onOpenGit = { onOpenGit(project.id) },
                         onOpenTerminal = { onOpenTerminal(project.id) },
                         onOpenBrowser = { onFeedback("Browser preview is coming soon") },
                         onRemoveFromRegistry = { onPrepareOperation(); onSelect(project.id); confirmRemove = true },
