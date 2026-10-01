@@ -1,7 +1,7 @@
 // android-ide/android/java/dev/android/ide/ui/components/EditorTabBar.kt
 //
 // Horizontal scrollable tab bar showing open editor files.
-// Each tab has a ••• overflow button with Save / Close / Close Others / Close All.
+// Each tab has a ••• overflow button with Locate / Save / Close / Close others / Close all.
 // A "+" button at the far right opens a new blank tab.
 
 package dev.android.ide.ui.components
@@ -13,8 +13,11 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PushPin
+import androidx.compose.material.icons.filled.Save
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -32,6 +35,7 @@ fun EditorTabBar(
     onTabCloseSafe: (String) -> Unit,
     onTabSave: (String) -> Unit,
     onTabPin: (String) -> Unit,
+    onTabLocate: (String) -> Unit,
     onCloseOthers: (String) -> Unit,
     onCloseAll: () -> Unit,
     onNewBlankTab: () -> Unit,
@@ -60,6 +64,7 @@ fun EditorTabBar(
                     onCloseSafe  = { onTabCloseSafe(tab.id) },
                     onSave       = { onTabSave(tab.id) },
                     onPin        = { onTabPin(tab.id) },
+                    onLocate     = { onTabLocate(tab.id) },
                     onCloseOthers = { onCloseOthers(tab.id) },
                     onCloseAll   = onCloseAll,
                 )
@@ -96,6 +101,7 @@ private fun EditorTabItem(
     onCloseSafe: () -> Unit,
     onSave: () -> Unit,
     onPin: () -> Unit,
+    onLocate: () -> Unit,
     onCloseOthers: () -> Unit,
     onCloseAll: () -> Unit,
 ) {
@@ -176,26 +182,34 @@ private fun EditorTabItem(
                 ) {
                     if (tab.isTemporary) {
                         DropdownMenuItem(
-                            text    = { Text("Keep Open") },
+                            leadingIcon = { Icon(Icons.Default.PushPin, contentDescription = null) },
+                            text    = { Text(if (tab.isPinned) "Unpin" else "Pin") },
                             onClick = { menuOpen = false; onPin() },
                         )
                     }
                     if (!tab.isBlank) {
                         DropdownMenuItem(
+                            leadingIcon = { Icon(Icons.Default.MyLocation, contentDescription = null) },
+                            text    = { Text("Locate") },
+                            onClick = { menuOpen = false; onLocate() },
+                        )
+                        DropdownMenuItem(
+                            leadingIcon = { Icon(Icons.Default.Save, contentDescription = null) },
                             text    = { Text("Save") },
                             onClick = { menuOpen = false; onSave() },
                         )
                     }
                     DropdownMenuItem(
+                        leadingIcon = { Icon(Icons.Default.Close, contentDescription = null) },
                         text    = { Text("Close") },
                         onClick = { menuOpen = false; onCloseSafe() },
                     )
                     DropdownMenuItem(
-                        text    = { Text("Close Others") },
+                        text    = { Text("Close others") },
                         onClick = { menuOpen = false; onCloseOthers() },
                     )
                     DropdownMenuItem(
-                        text    = { Text("Close All") },
+                        text    = { Text("Close all") },
                         onClick = { menuOpen = false; onCloseAll() },
                     )
                 }

@@ -1,13 +1,13 @@
 package dev.android.ide.ui
 
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.RemoveCircleOutline
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Terminal
@@ -73,7 +73,7 @@ fun ProjectActionsMenu(
         )
         DropdownMenuItem(
             leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
-            text = { Text("Copy and duplicate") },
+            text = { Text("Duplicate project") },
             enabled = enabled,
             onClick = { onDismiss(); onDuplicate() },
         )
@@ -85,14 +85,14 @@ fun ProjectActionsMenu(
         )
         HorizontalDivider()
         DropdownMenuItem(
-            leadingIcon = { Icon(Icons.Default.Code, contentDescription = null) },
+            leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
             text = { Text("Copy storage path") },
             enabled = enabled,
             onClick = { onDismiss(); onCopyPath() },
         )
         HorizontalDivider()
         DropdownMenuItem(
-            leadingIcon = { Icon(Icons.Default.Code, contentDescription = null) },
+            leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
             text = { Text("Open in editor") },
             enabled = enabled,
             onClick = { onDismiss(); onOpenEditor() },
@@ -111,7 +111,7 @@ fun ProjectActionsMenu(
         )
         HorizontalDivider()
         DropdownMenuItem(
-            leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
+            leadingIcon = { Icon(Icons.Default.RemoveCircleOutline, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
             text = { Text("Remove from registry", color = MaterialTheme.colorScheme.onSurfaceVariant) },
             enabled = enabled,
             onClick = { onDismiss(); onRemoveFromRegistry() },

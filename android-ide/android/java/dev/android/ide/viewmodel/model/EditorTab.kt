@@ -22,7 +22,7 @@ import java.util.UUID
  *                  A temporary tab is replaced by the next single-tapped file instead
  *                  of accumulating in the tab bar. It becomes permanent on: first edit
  *                  (any keystroke), explicit pin action (double-tap file tree item or
- *                  "Keep Open" from the tab overflow menu), or "Save As".
+ *                  "Pin" from the tab overflow menu), or "Save As".
  *                  Temporary tabs are rendered with an italic display name.
  * [isPinned]       Durable pin. Pinned tabs survive bulk-close operations and
  *                  are persisted with the workspace.

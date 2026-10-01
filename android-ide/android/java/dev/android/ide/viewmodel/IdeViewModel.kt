@@ -86,7 +86,7 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
     private var fileSearchJob: Job? = null
     private var projectSearchJob: Job? = null
     private var projectSearchGeneration = 0L
-    private val searchBatchSize = 32
+    private val searchBatchSize = 16
 
     private val safRepository      = SafRepository(application)
     private val storageAdapter     = ProjectStorageAdapterImpl(safRepository)
@@ -1962,34 +1962,54 @@ build/
 
     fun showFileSearch() {
         fileSearchJob?.cancel()
-        _uiState.update { it.copy(isSearchVisible = true, isContentSearchVisible = false, fileSearchQuery = "", fileSearchResults = emptyList()) }
+        _uiState.update {
+            it.copy(
+                isSearchVisible = true,
+                isContentSearchVisible = false,
+                fileSearchQuery = "",
+                fileSearchResults = emptyList(),
+                fileSearchRunning = false,
+            )
+        }
     }
 
     fun hideFileSearch() {
         fileSearchJob?.cancel()
         fileSearchJob = null
-        _uiState.update { it.copy(isSearchVisible = false, fileSearchQuery = "", fileSearchResults = emptyList()) }
+        _uiState.update {
+            it.copy(
+                isSearchVisible = false,
+                fileSearchQuery = "",
+                fileSearchResults = emptyList(),
+                fileSearchRunning = false,
+            )
+        }
+    }
+
+    fun setFileSearchIncludeFolders(enabled: Boolean) {
+        if (_uiState.value.fileSearchIncludeFolders == enabled) return
+        _uiState.update { it.copy(fileSearchIncludeFolders = enabled) }
+        val query = _uiState.value.fileSearchQuery
+        if (query.isNotBlank()) searchFiles(query)
     }
 
     fun searchFiles(query: String) {
         fileSearchJob?.cancel()
         fileSearchJob = null
-        _uiState.update { it.copy(fileSearchQuery = query) }
+        _uiState.update {
+            it.copy(
+                fileSearchQuery = query,
+                fileSearchResults = emptyList(),
+                fileSearchRunning = query.isNotBlank(),
+            )
+        }
         if (query.isBlank()) {
-            _uiState.update { it.copy(fileSearchResults = emptyList()) }
+            _uiState.update { it.copy(fileSearchRunning = false) }
             return
         }
         val results = mutableListOf<FileSearchResult>()
-        fun searchNodes(nodes: List<FileNode>, path: String) {
-            nodes.forEach { node ->
-                val nodePath = if (path.isEmpty()) node.displayName else "$path/${node.displayName}"
-                if (node.displayName.contains(query, ignoreCase = true)) {
-                    results += FileSearchResult(node.documentUri, node.displayName, "/$nodePath", isDirectory = node.isDirectory)
-                }
-                if (node.isDirectory) searchNodes(node.children, nodePath)
-            }
-        }
         fileSearchJob = viewModelScope.launch {
+            val includeFolders = _uiState.value.fileSearchIncludeFolders
             val rootUri = _uiState.value.projectRootUri
             var published = 0
             suspend fun publishFilenameResults(force: Boolean = false) {
@@ -2003,16 +2023,39 @@ build/
                 safRepository.listChildren(uri).forEach { node ->
                     val nodePath = if (path.isEmpty()) node.displayName else "$path/${node.displayName}"
                     if (node.displayName == ".git" || node.displayName in setOf(ApplicationIdentity.TARGET_METADATA_DIRECTORY, ApplicationIdentity.LEGACY_METADATA_DIRECTORY)) return@forEach
-                    if (node.displayName.contains(query, ignoreCase = true)) {
+                    if ((!node.isDirectory || includeFolders) && node.displayName.contains(query, ignoreCase = true)) {
                         results += FileSearchResult(node.documentUri, node.displayName, "/$nodePath", isDirectory = node.isDirectory)
                         publishFilenameResults()
                     }
                     if (node.isDirectory) scan(node.documentUri, nodePath)
                 }
             }
-            if (rootUri != null) scan(rootUri, "") else searchNodes(_uiState.value.fileTree, "")
+            if (rootUri != null) {
+                scan(rootUri, "")
+            } else {
+                suspend fun searchNodes(nodes: List<FileNode>, path: String) {
+                    nodes.forEach { node ->
+                        val nodePath = if (path.isEmpty()) node.displayName else "$path/${node.displayName}"
+                        if (node.displayName != ".git" && node.displayName !in setOf(ApplicationIdentity.TARGET_METADATA_DIRECTORY, ApplicationIdentity.LEGACY_METADATA_DIRECTORY)) {
+                            if ((!node.isDirectory || includeFolders) && node.displayName.contains(query, ignoreCase = true)) {
+                                results += FileSearchResult(node.documentUri, node.displayName, "/$nodePath", isDirectory = node.isDirectory)
+                                publishFilenameResults()
+                            }
+                            if (node.isDirectory) searchNodes(node.children, nodePath)
+                        }
+                    }
+                }
+                searchNodes(_uiState.value.fileTree, "")
+            }
             publishFilenameResults(force = true)
-            if (_uiState.value.fileSearchQuery == query) _uiState.update { it.copy(fileSearchResults = results.distinctBy { result -> result.documentUri }.sortedBy { it.relativePath.lowercase() }) }
+            if (_uiState.value.fileSearchQuery == query) {
+                _uiState.update {
+                    it.copy(
+                        fileSearchResults = results.distinctBy { result -> result.documentUri }.sortedBy { it.relativePath.lowercase() },
+                        fileSearchRunning = false,
+                    )
+                }
+            }
         }
     }
 

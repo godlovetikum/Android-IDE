@@ -17,7 +17,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Archive
-import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
@@ -356,9 +356,9 @@ fun ProjectsSurface(
             modifier = Modifier.fillMaxWidth().padding(8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            ProjectAcquisitionAction(Icons.Default.Code, "Create New Project") { addActionsExpanded = false; onCreateProject(null) }
-            ProjectAcquisitionAction(Icons.Default.FolderOpen, "Load an Existing Project") { addActionsExpanded = false; onImportFolder() }
-            ProjectAcquisitionAction(Icons.Default.Archive, "Import from Zip Archive") { addActionsExpanded = false; onImportZip() }
+            ProjectAcquisitionAction(Icons.Default.CreateNewFolder, "Create new project") { addActionsExpanded = false; onCreateProject(null) }
+            ProjectAcquisitionAction(Icons.Default.FolderOpen, "Load an existing project") { addActionsExpanded = false; onImportFolder() }
+            ProjectAcquisitionAction(Icons.Default.Archive, "Import from ZIP archive") { addActionsExpanded = false; onImportZip() }
         }
         }
     }

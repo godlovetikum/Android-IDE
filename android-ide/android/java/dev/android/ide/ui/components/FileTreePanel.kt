@@ -4,8 +4,8 @@
 //
 // Features:
 //   • Root project node with its own action menu
-//   • File menu: Rename, Copy Path, Copy, Cut, Delete, Select
-//   • Folder menu: New File, New Folder, Import, Rename, Copy Path, Export, Copy, Cut, Paste, Delete
+//   • File menu: Rename, Copy path, Copy, Cut, Delete, Select
+//   • Folder menu: New file, New folder, Import, Rename, Copy path, Export, Copy, Cut, Paste, Delete
 //   • Active file highlighting
 //   • Multi-selection mode with exit button
 //   • .git folder filtering (controlled by hideGitFolder)
@@ -36,6 +36,9 @@ import androidx.compose.material.icons.filled.CheckBoxOutlineBlank
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.ContentCut
+import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
@@ -49,6 +52,7 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.*
@@ -64,6 +68,7 @@ import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -78,6 +83,7 @@ import dev.android.ide.ui.theme.LocalIdeColors
 import dev.android.ide.viewmodel.model.FileNode
 import dev.android.ide.viewmodel.model.FileSearchResult
 import dev.android.ide.viewmodel.model.ancestorsOf
+import compose.icons.simpleicons.SimpleIcons
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -99,6 +105,8 @@ fun FileTreePanel(
     isContentSearchVisible: Boolean,
     fileSearchQuery: String,
     fileSearchResults: List<FileSearchResult>,
+    fileSearchIncludeFolders: Boolean = false,
+    fileSearchRunning: Boolean = false,
     contentSearchQuery: String,
     contentSearchResults: List<FileSearchResult>,
     contentSearchMatchCase: Boolean,
@@ -142,7 +150,7 @@ fun FileTreePanel(
     onReplaceProjectContents: (String, String, List<String>) -> Unit,
     onReplaceFileContents: (String, String, String, String) -> Unit,
     onClearContentSearchResults: () -> Unit,
-    onHideFileSearch: () -> Unit,
+    onFileSearchIncludeFoldersChange: (Boolean) -> Unit = {},
     onSearchFileSelect: (FileSearchResult) -> Unit,
     onExecuteContentSearch: () -> Unit = {},
     contentSearchCompletedQuery: String? = null,
@@ -157,6 +165,7 @@ fun FileTreePanel(
     val density = LocalDensity.current
     val imeBottomPx = WindowInsets.ime.getBottom(density)
     val imeTrailingPadding = with(density) { (imeBottomPx * 1.2f).toDp() }
+    val sidebarBottomPadding = maxOf(imeTrailingPadding, (LocalConfiguration.current.screenHeightDp.dp * 0.28f))
 
     when {
         isContentSearchVisible -> ProjectContentSearchPanel(
@@ -186,9 +195,11 @@ fun FileTreePanel(
         isSearchVisible -> FilenameSearchPanel(
             query = fileSearchQuery,
             results = fileSearchResults,
+            includeFolders = fileSearchIncludeFolders,
+            running = fileSearchRunning,
+            onIncludeFoldersChange = onFileSearchIncludeFoldersChange,
             onQueryChange = onSearchQueryChange,
             onSelect = onSearchFileSelect,
-            onClose = onHideFileSearch,
             modifier = modifier,
         )
 
@@ -227,7 +238,7 @@ fun FileTreePanel(
             LazyColumn(
                 state = treeListState,
                 modifier = modifier,
-                contentPadding = PaddingValues(bottom = imeTrailingPadding),
+                contentPadding = PaddingValues(bottom = sidebarBottomPadding),
             ) {
                 // Exit selection mode banner
                 if (isMultiSelectMode) {
@@ -610,21 +621,21 @@ private fun FileTreeRow(
                     // ── Folder menu ──────────────────────────────────────
                     DropdownMenuItem(
                         leadingIcon = { Icon(Icons.Default.Article, null) },
-                        text    = { Text("New File") },
+                        text    = { Text("New file") },
                         onClick = { menuOpen = false; onShowCreateFileDialog(node) },
                     )
                     DropdownMenuItem(
                         leadingIcon = { Icon(Icons.Default.CreateNewFolder, null) },
-                        text    = { Text("New Folder") },
+                        text    = { Text("New folder") },
                         onClick = { menuOpen = false; onShowCreateFolderDialog(node) },
                     )
                     DropdownMenuItem(
                         leadingIcon = { Icon(Icons.Default.FolderOpen, null) },
-                        text    = { Text("Import Files") },
+                        text    = { Text("Import files") },
                         onClick = { menuOpen = false; onImportFilesAt(node) },
                     )
                     DropdownMenuItem(
-                        leadingIcon = { Icon(Icons.Default.Code, null) },
+                        leadingIcon = { Icon(Icons.Default.ContentCopy, null) },
                         text    = { Text("Duplicate") },
                         onClick = { menuOpen = false; onShowDuplicateDialog(node) },
                     )
@@ -635,47 +646,41 @@ private fun FileTreeRow(
                         onClick = { menuOpen = false; onShowRenameDialog(node) },
                     )
                     DropdownMenuItem(
-                        leadingIcon = { Icon(Icons.Default.Code, null) },
-                        text    = { Text("Copy Path") },
+                        leadingIcon = { Icon(Icons.Default.ContentCopy, null) },
+                        text    = { Text("Copy path") },
                         onClick = { menuOpen = false; onCopyPath(node.documentUri) },
                     )
                     DropdownMenuItem(
                         leadingIcon = { Icon(Icons.Default.Terminal, null) },
-                        text = { Text("Open Terminal") },
+                        text = { Text("Open terminal") },
                         onClick = { menuOpen = false; onOpenTerminalAt(node) },
                     )
                     DropdownMenuItem(
+                        leadingIcon = { Icon(Icons.Default.Share, null) },
                         text    = { Text("Export\u2026") },
                         onClick = { menuOpen = false; onExportDirectory(node) },
                     )
                     HorizontalDivider()
                     DropdownMenuItem(
-                        leadingIcon = { Icon(Icons.Default.Code, null) },
+                        leadingIcon = { Icon(Icons.Default.ContentCopy, null) },
                         text    = { Text("Copy") },
                         onClick = { menuOpen = false; onCopyNode(node) },
                     )
                     DropdownMenuItem(
-                        leadingIcon = { Icon(Icons.Default.Code, null) },
+                        leadingIcon = { Icon(Icons.Default.ContentCut, null) },
                         text    = { Text("Cut") },
                         onClick = { menuOpen = false; onCutNode(node) },
                     )
                     if (hasClipboard) {
                         DropdownMenuItem(
-                            text = {
-                                val verb  = if (clipboardIsCut) "Move" else "Copy"
-                                val count = clipboardItems.size
-                                if (count == 1) {
-                                    Text("$verb \u201c${clipboardItems[0].displayName}\u201d here")
-                                } else {
-                                    Text("$verb $count items here")
-                                }
-                            },
+                            leadingIcon = { Icon(Icons.Default.ContentPaste, null) },
+                            text = { Text("Paste") },
                             onClick = { menuOpen = false; onPasteInto(node) },
                         )
                     }
                     HorizontalDivider()
                     DropdownMenuItem(
-                        leadingIcon = { Icon(Icons.Default.Close, null, tint = LocalIdeColors.current.error) },
+                        leadingIcon = { Icon(Icons.Default.Delete, null, tint = LocalIdeColors.current.error) },
                         text    = { Text("Delete", color = LocalIdeColors.current.error) },
                         onClick = { menuOpen = false; onShowDeleteDialog(node) },
                     )
@@ -693,29 +698,29 @@ private fun FileTreeRow(
                         onClick = { menuOpen = false; onShowRenameDialog(node) },
                     )
                     DropdownMenuItem(
-                        leadingIcon = { Icon(Icons.Default.Code, null) },
+                        leadingIcon = { Icon(Icons.Default.ContentCopy, null) },
                         text    = { Text("Duplicate") },
                         onClick = { menuOpen = false; onShowDuplicateDialog(node) },
                     )
                     DropdownMenuItem(
-                        leadingIcon = { Icon(Icons.Default.Code, null) },
-                        text    = { Text("Copy Path") },
+                        leadingIcon = { Icon(Icons.Default.ContentCopy, null) },
+                        text    = { Text("Copy path") },
                         onClick = { menuOpen = false; onCopyPath(node.documentUri) },
                     )
                     HorizontalDivider()
                     DropdownMenuItem(
-                        leadingIcon = { Icon(Icons.Default.Code, null) },
+                        leadingIcon = { Icon(Icons.Default.ContentCopy, null) },
                         text    = { Text("Copy") },
                         onClick = { menuOpen = false; onCopyNode(node) },
                     )
                     DropdownMenuItem(
-                        leadingIcon = { Icon(Icons.Default.Code, null) },
+                        leadingIcon = { Icon(Icons.Default.ContentCut, null) },
                         text    = { Text("Cut") },
                         onClick = { menuOpen = false; onCutNode(node) },
                     )
                     HorizontalDivider()
                     DropdownMenuItem(
-                        leadingIcon = { Icon(Icons.Default.Close, null, tint = LocalIdeColors.current.error) },
+                        leadingIcon = { Icon(Icons.Default.Delete, null, tint = LocalIdeColors.current.error) },
                         text    = { Text("Delete", color = LocalIdeColors.current.error) },
                         onClick = { menuOpen = false; onShowDeleteDialog(node) },
                     )
@@ -735,9 +740,11 @@ private fun FileTreeRow(
 private fun FilenameSearchPanel(
     query: String,
     results: List<FileSearchResult>,
+    includeFolders: Boolean,
+    running: Boolean,
+    onIncludeFoldersChange: (Boolean) -> Unit,
     onQueryChange: (String) -> Unit,
     onSelect: (FileSearchResult) -> Unit,
-    onClose: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalIdeColors.current
@@ -762,7 +769,26 @@ private fun FilenameSearchPanel(
             },
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
         )
-        if (query.isNotEmpty() && results.isEmpty()) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            FilterChip(
+                selected = includeFolders,
+                onClick = { onIncludeFoldersChange(!includeFolders) },
+                label = { Text("Include folders") },
+                leadingIcon = if (includeFolders) {
+                    { Icon(Icons.Default.FolderOpen, contentDescription = null) }
+                } else null,
+            )
+            if (running) {
+                Spacer(Modifier.width(10.dp))
+                CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                Spacer(Modifier.width(6.dp))
+                Text("Searching…", style = MaterialTheme.typography.labelSmall, color = colors.textSecondary)
+            }
+        }
+        if (!running && query.isNotEmpty() && results.isEmpty()) {
             Text(
                 "No filenames matching “$query”",
                 modifier = Modifier.fillMaxWidth().padding(16.dp),
@@ -772,15 +798,12 @@ private fun FilenameSearchPanel(
         } else {
             LazyColumn(
                 modifier = Modifier.weight(1f).fillMaxWidth(),
-                contentPadding = PaddingValues(bottom = imeBottomPadding + 12.dp),
+                contentPadding = PaddingValues(bottom = maxOf(imeBottomPadding + 12.dp, LocalConfiguration.current.screenHeightDp.dp * 0.28f)),
             ) {
                 itemsIndexed(results, key = { index, result -> "${result.documentUri}:$index" }) { _, result ->
                     SearchResultRow(result, onSelect)
                 }
             }
-        }
-        TextButton(onClick = onClose, modifier = Modifier.padding(horizontal = 8.dp)) {
-            Text("Close search")
         }
     }
 }
@@ -927,7 +950,8 @@ private fun ProjectContentSearchPanel(
                 Spacer(Modifier.width(10.dp))
                 Text("Searching project…", style = MaterialTheme.typography.bodySmall, color = colors.textSecondary)
             }
-        } else if (hasCurrentResults) {
+        }
+        if (query.isNotBlank()) {
             warning?.let {
                 Text(
                     it,
@@ -937,7 +961,7 @@ private fun ProjectContentSearchPanel(
                 )
             }
             if (visibleResults.isEmpty()) {
-                Text(
+                if (!running && hasCurrentResults) Text(
                     if (results.isNotEmpty()) "All results are hidden." else "No matches found.",
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
                     style = MaterialTheme.typography.bodySmall,
@@ -946,7 +970,7 @@ private fun ProjectContentSearchPanel(
             } else {
                 LazyColumn(
                     modifier = Modifier.weight(1f).fillMaxWidth(),
-                    contentPadding = PaddingValues(bottom = imeBottomPadding + 12.dp),
+                    contentPadding = PaddingValues(bottom = maxOf(imeBottomPadding + 12.dp, LocalConfiguration.current.screenHeightDp.dp * 0.28f)),
                 ) {
                     item(key = "content-search-summary") {
                         Text(
@@ -961,14 +985,21 @@ private fun ProjectContentSearchPanel(
                         val expanded = documentUri in expandedUris
                         item(key = "content-search-file:$documentUri") {
                             Row(
-                                modifier = Modifier.fillMaxWidth().padding(start = 4.dp, end = 4.dp, top = 2.dp, bottom = 2.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .combinedClickable(
+                                        onClick = {
+                                            expandedUris = if (expanded) expandedUris - documentUri else expandedUris + documentUri
+                                        },
+                                    )
+                                    .padding(start = 4.dp, end = 4.dp, top = 2.dp, bottom = 2.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
-                                IconButton(onClick = {
-                                    expandedUris = if (expanded) expandedUris - documentUri else expandedUris + documentUri
-                                }, modifier = Modifier.size(36.dp)) {
-                                    Icon(if (expanded) Icons.Default.ExpandMore else Icons.Default.ChevronRight, contentDescription = if (expanded) "Collapse ${first.displayName}" else "Expand ${first.displayName}")
-                                }
+                                Icon(
+                                    if (expanded) Icons.Default.ExpandMore else Icons.Default.ChevronRight,
+                                    contentDescription = if (expanded) "Collapse ${first.displayName}" else "Expand ${first.displayName}",
+                                    modifier = Modifier.size(36.dp).padding(8.dp),
+                                )
                                 FileTypeBadge(first.displayName, muted = false, accent = false)
                                 Spacer(Modifier.width(8.dp))
                                 Text(first.displayName, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Medium)
@@ -1009,11 +1040,84 @@ private fun ProjectContentSearchPanel(
 @Composable
 private fun FileTypeBadge(displayName: String, muted: Boolean, accent: Boolean) {
     val kind = EditorLanguageRegistry.iconKindForFileName(displayName)
-    val icon = when (kind) {
+    val fileName = displayName.substringAfterLast('/').lowercase()
+    val extension = fileName.substringAfterLast('.', "")
+    val icon = when {
+        fileName == "androidmanifest.xml" -> SimpleIcons.Android
+        fileName == "pubspec.yaml" || fileName == "analysis_options.yaml" -> SimpleIcons.Flutter
+        fileName == "package.json" || fileName == "package-lock.json" || fileName == "npm-shrinkwrap.json" -> SimpleIcons.Npm
+        fileName == "yarn.lock" -> SimpleIcons.Yarn
+        fileName == "tsconfig.json" || fileName == "tsconfig.base.json" -> SimpleIcons.Typescript
+        fileName == "jsconfig.json" -> SimpleIcons.Javascript
+        fileName == "angular.json" -> SimpleIcons.Angular
+        fileName == "firebase.json" -> SimpleIcons.Firebase
+        fileName == "supabase.json" -> SimpleIcons.Supabase
+        fileName == "dockerfile" || fileName == "containerfile" || fileName.startsWith("docker-compose") -> SimpleIcons.Docker
+        fileName == "webpack.config.js" || fileName == "webpack.config.ts" || fileName == "webpack.config.cjs" -> SimpleIcons.Webpack
+        fileName == "rollup.config.js" || fileName == "rollup.config.ts" -> SimpleIcons.Rollup
+        fileName == "babel.config.js" || fileName == "babel.config.cjs" || fileName == ".babelrc" -> SimpleIcons.Babel
+        fileName == "tailwind.config.js" || fileName == "tailwind.config.ts" || fileName == "tailwind.config.cjs" -> SimpleIcons.Tailwindcss
+        fileName == "build.gradle" || fileName == "build.gradle.kts" || fileName == "settings.gradle" || fileName == "settings.gradle.kts" || fileName == "gradle.properties" || fileName == "gradlew" || fileName == "gradlew.bat" -> SimpleIcons.Gradle
+        fileName == "pom.xml" -> SimpleIcons.Apachemaven
+        fileName == "podfile" || fileName == "podfile.lock" -> SimpleIcons.Cocoapods
+        fileName == "package.swift" || extension == "xcodeproj" || fileName == "info.plist" -> SimpleIcons.Xcode
+        fileName == "gemfile" || fileName == "rakefile" -> SimpleIcons.Ruby
+        fileName == "requirements.txt" || fileName == "pyproject.toml" || fileName == "setup.py" -> SimpleIcons.Python
+        fileName == "cargo.toml" || fileName == "cargo.lock" -> SimpleIcons.Rust
+        fileName == "mix.exs" || fileName == "mix.lock" -> SimpleIcons.Elixir
+        fileName == "composer.json" -> SimpleIcons.Php
+        fileName == "terraform.tfvars" || extension == "tf" || extension == "tfvars" -> SimpleIcons.Terraform
+        fileName == "chart.yaml" || fileName == "helmfile.yaml" -> SimpleIcons.Helm
+        fileName == "kustomization.yaml" || fileName == "kustomization.yml" -> SimpleIcons.Kubernetes
+        fileName == "jenkinsfile" -> SimpleIcons.Jenkins
+        fileName == ".gitlab-ci.yml" -> SimpleIcons.Gitlab
+        fileName == "circle.yml" || fileName == ".circleci.yml" -> SimpleIcons.Circleci
+        fileName == ".travis.yml" -> SimpleIcons.Travisci
+        fileName == "appveyor.yml" -> SimpleIcons.Appveyor
+        extension == "jsx" || extension == "tsx" -> SimpleIcons.React
+        extension == "svelte" -> SimpleIcons.Svelte
+        extension == "astro" -> SimpleIcons.Html5
+        kind == FileIconKind.LOCKFILE && displayName.lowercase().contains("yarn") -> SimpleIcons.Yarn
+        kind == FileIconKind.LOCKFILE -> SimpleIcons.Npm
+        kind == FileIconKind.SHELL && displayName.substringAfterLast('.').lowercase() in setOf("ps1", "psm1", "psd1") -> SimpleIcons.Powershell
+        kind == FileIconKind.CSS && displayName.substringAfterLast('.').lowercase() in setOf("scss", "sass") -> SimpleIcons.Sass
+        kind == FileIconKind.CSS && displayName.substringAfterLast('.').lowercase() == "less" -> SimpleIcons.Less
+        else -> when (kind) {
+        FileIconKind.KOTLIN -> SimpleIcons.Kotlin
+        FileIconKind.JAVA -> SimpleIcons.Java
+        FileIconKind.JSON -> SimpleIcons.Json
+        FileIconKind.MARKDOWN -> SimpleIcons.Markdown
+        FileIconKind.PYTHON -> SimpleIcons.Python
+        FileIconKind.GRADLE -> SimpleIcons.Gradle
+        FileIconKind.GRAPHQL -> SimpleIcons.Graphql
+        FileIconKind.MAKE -> SimpleIcons.Make
+        FileIconKind.CMAKE -> SimpleIcons.Cmake
+        FileIconKind.DART -> SimpleIcons.Dart
+        FileIconKind.LUA -> SimpleIcons.Lua
+        FileIconKind.R -> SimpleIcons.R
+        FileIconKind.SCALA -> SimpleIcons.Scala
+        FileIconKind.PERL -> SimpleIcons.Perl
+        FileIconKind.ELIXIR -> SimpleIcons.Elixir
+        FileIconKind.JAVASCRIPT -> SimpleIcons.Javascript
+        FileIconKind.TYPESCRIPT -> SimpleIcons.Typescript
+        FileIconKind.C_CPP -> SimpleIcons.Cplusplus
+        FileIconKind.RUST -> SimpleIcons.Rust
+        FileIconKind.GO -> SimpleIcons.Go
+        FileIconKind.SWIFT -> SimpleIcons.Swift
+        FileIconKind.RUBY -> SimpleIcons.Ruby
+        FileIconKind.PHP -> SimpleIcons.Php
+        FileIconKind.HTML -> SimpleIcons.Html5
+        FileIconKind.CSS -> SimpleIcons.Css3
+        FileIconKind.SQL -> SimpleIcons.Sqlite
+        FileIconKind.SHELL -> SimpleIcons.Gnubash
+        FileIconKind.DOCKER -> SimpleIcons.Docker
+        FileIconKind.GIT -> SimpleIcons.Git
+        FileIconKind.DATABASE -> SimpleIcons.Sqlite
         FileIconKind.IMAGE -> Icons.Default.Image
         FileIconKind.TEXT -> Icons.Default.Article
         FileIconKind.GENERIC -> Icons.Default.InsertDriveFile
         else -> Icons.Default.Code
+        }
     }
     val label = when (kind) {
         FileIconKind.KOTLIN -> "KT"

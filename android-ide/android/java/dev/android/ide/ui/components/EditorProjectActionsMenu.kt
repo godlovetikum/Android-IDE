@@ -2,12 +2,14 @@ package dev.android.ide.ui.components
 
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Article
-import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.ContentPaste
+import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.RemoveCircleOutline
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -43,7 +45,7 @@ fun EditorProjectActionsMenu(
                 onClick = { onDismiss(); onNewFile() },
             )
             DropdownMenuItem(
-                leadingIcon = { Icon(Icons.Default.FolderOpen, null) },
+                leadingIcon = { Icon(Icons.Default.CreateNewFolder, null) },
                 text = { Text("New folder") },
                 onClick = { onDismiss(); onNewFolder() },
             )
@@ -56,7 +58,7 @@ fun EditorProjectActionsMenu(
         onPasteAtRoot?.let { paste ->
             DropdownMenuItem(
                 leadingIcon = { Icon(Icons.Default.ContentPaste, null) },
-                text = { Text("Paste here") },
+                text = { Text("Paste") },
                 onClick = { onDismiss(); paste() },
             )
         }
@@ -69,12 +71,12 @@ fun EditorProjectActionsMenu(
         onOpenTerminal?.let { openTerminal ->
             DropdownMenuItem(
                 leadingIcon = { Icon(Icons.Default.Terminal, null) },
-                text = { Text("Open Terminal") },
+                text = { Text("Open terminal") },
                 onClick = { onDismiss(); openTerminal() },
             )
         }
         DropdownMenuItem(
-            leadingIcon = { Icon(Icons.Default.Code, null) },
+            leadingIcon = { Icon(Icons.Default.Share, null) },
             text = { Text("Export project") },
             onClick = { onDismiss(); onExportProject() },
         )
@@ -90,7 +92,7 @@ fun EditorProjectActionsMenu(
             onClick = { onDismiss(); onDeleteProject() },
         )
         DropdownMenuItem(
-            leadingIcon = { Icon(Icons.Default.Delete, null, tint = colors.textSecondary) },
+            leadingIcon = { Icon(Icons.Default.RemoveCircleOutline, null, tint = colors.textSecondary) },
             text = { Text("Remove from registry", color = colors.textSecondary) },
             onClick = { onDismiss(); onRemoveProject() },
         )

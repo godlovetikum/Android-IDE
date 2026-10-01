@@ -212,6 +212,9 @@ dependencies {
     // Material Design 3 — dark theme, navigation drawer, top app bar, tabs
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
+    // Branded language/file icons for the editor tree and search results.
+    // The 1.1.1 artifact is Compose Multiplatform/Android compatible.
+    implementation("br.com.devsrsouza.compose.icons:simple-icons:1.1.1")
 
     // ── Activity ───────────────────────────────────────────────────────────
     // ComponentActivity.setContent {} + rememberLauncherForActivityResult

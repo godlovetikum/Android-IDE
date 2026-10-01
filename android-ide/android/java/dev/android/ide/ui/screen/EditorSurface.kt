@@ -321,7 +321,6 @@ fun EditorSidebar(
                 onReplaceProjectContents = ideViewModel::replaceProjectContents,
                 onReplaceFileContents = ideViewModel::replaceFileContents,
                 onClearContentSearchResults = ideViewModel::clearContentSearchResults,
-                onHideFileSearch = onHideFileSearch,
                 onSearchFileSelect = { result -> onFileSelected(result.documentUri) },
                 onExecuteContentSearch = { ideViewModel.searchProjectContents(state.contentSearchQuery) },
                 onOpenTerminalAtRoot = { onOpenTerminal(root.documentUri) },
@@ -334,6 +333,7 @@ fun EditorSidebar(
                 locateTargetUri = state.locateTargetUri, locateRequestToken = state.locateRequestToken, onLocateConsumed = ideViewModel::clearLocateRequest,
                 hideGitFolder = state.editorSettings.hideGitFolder, isMultiSelectMode = false, selectedUris = emptySet(),
                 isSearchVisible = true, isContentSearchVisible = false, fileSearchQuery = state.fileSearchQuery, fileSearchResults = state.fileSearchResults,
+                fileSearchIncludeFolders = state.fileSearchIncludeFolders, fileSearchRunning = state.fileSearchRunning,
                 contentSearchQuery = state.contentSearchQuery, contentSearchResults = state.contentSearchResults,
                 contentSearchMatchCase = state.contentSearchMatchCase, contentSearchWholeWord = state.contentSearchWholeWord,
                 contentSearchRegex = state.contentSearchRegex, contentSearchShowContext = state.contentSearchShowContext,
@@ -349,7 +349,7 @@ fun EditorSidebar(
                 onReplaceProjectContents = ideViewModel::replaceProjectContents,
                 onReplaceFileContents = ideViewModel::replaceFileContents,
                 onClearContentSearchResults = ideViewModel::clearContentSearchResults,
-                onHideFileSearch = { onHideFileSearch(); onPanelSelected(EditorPanel.FILES) }, onSearchFileSelect = { result -> onFileSelected(result.documentUri) }, onExecuteContentSearch = { ideViewModel.searchProjectContents(state.contentSearchQuery) }, onOpenTerminalAtRoot = { onOpenTerminal(root.documentUri) }, onOpenTerminalAt = { onOpenTerminal(it.documentUri) }, modifier = Modifier.weight(1f),
+                onFileSearchIncludeFoldersChange = ideViewModel::setFileSearchIncludeFolders, onSearchFileSelect = { result -> onFileSelected(result.documentUri) }, onExecuteContentSearch = { ideViewModel.searchProjectContents(state.contentSearchQuery) }, onOpenTerminalAtRoot = { onOpenTerminal(root.documentUri) }, onOpenTerminalAt = { onOpenTerminal(it.documentUri) }, modifier = Modifier.weight(1f),
             )
             EditorPanel.CONTENT_SEARCH -> FileTreePanel(
                 nodes = state.fileTree, clipboardItems = state.clipboardItems, clipboardIsCut = state.clipboardIsCut,
@@ -375,7 +375,7 @@ fun EditorSidebar(
                 onReplaceProjectContents = ideViewModel::replaceProjectContents,
                 onReplaceFileContents = ideViewModel::replaceFileContents,
                 onClearContentSearchResults = ideViewModel::clearContentSearchResults,
-                onHideFileSearch = onHideFileSearch, onSearchFileSelect = onSearchResultSelected, onExecuteContentSearch = { ideViewModel.searchProjectContents(state.contentSearchQuery) }, onOpenTerminalAtRoot = { onOpenTerminal(root.documentUri) }, onOpenTerminalAt = { onOpenTerminal(it.documentUri) }, modifier = Modifier.weight(1f),
+                onSearchFileSelect = onSearchResultSelected, onExecuteContentSearch = { ideViewModel.searchProjectContents(state.contentSearchQuery) }, onOpenTerminalAtRoot = { onOpenTerminal(root.documentUri) }, onOpenTerminalAt = { onOpenTerminal(it.documentUri) }, modifier = Modifier.weight(1f),
             )
         }
     }
@@ -429,7 +429,9 @@ private fun EditorWorkspace(
         if (state.openTabs.isNotEmpty()) {
             EditorTabBar(
                 tabs = state.openTabs, onTabSelected = ideViewModel::selectTab, onTabCloseSafe = ideViewModel::closeTabSafe,
-                onTabSave = ideViewModel::saveTabById, onTabPin = ideViewModel::pinTab, onCloseOthers = ideViewModel::closeOtherTabs,
+                onTabSave = ideViewModel::saveTabById, onTabPin = ideViewModel::pinTab,
+                onTabLocate = { tabId -> ideViewModel.selectTab(tabId); ideViewModel.revealActiveFile() },
+                onCloseOthers = ideViewModel::closeOtherTabs,
                 onCloseAll = ideViewModel::closeAllTabs, onNewBlankTab = ideViewModel::newBlankTab,
             )
             HorizontalDivider(color = colors.separator)
@@ -537,7 +539,7 @@ private fun EditorTopBar(
             }
         }
         IconButton(onClick = onFind, enabled = activeTab != null) { Icon(Icons.Default.Search, "Find in document", tint = colors.textSecondary) }
-        IconButton(onClick = onSave, enabled = activeTab != null && !state.editorSettings.autoSave) { Icon(Icons.Default.Save, "Save active document", tint = colors.textSecondary) }
+        IconButton(onClick = onSave, enabled = activeTab != null) { Icon(Icons.Default.Save, "Save active document", tint = colors.textSecondary) }
         IconButton(onClick = onMore) { Icon(Icons.Default.MoreVert, "More editor actions", tint = colors.textSecondary) }
     }
 }

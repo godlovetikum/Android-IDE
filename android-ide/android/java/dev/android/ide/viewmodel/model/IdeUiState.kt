@@ -69,6 +69,12 @@ data class IdeUiState(
     /** Matching files for the filename query. */
     val fileSearchResults: List<FileSearchResult> = emptyList(),
 
+    /** Whether filename search should include matching directories. */
+    val fileSearchIncludeFolders: Boolean = false,
+
+    /** True while the filename search is traversing the project. */
+    val fileSearchRunning: Boolean = false,
+
     /** Current content query scanned across project text files. */
     val contentSearchQuery: String = "",
 
