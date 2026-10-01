@@ -189,6 +189,7 @@ class AppShellViewModel(application: Application) : AndroidViewModel(application
 
     /** Open a terminal for a project using its accessible filesystem directory when available. */
     fun openTerminalForProject(projectId: String, directoryUri: String? = null) {
+        _state.update { it.copy(selectedProjectId = projectId, terminalFeedback = null, statusMessage = null) }
         viewModelScope.launch {
             val project = _state.value.projects.firstOrNull { it.id == projectId }
             if (project == null) {
@@ -231,8 +232,25 @@ class AppShellViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
+    /** Open a terminal for the currently open editor project at a root or folder node. */
+    fun openTerminalForDirectory(directoryUri: String) {
+        val projectId = _state.value.selectedProjectId
+        if (projectId == null) {
+            reportTerminalLaunchFailure(
+                OperationReport(
+                    OperationOutcome.BLOCKED,
+                    "Open a project before opening its folder in Terminal",
+                    ErrorCategory.DESTINATION_CONFLICT,
+                ),
+            )
+            return
+        }
+        openTerminalForProject(projectId, directoryUri)
+    }
+
     private fun reportTerminalLaunchFailure(report: OperationReport) {
         _state.update { it.copy(terminalFeedback = report, operationReport = report, statusMessage = report.message) }
+        if (_state.value.surface != Surface.TERMINAL) navigate(Surface.TERMINAL)
     }
 
     fun resizeTerminal(columns: Int, rows: Int) {

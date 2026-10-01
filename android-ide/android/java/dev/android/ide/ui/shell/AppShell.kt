@@ -575,12 +575,8 @@ private fun ContextualNavigation(
                             onOpenSettings = { onNavigate(Surface.SETTINGS, true) },
                             onFeedback = onFeedback,
                             onOpenTerminal = { directoryUri ->
-                                val projectId = state.selectedProjectId
-                                if (projectId == null) onFeedback("Select a project before opening its folder in Terminal.")
-                                else {
-                                    appViewModel.openTerminalForProject(projectId, directoryUri)
-                                    onDismissDrawer()
-                                }
+                                appViewModel.openTerminalForDirectory(directoryUri)
+                                onDismissDrawer()
                             },
                             rootNode = root,
                             ideViewModel = ideViewModel,
