@@ -187,6 +187,10 @@ android {
         // Suppressed here because the debug-keystore fallback in signingConfigs
         // is intentional (fires on fork PRs and local dev without secrets).
         disable += "SigningRelease"
+        // This project distributes direct APKs rather than through Google Play.
+        // Target API 28 is intentional: the bundled writable Termux runtime
+        // depends on Android's pre-29 app-home execution compatibility behavior.
+        disable += "ExpiredTargetSdkVersion"
     }
 }
 
