@@ -90,6 +90,7 @@ import dev.android.ide.ui.screen.EditorSurface
 import dev.android.ide.ui.screen.ProjectsSurface
 import dev.android.ide.ui.screen.SettingsScreen
 import dev.android.ide.ui.screen.TerminalSurface
+import dev.android.ide.ui.screen.BrowserSurface
 import dev.android.ide.ui.screen.EditorPanel
 import dev.android.ide.ui.screen.EditorSidebar
 import dev.android.ide.viewmodel.model.FileNode
@@ -875,6 +876,11 @@ private fun SurfaceHost(
             modifier = modifier,
         )
         Surface.TERMINAL -> TerminalSurface(state, viewModel, onOpenNavigation, modifier)
+        Surface.BROWSER -> BrowserSurface(
+            onOpenNavigation = onOpenNavigation,
+            onOpenSettings = { settingsSection = "Browser"; onNavigate(Surface.SETTINGS) },
+            modifier = modifier,
+        )
         Surface.GIT -> GitSurface(state, viewModel, onOpenNavigation, modifier)
         Surface.SETTINGS -> SettingsScreen(
             uiState = ideState,

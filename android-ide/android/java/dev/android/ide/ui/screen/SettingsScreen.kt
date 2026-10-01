@@ -58,6 +58,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -74,12 +75,14 @@ import androidx.compose.ui.platform.LocalContext
 import dev.android.ide.data.model.AppTheme
 import dev.android.ide.data.model.EditorSettings
 import dev.android.ide.data.model.VolumeKeyMode
+import dev.android.ide.browser.BrowserViewModel
 import dev.android.ide.ui.components.EDITOR_TOOLBAR_ACTIONS
 import dev.android.ide.ui.components.EditorToolbarGlyph
 import dev.android.ide.ui.components.normalizeEditorToolbarOrder
 import dev.android.ide.ui.theme.LocalIdeColors
 import dev.android.ide.viewmodel.IdeViewModel
 import dev.android.ide.viewmodel.model.IdeUiState
+import androidx.lifecycle.viewmodel.compose.viewModel
 
 enum class SettingsCategory(val title: String, val description: String, val icon: ImageVector) {
     GENERAL("General", "App theme and interface-wide preferences", Icons.Default.Palette),
@@ -228,8 +231,8 @@ private fun SettingsCategoryContent(
             SettingsCategory.PROJECTS -> item { ProjectsSettingsContent() }
             SettingsCategory.GIT,
             SettingsCategory.TERMINAL,
-            SettingsCategory.BROWSER,
             SettingsCategory.EXTENSIONS -> item { DomainPlaceholder(category) }
+            SettingsCategory.BROWSER -> item { BrowserSettingsContent() }
             SettingsCategory.CREDENTIALS -> item { DomainPlaceholder(category) }
             SettingsCategory.SECURITY -> item { StorageAccessSettings() }
         }
@@ -542,6 +545,76 @@ private fun ProjectsSettingsContent() {
         Text("Storage locations are chosen during project creation.", style = MaterialTheme.typography.bodyMedium)
         Text("The editor does not keep a hidden default path. This avoids creating projects in an unexpected folder.", style = MaterialTheme.typography.bodySmall, color = LocalIdeColors.current.textSecondary)
     }
+}
+
+@Composable
+private fun BrowserSettingsContent() {
+    val browser: BrowserViewModel = viewModel()
+    val state by browser.uiState.collectAsState()
+    val context = LocalContext.current
+    var searchDraft by rememberSaveable(state.settings.customSearchUrl) { mutableStateOf(state.settings.customSearchUrl) }
+    var homeDraft by rememberSaveable(state.settings.homePage) { mutableStateOf(state.settings.homePage) }
+    var message by rememberSaveable { mutableStateOf<String?>(null) }
+    val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        runCatching {
+            context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+        }.onSuccess {
+            browser.setDownloadFolder(uri.toString())
+            message = "Download folder saved"
+        }.onFailure { message = "Android did not grant access to that folder" }
+    }
+    SettingsCard {
+        Text("Search engine", style = MaterialTheme.typography.titleSmall)
+        Column(Modifier.selectableGroup()) {
+            listOf("google" to "Google", "bing" to "Bing", "duckduckgo" to "DuckDuckGo", "brave" to "Brave Search", "startpage" to "Startpage").forEach { (id, label) ->
+                Row(Modifier.fillMaxWidth().selectable(selected = state.settings.searchEngine == id, onClick = { browser.setSearchEngine(id) }), verticalAlignment = Alignment.CenterVertically) {
+                    RadioButton(selected = state.settings.searchEngine == id, onClick = { browser.setSearchEngine(id) })
+                    Text(label)
+                }
+            }
+        }
+        Text("Custom search URL template", style = MaterialTheme.typography.bodyMedium)
+        OutlinedTextField(value = searchDraft, onValueChange = { searchDraft = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, label = { Text("Use %s for the encoded query") })
+        TextButton(onClick = { browser.setSearchEngine("custom"); browser.setCustomSearchUrl(searchDraft); message = "Custom search provider saved" }) { Text("Save custom search") }
+    }
+    SettingsCard {
+        Text("Home page", style = MaterialTheme.typography.titleSmall)
+        Text("The Home button opens this address. A blank value opens a blank tab.", style = MaterialTheme.typography.bodySmall, color = LocalIdeColors.current.textSecondary)
+        OutlinedTextField(value = homeDraft, onValueChange = { homeDraft = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, label = { Text("URL") })
+        TextButton(onClick = { browser.setHomePage(homeDraft); message = "Home page saved" }) { Text("Save home page") }
+    }
+    SettingsCard {
+        Text("Downloads", style = MaterialTheme.typography.titleSmall)
+        Text(state.settings.downloadFolder ?: "Android Downloads (default)", style = MaterialTheme.typography.bodySmall, color = LocalIdeColors.current.textSecondary)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = { folderPicker.launch(null) }) { Text("Choose folder") }
+            TextButton(onClick = { browser.setDownloadFolder(null); message = "Default Downloads folder restored" }) { Text("Reset") }
+        }
+        Text("Existing download records remain visible when their files still exist. Duplicate names require a confirmation.", style = MaterialTheme.typography.bodySmall, color = LocalIdeColors.current.textSecondary)
+    }
+    SettingsCard {
+        Text("Appearance and browsing", style = MaterialTheme.typography.titleSmall)
+        Column(Modifier.selectableGroup()) {
+            listOf("system" to "Follow Android IDE theme", "light" to "Light", "dark" to "Dark").forEach { (id, label) ->
+                Row(Modifier.fillMaxWidth().selectable(selected = state.settings.theme == id, onClick = { browser.setTheme(id) }), verticalAlignment = Alignment.CenterVertically) {
+                    RadioButton(selected = state.settings.theme == id, onClick = { browser.setTheme(id) })
+                    Text(label)
+                }
+            }
+        }
+        VisibilitySettingRow("Desktop site by default", "Request desktop layouts for new browser sessions.", state.settings.desktopSiteDefault, browser::setDesktopSiteDefault)
+    }
+    SettingsCard {
+        Text("Developer tools", style = MaterialTheme.typography.titleSmall)
+        VisibilitySettingRow("Enable developer tools", "Allow the console, elements, network, resources, sources, and snippets panel.", state.settings.developerToolsEnabled, browser::setDeveloperToolsEnabled)
+    }
+    SettingsCard {
+        Text("Browsing data", style = MaterialTheme.typography.titleSmall)
+        Text("Clear browser history and download records. This does not delete files from the download folder.", style = MaterialTheme.typography.bodySmall, color = LocalIdeColors.current.textSecondary)
+        OutlinedButton(onClick = { browser.clearBrowserData(); message = "Browser data cleared" }) { Text("Clear browser data") }
+    }
+    message?.let { Text(it, color = LocalIdeColors.current.textSecondary, style = MaterialTheme.typography.bodySmall) }
 }
 
 @Composable

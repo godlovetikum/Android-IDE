@@ -83,7 +83,7 @@ import dev.android.ide.ui.theme.LocalIdeColors
 import dev.android.ide.viewmodel.model.FileNode
 import dev.android.ide.viewmodel.model.FileSearchResult
 import dev.android.ide.viewmodel.model.ancestorsOf
-import compose.icons.simpleicons.SimpleIcons
+import compose.icons.SimpleIcons
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable

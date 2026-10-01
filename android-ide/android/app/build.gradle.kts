@@ -215,6 +215,10 @@ dependencies {
     // Branded language/file icons for the editor tree and search results.
     // The 1.1.1 artifact is Compose Multiplatform/Android compatible.
     implementation("br.com.devsrsouza.compose.icons:simple-icons:1.1.1")
+    // GeckoView Stable is the approved embedded browser engine foundation.
+    implementation("org.mozilla.geckoview:geckoview:157.0.20260924084938")
+    // Browser pull-to-refresh container around GeckoView.
+    implementation("androidx.swiperefreshlayout:swiperefreshlayout:1.1.0")
 
     // ── Activity ───────────────────────────────────────────────────────────
     // ComponentActivity.setContent {} + rememberLauncherForActivityResult
