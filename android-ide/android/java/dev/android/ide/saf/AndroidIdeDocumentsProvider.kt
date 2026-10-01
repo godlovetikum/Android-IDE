@@ -28,7 +28,10 @@ class AndroidIdeDocumentsProvider : DocumentsProvider() {
         // DocumentsUI may cache provider roots. Notify it when the provider is
         // first brought up so the Android IDE root is not omitted after install
         // or after the app's private storage is initialized.
-        DocumentsContract.notifyRootsChanged(requireNotNull(context).contentResolver, AUTHORITY)
+        requireNotNull(context).contentResolver.notifyChange(
+            DocumentsContract.buildRootsUri(AUTHORITY),
+            null,
+        )
         return rootDirectory.isDirectory
     }
 

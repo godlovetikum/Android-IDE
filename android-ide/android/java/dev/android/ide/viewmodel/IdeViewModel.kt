@@ -2196,13 +2196,14 @@ build/
                         if (streamed) {
                             results.addAll(fileResults)
                             if (results.size - published >= searchBatchSize) {
-                                if (requestId != projectSearchGeneration) return@launch
-                                published = results.size
-                                _uiState.update { state ->
-                                    if (state.contentSearchQuery != query) state
-                                    else state.copy(contentSearchResults = results.toList())
+                                if (requestId == projectSearchGeneration) {
+                                    published = results.size
+                                    _uiState.update { state ->
+                                        if (state.contentSearchQuery != query) state
+                                        else state.copy(contentSearchResults = results.toList())
+                                    }
+                                    yield()
                                 }
-                                yield()
                             }
                         } else skippedFiles++
                     }
