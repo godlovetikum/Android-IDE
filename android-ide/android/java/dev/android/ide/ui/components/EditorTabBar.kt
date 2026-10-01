@@ -125,7 +125,7 @@ private fun EditorTabItem(
                 tab.isSaving -> CircularProgressIndicator(
                     modifier  = Modifier.size(8.dp).padding(end = 2.dp),
                     strokeWidth = 1.5.dp,
-                    color     = colors.accent,
+                    color     = colors.primary,
                 )
                 tab.isDirty -> Text(
                     text  = "\u25cf ",  // ●
@@ -139,7 +139,7 @@ private fun EditorTabItem(
                 Icon(
                     imageVector = Icons.Default.PushPin,
                     contentDescription = "Pinned tab",
-                    tint = colors.accent,
+                    tint = colors.primary,
                     modifier = Modifier.size(13.dp),
                 )
             }
@@ -208,7 +208,7 @@ private fun EditorTabItem(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(2.dp)
-                    .background(colors.accent)
+                    .background(colors.primary)
                     .align(Alignment.BottomCenter),
             )
         }

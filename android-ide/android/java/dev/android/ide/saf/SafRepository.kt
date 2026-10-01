@@ -41,9 +41,9 @@ import java.io.BufferedInputStream
 import java.io.File
 import java.io.IOException
 import java.io.InputStream
+import java.io.InputStreamReader
 import java.io.OutputStream
 import java.nio.charset.StandardCharsets
-import java.nio.charset.CodingErrorAction
 import java.nio.file.Files
 import java.nio.file.FileVisitResult
 import java.nio.file.LinkOption
@@ -521,26 +521,31 @@ class SafRepository(private val context: Context) {
         }
     }
 
-    /**
-     * Stream a text document line-by-line from storage. Binary files and malformed
-     * UTF-8 are rejected before any line is delivered to the caller.
-     */
+    /** Stream content line-by-line; file extensions are never used as an allow-list. */
     suspend fun forEachTextLine(documentUriString: String, onLine: (String) -> Unit): Boolean =
         withContext(Dispatchers.IO) {
             runCatching {
-                val input = BufferedInputStream(openInputStream(documentUriString) ?: return@runCatching false)
-                input.mark(16 * 1024)
-                val prefix = ByteArray(16 * 1024)
-                val count = input.read(prefix)
-                if (count <= 0) return@runCatching true
-                if (prefix.copyOf(count).any { it == 0.toByte() }) return@runCatching false
-                StandardCharsets.UTF_8.newDecoder()
-                    .onMalformedInput(CodingErrorAction.REPORT)
-                    .onUnmappableCharacter(CodingErrorAction.REPORT)
-                    .decode(java.nio.ByteBuffer.wrap(prefix, 0, count))
-                input.reset()
-                input.bufferedReader(StandardCharsets.UTF_8).useLines { lines -> lines.forEach(onLine) }
-                true
+                val raw = openInputStream(documentUriString) ?: return@runCatching false
+                BufferedInputStream(raw).use { input ->
+                    val probe = ByteArray(TextDocumentCodec.PROBE_BYTES)
+                    input.mark(probe.size + 1)
+                    var count = 0
+                    while (count < probe.size) {
+                        val read = input.read(probe, count, probe.size - count)
+                        if (read <= 0) break
+                        count += read
+                    }
+                    val encoding = TextDocumentCodec.detectEncoding(probe, count)
+                        ?: return@runCatching false
+                    input.reset()
+                    repeat(encoding.byteOrderMark.size) {
+                        if (input.read() < 0) return@runCatching false
+                    }
+                    InputStreamReader(input, TextDocumentCodec.decoder(encoding.charset))
+                        .buffered()
+                        .useLines { lines -> lines.forEach(onLine) }
+                    true
+                }
             }.getOrDefault(false)
         }
 
@@ -1878,6 +1883,17 @@ class SafRepository(private val context: Context) {
 
     suspend fun documentExists(documentUriString: String): Boolean =
         getDisplayName(documentUriString) != null
+
+    suspend fun isDirectoryDocument(documentUriString: String): Boolean = withContext(Dispatchers.IO) {
+        if (isFileUri(documentUriString)) {
+            fileFromUri(documentUriString)?.isDirectory == true
+        } else {
+            queryStringColumn(
+                mutationDocumentUri(documentUriString).toString(),
+                DocumentsContract.Document.COLUMN_MIME_TYPE,
+            ) == MIME_DIR
+        }
+    }
 
     suspend fun documentPresence(documentUriString: String): DocumentPresence =
         withContext(Dispatchers.IO) {

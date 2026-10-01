@@ -112,7 +112,7 @@ function postLspMessage(message) {
   postToNative({ type: 'languageServerMessage', message: JSON.stringify(message) });
 }
 
-function requestLsp(method, params) {
+function requestLsp(method, params, timeoutMs) {
   var id = lspRequestId++;
   return new Promise(function (resolve, reject) {
     lspPending[id] = { resolve: resolve, reject: reject };
@@ -123,7 +123,7 @@ function requestLsp(method, params) {
         delete lspPending[id];
         reject(new Error('Language server request timed out'));
       }
-    }, 8000);
+    }, timeoutMs || 8000);
   });
 }
 
@@ -196,7 +196,31 @@ function localSnippetItems(language) {
     json: [
       ['object', '"${1:key}": ${2:value}', 'JSON property'],
     ],
+    kotlin: [
+      ['fun', 'fun ${1:name}(${2:parameters}): ${3:Unit} {\n\t$0\n}', 'Function'],
+      ['class', 'class ${1:Name} {\n\t$0\n}', 'Class'],
+      ['data', 'data class ${1:Name}(${2:val id: String})', 'Data class'],
+      ['when', 'when (${1:value}) {\n\t$0\n}', 'When expression'],
+    ],
+    java: [
+      ['class', 'class ${1:Name} {\n\t$0\n}', 'Class'],
+      ['main', 'public static void main(String[] args) {\n\t$0\n}', 'Main method'],
+      ['method', 'public ${1:void} ${2:name}(${3:parameters}) {\n\t$0\n}', 'Method'],
+      ['try', 'try {\n\t$0\n} catch (${1:Exception} e) {\n\t$0\n}', 'Try/catch'],
+    ],
+    markdown: [
+      ['heading', '# ${1:Heading}', 'Heading'],
+      ['link', '[${1:text}](${2:https://})', 'Link'],
+      ['code', '```${1:language}\n$0\n```', 'Code fence'],
+    ],
+    xml: [
+      ['element', '<${1:element}>\n\t$0\n</$1>', 'Element'],
+      ['attribute', '${1:name}="${2:value}"', 'Attribute'],
+    ],
   };
+  snippets.javascriptreact = snippets.javascript;
+  snippets.typescriptreact = snippets.typescript;
+  snippets.jsonc = snippets.json;
   return (snippets[language] || []).map(function (item) {
     return {
       label: item[0],
@@ -242,17 +266,21 @@ function handleLanguageServerMessage(raw) {
 }
 
 function registerLanguageProviders() {
-  var languages = ['javascript', 'typescript', 'python', 'html', 'css', 'json', 'kotlin', 'java'];
+  var languages = ['javascript', 'typescript', 'javascriptreact', 'typescriptreact', 'python', 'html', 'css', 'json', 'jsonc', 'kotlin', 'java', 'xml', 'markdown'];
+  var lspCompletionLanguages = ['javascript', 'typescript', 'javascriptreact', 'typescriptreact', 'python', 'html', 'css', 'json', 'jsonc'];
   languages.forEach(function (language) {
     lspProviderDisposables.push(monaco.languages.registerCompletionItemProvider(language, {
       triggerCharacters: ['.', ':', '/', '<', '"', "'"],
       provideCompletionItems: function (model, position) {
         var local = localSnippetItems(language);
+        if (lspCompletionLanguages.indexOf(language) === -1) {
+          return Promise.resolve({ suggestions: local });
+        }
         return requestLsp('textDocument/completion', {
           textDocument: { uri: model.uri.toString() },
           position: lspPosition(position),
           context: { triggerKind: 1 },
-        }).then(function (result) {
+        }, 1400).then(function (result) {
           return { suggestions: normalizeCompletionItems(result).concat(local) };
         }).catch(function () {
           return { suggestions: local };
@@ -303,6 +331,22 @@ function registerLanguageProviders() {
       provideDocumentFormattingEdits: function (model, options) {
         return requestLsp('textDocument/formatting', {
           textDocument: { uri: model.uri.toString() },
+          options: { tabSize: options.tabSize, insertSpaces: options.insertSpaces },
+        }).then(function (result) {
+          return (result || []).filter(function (edit) { return edit.range; }).map(function (edit) {
+            return { range: lspRange(edit.range), text: edit.newText || '' };
+          });
+        }).catch(function () { return []; });
+      },
+    }));
+    lspProviderDisposables.push(monaco.languages.registerDocumentRangeFormattingEditProvider(language, {
+      provideDocumentRangeFormattingEdits: function (model, range, options) {
+        return requestLsp('textDocument/rangeFormatting', {
+          textDocument: { uri: model.uri.toString() },
+          range: {
+            start: lspPosition({ lineNumber: range.startLineNumber, column: range.startColumn }),
+            end: lspPosition({ lineNumber: range.endLineNumber, column: range.endColumn }),
+          },
           options: { tabSize: options.tabSize, insertSpaces: options.insertSpaces },
         }).then(function (result) {
           return (result || []).filter(function (edit) { return edit.range; }).map(function (edit) {
@@ -503,6 +547,75 @@ require(['vs/editor/editor.main'], function () {
 // Public API — called by Kotlin via evaluateJavascript
 // ---------------------------------------------------------------------------
 
+function insertPairedText(opening, closing) {
+  if (!editor || !opening || !closing) return;
+  var model = editor.getModel();
+  var selection = editor.getSelection();
+  if (!model || !selection) return;
+
+  var start = selection.getStartPosition();
+  var startOffset = model.getOffsetAt(start);
+  var selectedText = model.getValueInRange(selection);
+  if (!selection.isEmpty()) {
+    editor.executeEdits('androidide-pair', [{
+      range: selection,
+      text: opening + selectedText + closing,
+      forceMoveMarkers: true,
+    }]);
+    var innerStart = model.getPositionAt(startOffset + opening.length);
+    var innerEnd = model.getPositionAt(startOffset + opening.length + selectedText.length);
+    editor.setSelection(new monaco.Selection(innerStart.lineNumber, innerStart.column, innerEnd.lineNumber, innerEnd.column));
+  } else {
+    var position = editor.getPosition();
+    var line = model.getLineContent(position.lineNumber);
+    var followingText = line.slice(position.column - 1, position.column - 1 + closing.length);
+    var text = opening + (followingText === closing ? '' : closing);
+    editor.executeEdits('androidide-pair', [{
+      range: new monaco.Range(position.lineNumber, position.column, position.lineNumber, position.column),
+      text: text,
+      forceMoveMarkers: true,
+    }]);
+    editor.setPosition(model.getPositionAt(startOffset + opening.length));
+  }
+  editor.focus();
+}
+
+function insertEditorSnippet(trigger, snippet) {
+  if (!editor || !snippet) return;
+  var model = editor.getModel();
+  var selection = editor.getSelection();
+  if (!model || !selection) return;
+
+  if (selection.isEmpty() && trigger) {
+    var position = editor.getPosition();
+    var beforeCursor = model.getLineContent(position.lineNumber).slice(0, position.column - 1);
+    var currentWord = beforeCursor.match(/[\w$.-]+$/);
+    if (currentWord && trigger.toLowerCase().startsWith(currentWord[0].toLowerCase())) {
+      var wordStart = position.column - currentWord[0].length;
+      editor.setSelection(new monaco.Selection(position.lineNumber, wordStart, position.lineNumber, position.column));
+    }
+  }
+
+  var snippetController = editor.getContribution('snippetController2');
+  if (snippetController && typeof snippetController.insert === 'function') {
+    snippetController.insert(snippet);
+  } else {
+    var range = editor.getSelection();
+    var insertAt = model.getOffsetAt(range.getStartPosition());
+    var marker = '\uE000';
+    var text = snippet.replace(/\$0/, marker)
+      .replace(/\$\{\d+:([^}]*)\}/g, '$1')
+      .replace(/\$\{\d+\}/g, '')
+      .replace(/\$\d+/g, '');
+    var markerOffset = text.indexOf(marker);
+    var caretOffset = markerOffset >= 0 ? markerOffset : text.length;
+    text = text.replace(marker, '');
+    editor.executeEdits('androidide-snippet', [{ range: range, text: text, forceMoveMarkers: true }]);
+    editor.setPosition(model.getPositionAt(insertAt + caretOffset));
+  }
+  editor.focus();
+}
+
 window.androidIDE = {
 
   receiveMessage: function (msg) {
@@ -695,6 +808,14 @@ window.androidIDE = {
             editor.revealPositionInCenterIfOutsideViewport(editor.getPosition());
           });
         }
+        break;
+
+      case 'insertPair':
+        insertPairedText(msg.opening, msg.closing);
+        break;
+
+      case 'insertSnippet':
+        insertEditorSnippet(msg.trigger || '', msg.snippet || '');
         break;
 
       case 'showFind':

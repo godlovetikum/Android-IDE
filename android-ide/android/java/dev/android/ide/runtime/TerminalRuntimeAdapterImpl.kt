@@ -1,6 +1,8 @@
 package dev.android.ide.runtime
 
 import android.content.Context
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Intent
 import android.system.Os
 import android.system.OsConstants
@@ -26,6 +28,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.time.Instant
 import java.util.UUID
@@ -46,48 +51,65 @@ class TerminalRuntimeAdapterImpl(context: Context) : TerminalRuntimeAdapter, Run
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val sessions = ConcurrentHashMap<String, LiveSession>()
     private val viewInvalidators = ConcurrentHashMap<String, () -> Unit>()
+    private val _initializationProgress = MutableStateFlow<String?>(null)
+    val initializationProgress = _initializationProgress.asStateFlow()
+    @Volatile private var terminalFeedbackListener: ((OperationReport) -> Unit)? = null
     @Volatile private var explicitlyShuttingDown = false
+    @Volatile private var runtimeReady = false
     private val termuxPrefix get() = bundledInstaller.prefix()
     private val shell get() = File(termuxPrefix, "bin/sh")
     private val runtimeHome get() = bundledInstaller.home()
 
-    override suspend fun initialize(): OperationReport {
-        val bootstrap = bundledInstaller.initialize()
-        if (bootstrap.outcome != OperationOutcome.COMPLETE) return bootstrap
-        if (!termuxPrefix.exists() || !shell.canExecute()) {
-            return OperationReport(
+    override suspend fun initialize(): OperationReport = withContext(Dispatchers.IO) {
+        runtimeReady = false
+        val onProgress: (String) -> Unit = { message ->
+            _initializationProgress.value = message
+        }
+        val bootstrap = bundledInstaller.initialize(onProgress)
+        if (bootstrap.outcome != OperationOutcome.COMPLETE) {
+            _initializationProgress.value = null
+            return@withContext bootstrap
+        }
+        val packages = bundledInstaller.ensureDefaultPackages(onProgress)
+        val shellFailure = bundledInstaller.shellStartupFailure()
+        if (shellFailure != null) {
+            _initializationProgress.value = null
+            return@withContext OperationReport(
                 OperationOutcome.BLOCKED,
-                "Terminal is unavailable. Initialize Terminal before opening a command-line session.",
+                shellFailure,
                 ErrorCategory.UNAVAILABLE_RUNTIME,
-                emptyList(),
-                "Keep the project registered and retry Terminal initialization when Terminal is available.",
+                recoveryHint = "Retry Terminal initialization after the bundled shell and terminal home are repaired.",
             )
         }
-        runtimeHome.mkdirs()
-        bundledInstaller.userFilesRoot().mkdirs()
-        val packages = bundledInstaller.ensureDefaultPackages()
+        runtimeReady = true
         // A TerminalSession owns an in-process PTY and cannot be reattached after
         // Android recreates the process. Preserve the descriptor as unavailable so
         // the UI can explain what happened and the user can explicitly close it.
         sessionStore.markAvailableUnavailable("The Android process was recreated; start a new terminal session")
-        return if (packages.outcome == OperationOutcome.COMPLETE) {
+        _initializationProgress.value = null
+        if (packages.outcome == OperationOutcome.COMPLETE) {
             OperationReport(OperationOutcome.COMPLETE, "Terminal and baseline packages are available")
         } else {
             OperationReport(OperationOutcome.PARTIAL, "Terminal is available, but baseline packages need attention", packages.errorCategory, recoveryHint = packages.message)
         }
     }
 
+    fun setTerminalFeedbackListener(listener: ((OperationReport) -> Unit)?) {
+        terminalFeedbackListener = listener
+    }
+
     override suspend fun providerRootLocation(): ProjectLocation? =
         bundledInstaller.userFilesRoot().takeIf { it.exists() }?.let {
             ProjectLocation(
                 stableId = AndroidIdeDocumentsProvider.rootTreeUri(),
-                displayLabel = "Android IDE files",
+                displayLabel = "Android IDE",
                 userVisiblePath = AndroidIdeDocumentsProvider.rootTreeUri(),
             )
         }
 
     override suspend fun capabilities(): RuntimeCapabilities {
-        val available = termuxPrefix.exists() && shell.canExecute()
+        val available = runtimeReady && termuxPrefix.isDirectory && shell.canExecute() &&
+            runtimeHome.isDirectory && runtimeHome.canRead() && runtimeHome.canWrite()
         return RuntimeCapabilities(
             availability = if (available) RuntimeAvailability.AVAILABLE else RuntimeAvailability.UNAVAILABLE,
             architecture = System.getProperty("os.arch"),
@@ -118,17 +140,29 @@ class TerminalRuntimeAdapterImpl(context: Context) : TerminalRuntimeAdapter, Run
     override suspend fun createSession(workingDirectory: String?, name: String): SessionDescriptor {
         val id = UUID.randomUUID().toString()
         val sessionName = name.trim().ifBlank { "Untitled session" }
-        if (!shell.canExecute()) return unavailableSession(id, sessionName, "Terminal is unavailable")
-        val directory = workingDirectory?.let(::File)?.takeIf { it.isDirectory } ?: runtimeHome
-        return runCatching {
-            val environment = arrayOf(
-                "HOME=${runtimeHome.absolutePath}",
-                "PREFIX=${termuxPrefix.absolutePath}",
-                "PATH=${File(termuxPrefix, "bin").absolutePath}:/system/bin:/system/xbin",
-                "TERM=xterm-256color",
-                "LANG=C.UTF-8",
+        if (!runtimeReady || !shell.canExecute()) {
+            return unavailableSession(id, sessionName, "Terminal is unavailable: the bundled shell has not passed startup checks")
+        }
+        if (workingDirectory != null && !File(workingDirectory).isAbsolute) {
+            return unavailableSession(id, sessionName, "Terminal cannot open the requested working directory because it is not an absolute path: $workingDirectory")
+        }
+        val directory = if (workingDirectory == null) runtimeHome else File(workingDirectory)
+        if (!isUsableWorkingDirectory(directory.absolutePath)) {
+            return unavailableSession(
+                id,
+                sessionName,
+                "Terminal cannot open the requested working directory: ${directory.absolutePath}",
             )
-            val session = TerminalSession(shell.absolutePath, directory.absolutePath, arrayOf(shell.absolutePath, "-i"), environment, TRANSCRIPT_ROWS, sessionClient)
+        }
+        return runCatching {
+            val session = TerminalSession(
+                shell.absolutePath,
+                directory.absolutePath,
+                arrayOf(shell.absolutePath, "-i"),
+                bundledInstaller.sessionEnvironment(),
+                TRANSCRIPT_ROWS,
+                sessionClient,
+            )
             val descriptor = SessionDescriptor(id, "global", session.mHandle, sessionName, directory.absolutePath, Instant.now(), SessionAvailability.AVAILABLE)
             ContextCompat.startForegroundService(appContext, Intent(appContext, TerminalForegroundService::class.java))
             sessions[id] = LiveSession(descriptor, session)
@@ -250,6 +284,7 @@ class TerminalRuntimeAdapterImpl(context: Context) : TerminalRuntimeAdapter, Run
 
     fun shutdown() {
         explicitlyShuttingDown = true
+        runtimeReady = false
         sessions.values.forEach(::terminateOwnedProcessGroup)
         sessions.clear()
         viewInvalidators.clear()
@@ -300,6 +335,12 @@ class TerminalRuntimeAdapterImpl(context: Context) : TerminalRuntimeAdapter, Run
 
     private fun unavailable(message: String) = OperationReport(OperationOutcome.BLOCKED, message, ErrorCategory.UNAVAILABLE_RUNTIME)
 
+    fun isUsableWorkingDirectory(path: String): Boolean = runCatching {
+        if (path.isBlank()) return@runCatching false
+        val directory = File(path)
+        directory.isAbsolute && directory.isDirectory && directory.canRead() && directory.canWrite() && directory.canExecute()
+    }.getOrDefault(false)
+
     private fun unavailableSession(id: String, name: String, reason: String): SessionDescriptor =
         SessionDescriptor(id, "global", name = name, createdAt = Instant.now(), availability = SessionAvailability.UNAVAILABLE, terminationReason = reason)
 
@@ -318,15 +359,37 @@ class TerminalRuntimeAdapterImpl(context: Context) : TerminalRuntimeAdapter, Run
                 viewInvalidators.remove(id)?.invoke()
                 return
             }
-            sessions.remove(id)
-            sessionStore.remove(id)
-            viewInvalidators.remove(id)?.invoke()
+            markUnavailable(id, "Terminal process ended with exit code ${finishedSession.exitStatus}")
             if (sessions.isEmpty()) {
                 appContext.stopService(Intent(appContext, TerminalForegroundService::class.java))
             }
         }
-        override fun onCopyTextToClipboard(session: TerminalSession, text: String) = Unit
-        override fun onPasteTextFromClipboard(session: TerminalSession) = Unit
+        override fun onCopyTextToClipboard(session: TerminalSession, text: String) {
+            val result = runCatching {
+                val clipboard = appContext.getSystemService(ClipboardManager::class.java)
+                    ?: throw IllegalStateException("Android clipboard service is unavailable")
+                clipboard.setPrimaryClip(ClipData.newPlainText("Terminal selection", text))
+            }
+            terminalFeedbackListener?.invoke(
+                if (result.isSuccess) OperationReport(OperationOutcome.COMPLETE, "Terminal selection copied to clipboard")
+                else OperationReport(OperationOutcome.FAILED, "Could not copy terminal selection to the system clipboard", ErrorCategory.UNAVAILABLE_RUNTIME),
+            )
+        }
+        override fun onPasteTextFromClipboard(session: TerminalSession) {
+            val result = runCatching {
+                val clipboard = appContext.getSystemService(ClipboardManager::class.java)
+                    ?: throw IllegalStateException("Android clipboard service is unavailable")
+                val item = clipboard.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)
+                    ?: throw IllegalStateException("The system clipboard is empty")
+                val text = item.coerceToText(appContext)?.toString().orEmpty()
+                val bytes = text.toByteArray(Charsets.UTF_8)
+                if (bytes.isNotEmpty()) session.write(bytes, 0, bytes.size)
+            }
+            terminalFeedbackListener?.invoke(
+                if (result.isSuccess) OperationReport(OperationOutcome.COMPLETE, "Clipboard text sent to the terminal")
+                else OperationReport(OperationOutcome.BLOCKED, result.exceptionOrNull()?.message ?: "Could not read the system clipboard", ErrorCategory.UNAVAILABLE_RUNTIME),
+            )
+        }
         override fun onBell(session: TerminalSession) = Unit
         override fun onColorsChanged(session: TerminalSession) = Unit
         override fun onTerminalCursorStateChange(state: Boolean) = Unit

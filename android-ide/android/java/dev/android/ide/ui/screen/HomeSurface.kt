@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.background
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -26,13 +27,12 @@ import androidx.compose.material.icons.filled.MergeType
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.WarningAmber
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -41,7 +41,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -65,7 +64,7 @@ fun HomeSurface(
         add(HomeDestinationData(Icons.Default.FolderOpen, "Projects", "Manage your projects and workspace", true) { onNavigate(Surface.PROJECTS) })
         add(HomeDestinationData(Icons.Default.Code, "Editor", "Edit code and manage project files", true) { onNavigate(Surface.EDITOR) })
         add(HomeDestinationData(Icons.Default.Terminal, "Terminal", "Access your project and workspace from a command line interface", true) { onNavigate(Surface.TERMINAL) })
-        add(HomeDestinationData(Icons.Default.MergeType, "Git", "Version control and remote backups", false) { onFeedback("Git") })
+        add(HomeDestinationData(Icons.Default.MergeType, "Git", "Review detected repository status; use Terminal for Git commands", true) { onNavigate(Surface.GIT) })
         add(HomeDestinationData(Icons.Default.Language, "Browser", "Browser the web and access developer console", false) { onFeedback("Browser") })
         add(HomeDestinationData(Icons.Default.Extension, "Extensions", "Install and manage Add-ons", false) { onFeedback("Extensions") })
         add(HomeDestinationData(Icons.Default.Settings, "Settings", "Customize your workspace and app preferences", true) { onNavigate(Surface.SETTINGS) })
@@ -91,7 +90,7 @@ fun HomeSurface(
     }
 
     Column(
-        modifier = Modifier.fillMaxSize().navigationBarsPadding(),
+        modifier = Modifier.fillMaxSize().background(colors.background).navigationBarsPadding(),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         TopAppBar(
@@ -126,10 +125,9 @@ fun HomeSurface(
                     }
                 }
             }
-            Button(
+            OutlinedButton(
                 onClick = onExit,
                 modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(containerColor = colors.error),
             ) { Text("Exit Android IDE") }
         }
     }
@@ -138,14 +136,14 @@ fun HomeSurface(
 @Composable
 private fun HomeDestination(destination: HomeDestinationData, modifier: Modifier = Modifier) {
     val colors = LocalIdeColors.current
-    val accent = if (destination.isWarning) Color(0xFFD6A84F) else colors.accent
+    val accent = if (destination.isWarning) colors.warning else colors.primary
     Card(
         onClick = destination.onClick,
         enabled = destination.enabled,
         modifier = modifier.fillMaxWidth().heightIn(min = 176.dp),
         colors = CardDefaults.cardColors(
-            containerColor = if (destination.isWarning) Color(0xFF3A3020) else colors.surface,
-            contentColor = colors.textPrimary,
+            containerColor = if (destination.isWarning) colors.warningContainer else colors.surface,
+            contentColor = if (destination.isWarning) colors.onWarningContainer else colors.textPrimary,
             disabledContainerColor = colors.surface.copy(alpha = 0.55f),
             disabledContentColor = colors.textDisabled,
         ),
@@ -170,14 +168,14 @@ private fun HomeDestination(destination: HomeDestinationData, modifier: Modifier
             Text(
                 destination.title,
                 style = MaterialTheme.typography.titleLarge,
-                color = if (destination.isWarning) Color(0xFFFFD98A) else colors.textPrimary,
+                color = if (destination.isWarning) colors.onWarningContainer else colors.textPrimary,
                 textAlign = TextAlign.Center,
                 modifier = Modifier.fillMaxWidth(),
             )
             Text(
                 destination.description,
                 style = MaterialTheme.typography.bodySmall,
-                color = if (destination.isWarning) Color(0xFFFFD98A) else colors.textSecondary,
+                color = if (destination.isWarning) colors.onWarningContainer else colors.textSecondary,
                 textAlign = TextAlign.Center,
                 modifier = Modifier.fillMaxWidth(),
             )

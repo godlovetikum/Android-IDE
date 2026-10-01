@@ -29,7 +29,6 @@ import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Code
-import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Lock
@@ -38,6 +37,7 @@ import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilterChip
@@ -75,6 +75,7 @@ import dev.android.ide.data.model.AppTheme
 import dev.android.ide.data.model.EditorSettings
 import dev.android.ide.data.model.VolumeKeyMode
 import dev.android.ide.ui.components.EDITOR_TOOLBAR_ACTIONS
+import dev.android.ide.ui.components.EditorToolbarGlyph
 import dev.android.ide.ui.components.normalizeEditorToolbarOrder
 import dev.android.ide.ui.theme.LocalIdeColors
 import dev.android.ide.viewmodel.IdeViewModel
@@ -132,15 +133,15 @@ fun SettingsScreen(
             TopAppBar(
                 title = { Text(selectedCategory?.title ?: "Settings", color = colors.textPrimary) },
                 navigationIcon = {
-                    IconButton(onClick = {
-                        if (selectedCategory != null) selectedCategoryName = null
-                        else onNavigationIconClick?.invoke()
-                    }) {
-                        Icon(
-                            imageVector = if (selectedCategory != null) Icons.Default.ArrowBack else Icons.Default.Menu,
-                            contentDescription = if (selectedCategory != null) "Back to settings" else "Open sidebar",
-                            tint = colors.accent,
-                        )
+                    IconButton(onClick = { onNavigationIconClick?.invoke() }) {
+                        Icon(Icons.Default.Menu, contentDescription = "Open sidebar", tint = colors.primary)
+                    }
+                },
+                actions = {
+                    if (selectedCategory != null) {
+                        IconButton(onClick = { selectedCategoryName = null }) {
+                            Icon(Icons.Default.ArrowBack, contentDescription = "Back to settings", tint = colors.primary)
+                        }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = colors.surface),
@@ -192,7 +193,7 @@ private fun SettingsCategoryList(
                     modifier = Modifier.fillMaxWidth().padding(16.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Icon(category.icon, contentDescription = null, tint = colors.accent, modifier = Modifier.size(24.dp))
+                    Icon(category.icon, contentDescription = null, tint = colors.primary, modifier = Modifier.size(24.dp))
                     Spacer(Modifier.width(16.dp))
                     Column(modifier = Modifier.weight(1f)) {
                         Text(category.title, color = colors.textPrimary, style = MaterialTheme.typography.titleSmall)
@@ -406,22 +407,15 @@ private fun KeyboardSettingsContent(uiState: IdeUiState, s: EditorSettings, ideV
             VolumeKeyOption("Disabled (system volume)", VolumeKeyMode.DISABLED, uiState.volumeKeyMode, ideViewModel)
         }
         HorizontalDivider()
-        Text("Keyboard toolbar shortcuts", style = MaterialTheme.typography.bodyMedium)
-        Text(
-            "The toolbar always shows five shortcuts per page. Enable the actions you use, then drag the enabled list into the order you want. Page breaks are calculated from that single list.",
-            style = MaterialTheme.typography.bodySmall,
-            color = LocalIdeColors.current.textSecondary,
-        )
-        Text(
-            "Find and search controls stay in the editor top bar. Language-server actions are available here, but they may do nothing when the matching language server is unavailable or not installed.",
-            style = MaterialTheme.typography.bodySmall,
-            color = LocalIdeColors.current.textSecondary,
-        )
-        TextButton(onClick = {
+        OutlinedButton(onClick = {
             draftOrder = normalizeEditorToolbarOrder(s.keyboardToolbarOrder)
             toolbarOrderSheetOpen = true
-        }) {
-            Text("Customize toolbar shortcuts")
+        }, modifier = Modifier.fillMaxWidth()) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.Tune, contentDescription = null)
+                Text("Customize toolbar shortcuts", Modifier.weight(1f).padding(start = 10.dp))
+                Text("›", style = MaterialTheme.typography.titleMedium)
+            }
         }
     }
 
@@ -433,7 +427,7 @@ private fun KeyboardSettingsContent(uiState: IdeUiState, s: EditorSettings, ideV
             ) {
                 Text("Customize keyboard toolbar", style = MaterialTheme.typography.titleMedium)
                 Text(
-                    "Five actions fit on each page. Drag enabled actions to reorder them. Turn actions on or off to choose what appears. Monaco or a language server may be required for some actions.",
+                    "Drag enabled actions to reorder; five fit per page. LSP actions need a language server running in Terminal and may be unavailable if it stops or fails.",
                     style = MaterialTheme.typography.bodySmall,
                     color = LocalIdeColors.current.textSecondary,
                 )
@@ -470,14 +464,16 @@ private fun KeyboardSettingsContent(uiState: IdeUiState, s: EditorSettings, ideV
                                 .padding(vertical = 6.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Icon(Icons.Default.DragHandle, contentDescription = "Drag ${action.label}")
-                            Icon(action.icon, contentDescription = null, modifier = Modifier.padding(start = 8.dp).size(22.dp))
+                            EditorToolbarGlyph("dragHandle", LocalIdeColors.current.textSecondary, Modifier.size(22.dp))
+                            EditorToolbarGlyph(action.id, LocalIdeColors.current.textSecondary, Modifier.padding(start = 8.dp).size(22.dp))
                             Column(Modifier.weight(1f).padding(start = 10.dp)) {
-                                Text("${index + 1}. ${action.label}")
-                                action.shortcut?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = LocalIdeColors.current.textSecondary) }
-                                if (action.languageServerDependent) {
-                                    Text("Language server", style = MaterialTheme.typography.labelSmall, color = LocalIdeColors.current.textSecondary)
-                                }
+                                Text(action.label)
+                                Text("Enabled · position ${index + 1}", style = MaterialTheme.typography.labelSmall, color = LocalIdeColors.current.textSecondary)
+                                Text(action.description, style = MaterialTheme.typography.bodySmall, color = LocalIdeColors.current.textSecondary)
+                                listOfNotNull(action.shortcut, if (action.languageServerDependent) "LSP" else null)
+                                    .takeIf { it.isNotEmpty() }
+                                    ?.joinToString(" · ")
+                                    ?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = LocalIdeColors.current.textSecondary) }
                             }
                             Switch(
                                 checked = true,
@@ -498,13 +494,15 @@ private fun KeyboardSettingsContent(uiState: IdeUiState, s: EditorSettings, ideV
                             modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Icon(action.icon, contentDescription = null, modifier = Modifier.size(22.dp))
+                            EditorToolbarGlyph(action.id, LocalIdeColors.current.textSecondary, Modifier.size(22.dp))
                             Column(Modifier.weight(1f).padding(start = 10.dp)) {
                                 Text(action.label)
-                                action.shortcut?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = LocalIdeColors.current.textSecondary) }
-                                if (action.languageServerDependent) {
-                                    Text("Language server", style = MaterialTheme.typography.labelSmall, color = LocalIdeColors.current.textSecondary)
-                                }
+                                Text("Disabled · position not assigned", style = MaterialTheme.typography.labelSmall, color = LocalIdeColors.current.textSecondary)
+                                Text(action.description, style = MaterialTheme.typography.bodySmall, color = LocalIdeColors.current.textSecondary)
+                                listOfNotNull(action.shortcut, if (action.languageServerDependent) "LSP" else null)
+                                    .takeIf { it.isNotEmpty() }
+                                    ?.joinToString(" · ")
+                                    ?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = LocalIdeColors.current.textSecondary) }
                             }
                             Switch(
                                 checked = false,

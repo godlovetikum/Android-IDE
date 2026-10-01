@@ -3,31 +3,25 @@ package dev.android.ide.ui.screen
 import android.content.ClipData
 import android.content.ClipboardManager
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.foundation.layout.weight
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.FolderOpen
-import androidx.compose.material.icons.filled.ContentCopy
-import androidx.compose.material.icons.filled.Share
-import androidx.compose.material.icons.filled.Code
-import androidx.compose.material.icons.filled.MergeType
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Terminal
-import androidx.compose.material.icons.filled.Language
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
@@ -45,7 +39,8 @@ import dev.android.ide.app.AppShellViewModel
 import dev.android.ide.contracts.CapabilityState
 import dev.android.ide.contracts.Surface
 import dev.android.ide.ui.ProjectActionsMenu
-import java.net.URI
+import dev.android.ide.ui.theme.LocalIdeColors
+import dev.android.ide.ui.theme.operationStatusColor
 import kotlin.random.Random
 
 @Composable
@@ -59,6 +54,7 @@ fun ProjectDetailsSurface(
     modifier: Modifier = Modifier,
 ) {
     val project = state.projects.firstOrNull { it.id == state.selectedProjectId }
+    val projectSummary = project?.id?.let { state.projectSummaries[it] }
     var menuOpen by remember { mutableStateOf(false) }
     var confirmRemove by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
@@ -68,31 +64,20 @@ fun ProjectDetailsSurface(
     var deleteCode by remember { mutableStateOf(Random.nextInt(100, 1000).toString()) }
     var enteredDeleteCode by remember { mutableStateOf("") }
     val context = LocalContext.current
-    Column(modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        if (state.operationInProgress) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                CircularProgressIndicator(Modifier.padding(2.dp), strokeWidth = 2.dp)
-                Text("Project operation in progress…")
-            }
-        }
-        if (state.detailsLoading) Text("Refreshing project details…", color = MaterialTheme.colorScheme.secondary)
-        state.operationReport?.let { report ->
-            Text(
-                report.message,
-                color = if (report.outcome == dev.android.ide.contracts.OperationOutcome.COMPLETE) {
-                    MaterialTheme.colorScheme.primary
-                } else MaterialTheme.colorScheme.error,
-            )
-            report.recoveryHint?.let { Text("Recovery: $it", color = MaterialTheme.colorScheme.error) }
-        } ?: state.statusMessage?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+    Column(modifier.fillMaxSize()) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
             IconButton(onClick = onOpenNavigation) { Icon(Icons.Default.Menu, contentDescription = "Open sidebar") }
-            Text(project?.name ?: "Project Details", style = MaterialTheme.typography.headlineMedium)
+            Text("Project details", Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
+            IconButton(onClick = { viewModel.refreshSelectedProjectDetails() }, enabled = !state.operationInProgress) {
+                Icon(Icons.Default.Refresh, contentDescription = "Refresh project details")
+            }
+            Box {
             IconButton(onClick = { menuOpen = true }) { Icon(Icons.Default.MoreVert, contentDescription = "Project actions") }
             ProjectActionsMenu(
                 expanded = menuOpen,
                 onDismiss = { menuOpen = false },
                 enabled = !state.operationInProgress,
+                showRefreshItem = false,
                 onRefresh = { viewModel.refreshSelectedProjectDetails() },
                 onChangeDisplayName = { viewModel.clearOperationFeedback(); renameValue = project?.name.orEmpty(); renameVisible = true },
                 onChangeLocation = { viewModel.clearOperationFeedback(); project?.id?.let(onRelocateProject) },
@@ -118,7 +103,7 @@ fun ProjectDetailsSurface(
                         actionFeedback = "No Git remote URLs are configured for this project."
                     } else {
                         val payload = git.remotes.joinToString("\n") { remote ->
-                            "${remote.name}\t${safeClipboardRemote(remote.url)}"
+                            "${remote.name}\t${safeGitRemoteUrl(remote.url)}"
                         }
                         val clipboard = context.getSystemService(ClipboardManager::class.java)
                         if (clipboard == null) {
@@ -130,7 +115,7 @@ fun ProjectDetailsSurface(
                     }
                 },
                 onOpenEditor = { viewModel.navigate(Surface.EDITOR) },
-                onOpenGit = { viewModel.reportStatus("Git is managed through the project Terminal for now. Open Terminal and run git commands in this project.") },
+                onOpenGit = { viewModel.navigate(Surface.GIT) },
                 onOpenTerminal = { project?.id?.let(viewModel::openTerminalForProject) },
                 onOpenBrowser = { viewModel.navigate(Surface.BROWSER) },
                 onRemoveFromRegistry = { viewModel.clearOperationFeedback(); confirmRemove = true },
@@ -141,14 +126,30 @@ fun ProjectDetailsSurface(
                     confirmDelete = true
                 },
             )
+            }
         }
+        Column(
+            Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            if (state.operationInProgress) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    CircularProgressIndicator(Modifier.padding(2.dp), strokeWidth = 2.dp)
+                    Text("Project operation in progress…")
+                }
+            }
+            if (state.detailsLoading) Text("Refreshing project details…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            state.operationReport?.let { report ->
+                Text(report.message, color = operationStatusColor(report.outcome))
+                report.recoveryHint?.let { Text("Recovery: $it", color = LocalIdeColors.current.warning) }
+            } ?: state.statusMessage?.let { Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant) }
         if (confirmRemove) {
             val completed = state.operationReport?.outcome == dev.android.ide.contracts.OperationOutcome.COMPLETE && !state.operationInProgress
             AlertDialog(
                 onDismissRequest = { if (!state.operationInProgress) confirmRemove = false },
                 title = { Text(if (completed) "Removal complete" else "Remove project from registry?") },
-                text = { if (completed) Text(state.operationReport!!.message, color = MaterialTheme.colorScheme.primary) else Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { Text("${project?.name ?: "This project"} will be removed from Android IDE, but its files, Git data, and location will remain unchanged.\n\nLocation: ${humanReadableStorageLocation(project?.location?.userVisiblePath ?: project?.location?.displayLabel)}"); state.operationReport?.let { Text(it.message, color = MaterialTheme.colorScheme.error) } } },
-                confirmButton = { Button(onClick = if (completed) ({ confirmRemove = false }) else viewModel::removeSelectedProject, enabled = !state.operationInProgress, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary)) { Text(if (completed) "Done" else if (state.operationInProgress) "Removing…" else "Remove from Registry") } },
+                text = { if (completed) Text(state.operationReport!!.message, color = LocalIdeColors.current.success) else Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { Text("${project?.name ?: "This project"} will be removed from Android IDE, but its files, Git data, and location will remain unchanged.\n\nLocation: ${humanReadableStorageLocation(project?.location?.userVisiblePath ?: project?.location?.displayLabel)}"); state.operationReport?.let { Text(it.message, color = operationStatusColor(it.outcome)) } } },
+                confirmButton = { OutlinedButton(onClick = if (completed) ({ confirmRemove = false }) else viewModel::removeSelectedProject, enabled = !state.operationInProgress) { Text(if (completed) "Done" else if (state.operationInProgress) "Removing…" else "Remove from Registry") } },
                 dismissButton = { if (!completed) TextButton(onClick = { confirmRemove = false }, enabled = !state.operationInProgress) { Text(if (state.operationInProgress) "Please wait" else "Cancel") } },
             )
         }
@@ -157,7 +158,7 @@ fun ProjectDetailsSurface(
             AlertDialog(
                 onDismissRequest = { if (!state.operationInProgress) renameVisible = false },
                 title = { Text(if (completed) "Rename complete" else "Change project display name") },
-                text = { if (completed) Text(state.operationReport!!.message, color = MaterialTheme.colorScheme.primary) else Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { androidx.compose.material3.OutlinedTextField(renameValue, { renameValue = it }, label = { Text("Project name") }, enabled = !state.operationInProgress, singleLine = true); state.operationReport?.let { Text(it.message, color = MaterialTheme.colorScheme.error) } } },
+                text = { if (completed) Text(state.operationReport!!.message, color = LocalIdeColors.current.success) else Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { androidx.compose.material3.OutlinedTextField(renameValue, { renameValue = it }, label = { Text("Project name") }, enabled = !state.operationInProgress, singleLine = true); state.operationReport?.let { Text(it.message, color = operationStatusColor(it.outcome)) } } },
                 confirmButton = { TextButton(onClick = if (completed) ({ renameVisible = false }) else ({ viewModel.renameSelectedProject(renameValue) }), enabled = !state.operationInProgress && (completed || renameValue.isNotBlank())) { Text(if (completed) "Done" else if (state.operationInProgress) "Saving…" else "Save") } },
                 dismissButton = { if (!completed) TextButton(onClick = { renameVisible = false }, enabled = !state.operationInProgress) { Text(if (state.operationInProgress) "Please wait" else "Cancel") } },
             )
@@ -177,60 +178,58 @@ fun ProjectDetailsSurface(
                 title = { Text(if (completed) "Deletion complete" else "Permanently delete ${project?.name ?: "this project"}?") },
                 text = {
                     Column {
-                        if (completed) Text(state.operationReport!!.message, color = MaterialTheme.colorScheme.primary)
+                        if (completed) Text(state.operationReport!!.message, color = LocalIdeColors.current.success)
                         else {
                             Text("This permanently removes the project data from its selected storage location. This action cannot be undone.")
                             Text("Project: ${project?.name ?: "Unavailable"}")
                             Text("Location: ${humanReadableStorageLocation(project?.location?.userVisiblePath ?: project?.location?.displayLabel)}")
                             Text("Type $deleteCode to confirm")
                             androidx.compose.material3.OutlinedTextField(enteredDeleteCode, { enteredDeleteCode = it }, label = { Text("Confirmation code") }, enabled = !state.operationInProgress, singleLine = true)
-                            state.operationReport?.let { Text(it.message, color = MaterialTheme.colorScheme.error) }
+                            state.operationReport?.let { Text(it.message, color = operationStatusColor(it.outcome)) }
                         }
                     }
                 },
                 confirmButton = {
-                    Button(onClick = if (completed) ({ confirmDelete = false }) else viewModel::permanentlyDeleteSelectedProject, enabled = !state.operationInProgress && (completed || enteredDeleteCode == deleteCode), colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)) { Text(if (completed) "Done" else if (state.operationInProgress) "Deleting…" else "Delete permanently") }
+                    Button(onClick = if (completed) ({ confirmDelete = false }) else viewModel::permanentlyDeleteSelectedProject, enabled = !state.operationInProgress && (completed || enteredDeleteCode == deleteCode), colors = ButtonDefaults.buttonColors(containerColor = if (completed) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error, contentColor = if (completed) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onError)) { Text(if (completed) "Done" else if (state.operationInProgress) "Deleting…" else "Delete permanently") }
                 },
                 dismissButton = { if (!completed) TextButton(onClick = { confirmDelete = false }, enabled = !state.operationInProgress) { Text(if (state.operationInProgress) "Please wait" else "Cancel") } },
             )
         }
-        DetailSection("Identity") {
-            DetailLine("Name", project?.name ?: "No project selected")
-            DetailLine("Description", project?.description?.ifBlank { "No description" } ?: "No description")
-            project?.let { DetailLine("Metadata", metadataLabel(it.location.capabilityState)) }
-        }
-        state.projectDetails?.let { details ->
-            DetailSection("Location") {
-                DetailLine("Storage path", humanReadableStorageLocation(details.storagePath))
-                DetailLine("Provider", details.storageProvider)
-                DetailLine("Availability", availabilityLabel(details.storageCapabilities.state))
-                details.storageCapabilities.explanation?.takeIf { it.isNotBlank() }?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-            }
-            DetailSection("Contents") {
+        Text(project?.name ?: "No project selected", style = MaterialTheme.typography.headlineSmall)
+        Text(
+            project?.description?.ifBlank { "No description" } ?: "No description",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        val details = state.projectDetails?.takeIf { it.project.stableLocationId == project?.id }
+        DetailLine(
+            "Storage location",
+            humanReadableStorageLocation(details?.storagePath ?: project?.location?.userVisiblePath ?: project?.location?.displayLabel),
+        )
+        DetailLine("Project size", details?.totalBytes?.let(::formatBytes) ?: projectSummary?.totalBytes?.let(::formatBytes) ?: "Calculating…")
+        if (details != null) {
+            DetailSection("Statistics") {
                 DetailLine("Files", details.fileCount.toString())
                 DetailLine("Folders", details.folderCount.toString())
-                DetailLine("Size", formatBytes(details.totalBytes))
-                details.creationTimeMs?.let { DetailLine("Created", formatTimestamp(it)) }
-                details.lastModifiedTimeMs?.let { DetailLine("Last modified", formatTimestamp(it)) }
-                details.languageBytes.entries.sortedByDescending { it.value }.take(4).forEach { (language, bytes) ->
+                details.languageBytes.entries.sortedByDescending { it.value }.forEach { (language, bytes) ->
                     DetailLine(language, formatBytes(bytes))
                 }
             }
-            DetailSection("Capabilities") {
-                DetailLine("Read / update", capabilityLabel(details.storageCapabilities.readable && details.storageCapabilities.writable))
-                DetailLine("Create", capabilityLabel(details.storageCapabilities.canCreate))
-                DetailLine("Rename", capabilityLabel(details.storageCapabilities.canRename))
-                DetailLine("Delete", capabilityLabel(details.storageCapabilities.canDelete))
-                DetailLine("Change observation", capabilityLabel(details.storageCapabilities.canObserveChanges))
+            DetailSection("Metadata") {
+                details.creationTimeMs?.let { DetailLine("Created", formatTimestamp(it)) }
+                details.lastModifiedTimeMs?.let { DetailLine("Last updated", formatTimestamp(it)) }
+                DetailLine("Storage provider", details.storageProvider)
+                DetailLine("Storage availability", availabilityLabel(details.storageCapabilities.state))
             }
-            details.git?.let { git ->
-                DetailSection("Git") {
-                    git.currentBranch?.let { DetailLine("Branch", it) }
-                    if (git.branches.isNotEmpty()) DetailLine("Branches", git.branches.size.toString())
-                    git.remotes.take(3).forEach { remote -> DetailLine(remote.name, safeClipboardRemote(remote.url)) }
-                }
-            }
-        } ?: Text("Loading project details…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        } else if (project != null) {
+            val detailsStatus = projectSummary?.status?.takeIf { it.isNotBlank() }
+                ?: if (state.detailsLoading) "Loading project statistics and metadata…" else "Project statistics and metadata are unavailable."
+            Text(detailsStatus, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        if (project != null) {
+            ProjectGitStatusCard(hasGit = projectSummary?.hasGit, git = details?.git)
+        }
+        }
     }
 }
 
@@ -240,44 +239,22 @@ private fun DetailSection(title: String, content: @Composable () -> Unit) {
         Modifier.fillMaxWidth().padding(top = 4.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        Text(title, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
+        Text(title, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
         content()
     }
-}
-
-private fun metadataLabel(state: CapabilityState): String = when (state) {
-    CapabilityState.SUPPORTED -> "Available"
-    CapabilityState.NOT_YET_CHECKED -> "Loading…"
-    CapabilityState.PERMISSION_LOST -> "Needs attention"
-    CapabilityState.UNSUPPORTED -> "Provider unsupported"
-    CapabilityState.UNAVAILABLE -> "Unavailable"
 }
 
 private fun formatTimestamp(value: Long): String =
     java.time.Instant.ofEpochMilli(value).toString().replace("T", " ").substringBefore('.')
 
-private fun safeClipboardRemote(rawUrl: String): String {
-    val withoutQueryOrFragment = rawUrl.trim().substringBefore('?').substringBefore('#')
-    val withoutScpPassword = withoutQueryOrFragment.replace(
-        Regex("^([^/@:]+):[^/@]+@"),
-        "\$1@",
-    )
-    val uri = runCatching { URI(withoutScpPassword) }.getOrNull()
-        ?: return withoutScpPassword.replace(Regex("(?<=://)[^/@]+@"), "")
-    if (uri.scheme == null || uri.host == null) {
-        return withoutScpPassword.replace(Regex("(?<=://)[^/@]+@"), "")
-    }
-    val safeUserInfo = uri.userInfo?.takeIf { uri.scheme.equals("ssh", ignoreCase = true) && it == "git" }
-    return runCatching {
-        URI(uri.scheme, safeUserInfo, uri.host, uri.port, uri.path, null, null).toASCIIString()
-    }.getOrDefault(withoutScpPassword.replace(Regex("(?<=://)[^/@]+@"), ""))
-}
-
 @Composable
 private fun DetailLine(label: String, value: String) {
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-        Text(label, style = MaterialTheme.typography.labelLarge)
-        Text(value)
+    Column(
+        Modifier.fillMaxWidth().padding(vertical = 2.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(value, style = MaterialTheme.typography.bodyMedium)
     }
 }
 
@@ -288,9 +265,6 @@ private fun availabilityLabel(state: CapabilityState): String = when (state) {
     CapabilityState.UNAVAILABLE -> "Storage location unavailable"
     CapabilityState.PERMISSION_LOST -> "Permission needed"
 }
-
-private fun capabilityLabel(available: Boolean): String =
-    if (available) "Available" else "Unavailable for this provider"
 
 private fun formatBytes(bytes: Long): String {
     if (bytes < 1024L) return "$bytes B"

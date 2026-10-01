@@ -25,6 +25,7 @@ fun ProjectActionsMenu(
     expanded: Boolean,
     onDismiss: () -> Unit,
     enabled: Boolean = true,
+    showRefreshItem: Boolean = true,
     onRefresh: () -> Unit,
     onChangeDisplayName: () -> Unit,
     onChangeLocation: () -> Unit,
@@ -49,13 +50,15 @@ fun ProjectActionsMenu(
                 onClick = { onDismiss(); openDetails() },
             )
         }
-        DropdownMenuItem(
-            leadingIcon = { Icon(Icons.Default.Refresh, contentDescription = null) },
-            text = { Text("Refresh") },
-            enabled = enabled,
-            onClick = { onDismiss(); onRefresh() },
-        )
-        HorizontalDivider()
+        if (showRefreshItem) {
+            DropdownMenuItem(
+                leadingIcon = { Icon(Icons.Default.Refresh, contentDescription = null) },
+                text = { Text("Refresh") },
+                enabled = enabled,
+                onClick = { onDismiss(); onRefresh() },
+            )
+            HorizontalDivider()
+        }
         DropdownMenuItem(
             leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
             text = { Text("Change display name") },
@@ -108,8 +111,8 @@ fun ProjectActionsMenu(
         )
         HorizontalDivider()
         DropdownMenuItem(
-            leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.secondary) },
-            text = { Text("Remove from registry", color = MaterialTheme.colorScheme.secondary) },
+            leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
+            text = { Text("Remove from registry", color = MaterialTheme.colorScheme.onSurfaceVariant) },
             enabled = enabled,
             onClick = { onDismiss(); onRemoveFromRegistry() },
         )

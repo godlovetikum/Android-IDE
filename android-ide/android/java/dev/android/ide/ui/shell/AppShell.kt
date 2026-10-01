@@ -81,7 +81,10 @@ import dev.android.ide.CrashReportSummary
 import dev.android.ide.contracts.Surface
 import dev.android.ide.CrashReporter
 import dev.android.ide.ui.screen.HomeSurface
+import dev.android.ide.ui.screen.GitSurface
 import dev.android.ide.ui.screen.CrashConsoleSurface
+import dev.android.ide.ui.theme.LocalIdeColors
+import dev.android.ide.ui.theme.operationStatusColor
 import dev.android.ide.ui.screen.ProjectDetailsSurface
 import dev.android.ide.ui.screen.EditorSurface
 import dev.android.ide.ui.screen.ProjectsSurface
@@ -198,6 +201,7 @@ fun AppShell(
         sidebarSection = when (state.surface) {
             Surface.EDITOR -> SidebarSection.EDITOR
             Surface.TERMINAL -> SidebarSection.TERMINAL
+            Surface.BROWSER -> SidebarSection.BROWSER
             else -> SidebarSection.NAVIGATION
         }
     }
@@ -336,7 +340,6 @@ fun AppShell(
             confirmButton = {
                 Button(
                     onClick = { viewModel.dismissExitConfirmation(); viewModel.exit(onExit) },
-                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
                 ) { Text("Exit") }
             },
             dismissButton = { TextButton(onClick = viewModel::dismissExitConfirmation) { Text("Cancel") } },
@@ -400,7 +403,7 @@ fun AppShell(
             title = { Text(if (completed) "Deletion complete" else "Permanently delete $projectName?") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (completed) Text(state.operationReport!!.message, color = MaterialTheme.colorScheme.primary)
+                    if (completed) Text(state.operationReport!!.message, color = LocalIdeColors.current.success)
                     else {
                         Text("This permanently removes the project data from its selected storage location. This action cannot be undone.")
                         Text("Type $projectDeleteCode to confirm")
@@ -418,7 +421,10 @@ fun AppShell(
                 Button(
                     onClick = if (completed) ({ projectDeleteConfirmation = false }) else ({ projectDeleteConfirmation = false; viewModel.permanentlyDeleteSelectedProject() }),
                     enabled = !state.operationInProgress && (completed || enteredProjectDeleteCode == projectDeleteCode),
-                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (completed) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                        contentColor = if (completed) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onError,
+                    ),
                 ) { Text(if (completed) "Done" else "Delete permanently") }
             },
             dismissButton = {
@@ -471,8 +477,8 @@ private fun ContextualNavigation(
             NavigationTopItem(Icons.Default.Terminal, "Terminal", section == SidebarSection.TERMINAL) {
                 onSectionNavigate(SidebarSection.TERMINAL, Surface.TERMINAL)
             }
-            NavigationTopItem(Icons.Default.Language, "Browser", state.surface == Surface.BROWSER) {
-                onSectionNavigate(SidebarSection.NAVIGATION, Surface.BROWSER)
+            NavigationTopItem(Icons.Default.Language, "Browser", section == SidebarSection.BROWSER) {
+                onSectionNavigate(SidebarSection.BROWSER, Surface.BROWSER)
             }
         }
         Box(
@@ -504,7 +510,8 @@ private fun ContextualNavigation(
                                 NavigationGridItem(Icons.Default.Settings, "Settings") { onNavigate(Surface.SETTINGS, true) }
                             }
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                NavigationGridItem(Icons.Default.BugReport, "Diagnostics") { onNavigate(Surface.DIAGNOSTICS, true) }
+                                NavigationGridItem(Icons.Default.BugReport, "Console") { onNavigate(Surface.DIAGNOSTICS, true) }
+                                NavigationGridItem(Icons.Default.MergeType, "Git") { onNavigate(Surface.GIT, true) }
                             }
                         }
                         Text("Recent projects", style = MaterialTheme.typography.titleSmall)
@@ -567,6 +574,14 @@ private fun ContextualNavigation(
                             onRemoveProject = appViewModel::removeSelectedProject,
                             onOpenSettings = { onNavigate(Surface.SETTINGS, true) },
                             onFeedback = onFeedback,
+                            onOpenTerminal = { directoryUri ->
+                                val projectId = state.selectedProjectId
+                                if (projectId == null) onFeedback("Select a project before opening its folder in Terminal.")
+                                else {
+                                    appViewModel.openTerminalForProject(projectId, directoryUri)
+                                    onDismissDrawer()
+                                }
+                            },
                             rootNode = root,
                             ideViewModel = ideViewModel,
                             modifier = Modifier.fillMaxSize(),
@@ -595,6 +610,20 @@ private fun ContextualNavigation(
                             }
                         }
                         item { NavigationItem(Icons.Default.Close, "Close all sessions", false, onClick = { appViewModel.closeAllTerminalSessions(); onDismissDrawer() }) }
+                    }
+                }
+                SidebarSection.BROWSER -> {
+                    Column(
+                        Modifier.fillMaxSize().padding(12.dp),
+                        horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center,
+                    ) {
+                        Text("No browser sidebar", style = MaterialTheme.typography.titleSmall)
+                        Text(
+                            "Browser controls are on the Browser screen.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     }
                 }
             }
@@ -704,7 +733,7 @@ private fun TerminalSessionSidebarItem(
             onDismissRequest = { renameOpen = false },
             title = { Text(if (completed) "Rename complete" else "Rename session") },
             text = {
-                if (completed) Text(feedback!!.message, color = MaterialTheme.colorScheme.primary)
+                if (completed) Text(feedback!!.message, color = LocalIdeColors.current.success)
                 else {
                     androidx.compose.material3.OutlinedTextField(
                             value = renameValue,
@@ -712,7 +741,7 @@ private fun TerminalSessionSidebarItem(
                             label = { Text("Session name") },
                             singleLine = true,
                         )
-                    feedback?.let { Text(it.message, color = MaterialTheme.colorScheme.error) }
+                    feedback?.let { Text(it.message, color = operationStatusColor(it.outcome)) }
                 }
             },
             confirmButton = { Button(onClick = if (completed) ({ renameOpen = false }) else ({ onRename(renameValue) }), enabled = completed || renameValue.isNotBlank()) { Text(if (completed) "Done" else "Rename") } },
@@ -758,7 +787,7 @@ private fun androidx.compose.foundation.layout.RowScope.NavigationGridItem(icon:
     }
 }
 
-private enum class SidebarSection { NAVIGATION, EDITOR, TERMINAL }
+private enum class SidebarSection { NAVIGATION, EDITOR, TERMINAL, BROWSER }
 
 @Composable
 private fun NavigationTopItem(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, selected: Boolean, onClick: () -> Unit) {
@@ -783,8 +812,8 @@ private fun NavigationTopItem(icon: androidx.compose.ui.graphics.vector.ImageVec
         contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 6.dp, vertical = 4.dp),
     ) {
         Column(horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            Icon(icon, contentDescription = label, tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
-            Text(label, style = MaterialTheme.typography.labelSmall, color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+            Icon(icon, contentDescription = label, tint = if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(label, style = MaterialTheme.typography.labelSmall, color = if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
@@ -830,7 +859,7 @@ private fun SurfaceHost(
         Surface.DIAGNOSTICS -> CrashConsoleSurface(
             reports = crashReports,
             recoveryCount = ideState.recoveryEntries.size,
-            onBack = { viewModel.back() },
+            onOpenNavigation = onOpenNavigation,
             onRefresh = onOpenCrashConsole,
             onCopy = onCopyCrashReport,
             onShare = onShareCrashReport,
@@ -850,6 +879,7 @@ private fun SurfaceHost(
             modifier = modifier,
         )
         Surface.TERMINAL -> TerminalSurface(state, viewModel, onOpenNavigation, modifier)
+        Surface.GIT -> GitSurface(state, viewModel, onOpenNavigation, modifier)
         Surface.SETTINGS -> SettingsScreen(
             uiState = ideState,
             ideViewModel = ideViewModel,

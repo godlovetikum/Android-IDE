@@ -59,6 +59,7 @@ sealed class FileOpDialog {
         val replacement: String,
         val files: Int,
         val matches: Int,
+        val documentUris: List<String> = emptyList(),
         val isSubmitting: Boolean = false,
         val resultMessage: String? = null,
     ) : FileOpDialog()

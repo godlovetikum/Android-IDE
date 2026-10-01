@@ -1,6 +1,6 @@
 // android-ide/android/java/dev/android/ide/ui/components/IdeStatusBar.kt
 //
-// Status bar shown at the bottom of the editor screen.
+// Low-emphasis status information for editor context.
 
 package dev.android.ide.ui.components
 
@@ -29,28 +29,24 @@ fun IdeStatusBar(
         verticalAlignment = Alignment.CenterVertically,
         modifier = modifier
             .fillMaxWidth()
-            .height(22.dp)
-            .background(colors.accent)
-            .padding(horizontal = 8.dp),
+            .height(26.dp)
+            .background(colors.surface)
+            .padding(horizontal = 12.dp),
     ) {
-        StatusChip(text = "Ln $cursorLine, Col $cursorColumn", color = colors.onAccent)
-
+        StatusChip(text = "Ln $cursorLine, Col $cursorColumn", color = colors.textSecondary)
         if (fileName.isNotEmpty()) {
             Spacer(Modifier.width(12.dp))
-            StatusChip(text = fileName, color = colors.onAccent)
+            StatusChip(text = fileName, color = colors.textPrimary)
         }
-
         Spacer(Modifier.weight(1f))
-
         if (statusMessage.isNotEmpty()) {
-            StatusChip(text = statusMessage, color = colors.onAccent)
-            Spacer(Modifier.weight(1f))
+            StatusChip(text = statusMessage, color = colors.textSecondary)
+            Spacer(Modifier.width(12.dp))
         }
-
         if (language.isNotEmpty()) {
             StatusChip(
-                text  = language.replaceFirstChar { it.uppercase() },
-                color = colors.onAccent,
+                text = language.replaceFirstChar { it.uppercase() },
+                color = colors.textSecondary,
             )
         }
     }

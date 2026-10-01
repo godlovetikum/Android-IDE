@@ -1,163 +1,138 @@
 // android-ide/android/java/dev/android/ide/ui/theme/Color.kt
 //
-// IDE color constants and theming support.
-//
-// The app supports DARK (VS Code dark+), LIGHT (VS Code light+), and SYSTEM themes.
-// All composables obtain colours through LocalIdeColors.current rather than
-// referencing the top-level constants directly.
+// Semantic application color tokens. Keep Compose chrome neutral; reserve accent,
+// warning, success, and error colors for the states and actions they represent.
 
 package dev.android.ide.ui.theme
 
-import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 
-// ── Dark palette ─────────────────────────────────────────────────────────────
-// Matches Monaco's androidide-dark theme so the Compose chrome is visually
-// unified with the editor surface.
-
-private val Dark_Background     = Color(0xFF1E1E1E)
-private val Dark_Surface        = Color(0xFF252526)
-private val Dark_SurfaceVariant = Color(0xFF2D2D2D)
-private val Dark_ActiveHighlight= Color(0xFF37373D)
-private val Dark_Separator      = Color(0xFF3C3C3C)
-private val Dark_TextPrimary    = Color(0xFFD4D4D4)
-private val Dark_TextSecondary  = Color(0xFF858585)
-private val Dark_TextDisabled   = Color(0xFF5A5A5A)
-private val Dark_Accent         = Color(0xFF007ACC)
-private val Dark_AccentLight    = Color(0xFF569CD6)
-private val Dark_Error          = Color(0xFFF48771)
-private val Dark_Warning        = Color(0xFFCCA700)
-private val Dark_Modified       = Color(0xFFE2C08D)
-
-// ── Light palette ─────────────────────────────────────────────────────────────
-// Matches Monaco's androidide-light theme (VS Code Light+ inspired).
-
-private val Light_Background     = Color(0xFFFFFFFF)
-private val Light_Surface        = Color(0xFFF3F3F3)
-private val Light_SurfaceVariant = Color(0xFFEBEBEB)
-private val Light_ActiveHighlight= Color(0xFFE8E8E8)
-private val Light_Separator      = Color(0xFFE1E1E1)
-private val Light_TextPrimary    = Color(0xFF1F1F1F)
-private val Light_TextSecondary  = Color(0xFF717171)
-private val Light_TextDisabled   = Color(0xFFA0A0A0)
-private val Light_Accent         = Color(0xFF0078D4)
-private val Light_AccentLight    = Color(0xFF005FB8)
-private val Light_Error          = Color(0xFFD73A49)
-private val Light_Warning        = Color(0xFFDCA11D)
-private val Light_Modified       = Color(0xFF895503)
-
-// ── IdeColors data class ──────────────────────────────────────────────────────
-// All composables must use LocalIdeColors.current.<field> rather than
-// the file-level constants below, so theme switching works without restart.
-
 data class IdeColors(
+    /** Root screen canvas; aligned with the Monaco editor canvas. */
     val background: Color,
+    /** Default component surface, such as cards and app bars. */
     val surface: Color,
+    /** Lower-emphasis containers and controls. */
     val surfaceVariant: Color,
+    /** Quiet selected-row fill. */
     val activeHighlight: Color,
+    /** Low-emphasis borders and dividers. */
     val separator: Color,
     val textPrimary: Color,
     val textSecondary: Color,
     val textDisabled: Color,
-    val accent: Color,
-    val accentLight: Color,
+    /** Brand role for primary actions and active navigation. */
+    val primary: Color,
+    val onPrimary: Color,
+    val primaryContainer: Color,
+    val onPrimaryContainer: Color,
+    /** Lower-emphasis supporting accent. */
+    val secondary: Color,
+    val onSecondary: Color,
+    val secondaryContainer: Color,
+    val onSecondaryContainer: Color,
+    val tertiary: Color,
+    val onTertiary: Color,
+    val tertiaryContainer: Color,
+    val onTertiaryContainer: Color,
+    /** Reserve error roles for actual failures and destructive actions. */
     val error: Color,
+    val onError: Color,
+    val errorContainer: Color,
+    val onErrorContainer: Color,
+    /** IDE-specific attention state, distinct from failure. */
     val warning: Color,
+    val warningContainer: Color,
+    val onWarningContainer: Color,
+    /** Positive operation state. */
+    val success: Color,
+    val successContainer: Color,
+    val onSuccessContainer: Color,
+    /** IDE-specific document state and stable terminal canvas. */
     val modified: Color,
-    /** Always white — used for text on top of accent-coloured backgrounds. */
-    val onAccent: Color = Color.White,
+    val terminalBackground: Color,
+    /** Inverse roles used by transient surfaces and inverse components. */
+    val inverseSurface: Color,
+    val inverseOnSurface: Color,
+    val inversePrimary: Color,
 )
 
 val darkIdeColors = IdeColors(
-    background      = Dark_Background,
-    surface         = Dark_Surface,
-    surfaceVariant  = Dark_SurfaceVariant,
-    activeHighlight = Dark_ActiveHighlight,
-    separator       = Dark_Separator,
-    textPrimary     = Dark_TextPrimary,
-    textSecondary   = Dark_TextSecondary,
-    textDisabled    = Dark_TextDisabled,
-    accent          = Dark_Accent,
-    accentLight     = Dark_AccentLight,
-    error           = Dark_Error,
-    warning         = Dark_Warning,
-    modified        = Dark_Modified,
+    background = Color(0xFF1E1E1E),
+    surface = Color(0xFF252526),
+    surfaceVariant = Color(0xFF2D2D30),
+    activeHighlight = Color(0xFF353B44),
+    separator = Color(0xFF414141),
+    textPrimary = Color(0xFFE6E6E6),
+    textSecondary = Color(0xFFB1B1B1),
+    textDisabled = Color(0xFF858585),
+    primary = Color(0xFF55A9E2),
+    onPrimary = Color(0xFF061522),
+    primaryContainer = Color(0xFF173B5A),
+    onPrimaryContainer = Color(0xFFD8EDFF),
+    secondary = Color(0xFF67C4B5),
+    onSecondary = Color(0xFF082521),
+    secondaryContainer = Color(0xFF20433E),
+    onSecondaryContainer = Color(0xFFC9EEE7),
+    tertiary = Color(0xFFE0B45E),
+    onTertiary = Color(0xFF2A1C00),
+    tertiaryContainer = Color(0xFF493710),
+    onTertiaryContainer = Color(0xFFFFE8B2),
+    error = Color(0xFFFFB4AB),
+    onError = Color(0xFF5F1010),
+    errorContainer = Color(0xFF5C1D0D),
+    onErrorContainer = Color(0xFFFFDAD6),
+    warning = Color(0xFFF2C66D),
+    warningContainer = Color(0xFF3A3020),
+    onWarningContainer = Color(0xFFFFE6A6),
+    success = Color(0xFF7BD9A9),
+    successContainer = Color(0xFF18392B),
+    onSuccessContainer = Color(0xFFC2F0D1),
+    modified = Color(0xFFE2C08D),
+    terminalBackground = Color(0xFF101216),
+    inverseSurface = Color(0xFFF1F2F4),
+    inverseOnSurface = Color(0xFF25272B),
+    inversePrimary = Color(0xFF145B93),
 )
 
 val lightIdeColors = IdeColors(
-    background      = Light_Background,
-    surface         = Light_Surface,
-    surfaceVariant  = Light_SurfaceVariant,
-    activeHighlight = Light_ActiveHighlight,
-    separator       = Light_Separator,
-    textPrimary     = Light_TextPrimary,
-    textSecondary   = Light_TextSecondary,
-    textDisabled    = Light_TextDisabled,
-    accent          = Light_Accent,
-    accentLight     = Light_AccentLight,
-    error           = Light_Error,
-    warning         = Light_Warning,
-    modified        = Light_Modified,
+    background = Color(0xFFFFFFFF),
+    surface = Color(0xFFF6F7F9),
+    surfaceVariant = Color(0xFFECEFF3),
+    activeHighlight = Color(0xFFE4EEFA),
+    separator = Color(0xFFD6DCE5),
+    textPrimary = Color(0xFF1F2328),
+    textSecondary = Color(0xFF59636E),
+    textDisabled = Color(0xFF7D8793),
+    primary = Color(0xFF0066B3),
+    onPrimary = Color(0xFFFFFFFF),
+    primaryContainer = Color(0xFFD7E8F8),
+    onPrimaryContainer = Color(0xFF102F4B),
+    secondary = Color(0xFF166B63),
+    onSecondary = Color(0xFFFFFFFF),
+    secondaryContainer = Color(0xFFD5EEE8),
+    onSecondaryContainer = Color(0xFF103E38),
+    tertiary = Color(0xFF8B5E0A),
+    onTertiary = Color(0xFFFFFFFF),
+    tertiaryContainer = Color(0xFFF5E7C6),
+    onTertiaryContainer = Color(0xFF4E3800),
+    error = Color(0xFFB3261E),
+    onError = Color(0xFFFFFFFF),
+    errorContainer = Color(0xFFF9DEDC),
+    onErrorContainer = Color(0xFF410E0B),
+    warning = Color(0xFF795900),
+    warningContainer = Color(0xFFFFF1CC),
+    onWarningContainer = Color(0xFF4D3800),
+    success = Color(0xFF216E45),
+    successContainer = Color(0xFFDCEFE3),
+    onSuccessContainer = Color(0xFF173B29),
+    modified = Color(0xFF895503),
+    terminalBackground = Color(0xFF101216),
+    inverseSurface = Color(0xFF313840),
+    inverseOnSurface = Color(0xFFEEF2F6),
+    inversePrimary = Color(0xFF99C5EE),
 )
 
-/** Provides [IdeColors] to all descendant composables. */
+/** Provides theme-aware IDE-specific tokens to descendants. */
 val LocalIdeColors = staticCompositionLocalOf { darkIdeColors }
-
-// ── Legacy top-level constants ────────────────────────────────────────────────
-// Kept for the Material3 dark color scheme in Theme.kt.
-// Do NOT use these in composables — use LocalIdeColors.current instead.
-
-internal val IdeBackground     = Dark_Background
-internal val IdeSurface        = Dark_Surface
-internal val IdeSurfaceVariant = Dark_SurfaceVariant
-internal val IdeSeparator      = Dark_Separator
-internal val IdeTextPrimary    = Dark_TextPrimary
-internal val IdeTextSecondary  = Dark_TextSecondary
-internal val IdeAccent         = Dark_Accent
-internal val IdeAccentLight    = Dark_AccentLight
-internal val IdeError          = Dark_Error
-
-// Material3 role seeds (dark scheme)
-internal val Md3Primary              = IdeAccent
-internal val Md3OnPrimary            = Color(0xFFFFFFFF)
-internal val Md3PrimaryContainer     = Color(0xFF004A7A)
-internal val Md3OnPrimaryContainer   = Color(0xFFCCE5FF)
-internal val Md3Secondary            = IdeAccentLight
-internal val Md3OnSecondary          = Color(0xFF1A1A1A)
-internal val Md3SecondaryContainer   = Color(0xFF263850)
-internal val Md3OnSecondaryContainer = Color(0xFFBDD6EF)
-internal val Md3Background           = IdeBackground
-internal val Md3OnBackground         = IdeTextPrimary
-internal val Md3Surface              = IdeSurface
-internal val Md3OnSurface            = IdeTextPrimary
-internal val Md3SurfaceVariant       = IdeSurfaceVariant
-internal val Md3OnSurfaceVariant     = IdeTextSecondary
-internal val Md3Outline              = IdeSeparator
-internal val Md3OutlineVariant       = Color(0xFF2A2A2A)
-internal val Md3Error                = IdeError
-internal val Md3OnError              = Color(0xFF1A0A00)
-internal val Md3ErrorContainer       = Color(0xFF5C1D0D)
-internal val Md3OnErrorContainer     = Color(0xFFFFDAD6)
-
-// Material3 role seeds (light scheme)
-internal val Md3LightPrimary              = Light_Accent
-internal val Md3LightOnPrimary            = Color(0xFFFFFFFF)
-internal val Md3LightPrimaryContainer     = Color(0xFFCFE4FF)
-internal val Md3LightOnPrimaryContainer   = Color(0xFF001E33)
-internal val Md3LightSecondary            = Light_AccentLight
-internal val Md3LightOnSecondary          = Color(0xFFFFFFFF)
-internal val Md3LightSecondaryContainer   = Color(0xFFCBE5FF)
-internal val Md3LightOnSecondaryContainer = Color(0xFF001D33)
-internal val Md3LightBackground           = Light_Background
-internal val Md3LightOnBackground         = Light_TextPrimary
-internal val Md3LightSurface              = Light_Surface
-internal val Md3LightOnSurface            = Light_TextPrimary
-internal val Md3LightSurfaceVariant       = Light_SurfaceVariant
-internal val Md3LightOnSurfaceVariant     = Light_TextSecondary
-internal val Md3LightOutline              = Light_Separator
-internal val Md3LightOutlineVariant       = Color(0xFFCCCCCC)
-internal val Md3LightError                = Light_Error
-internal val Md3LightOnError              = Color(0xFFFFFFFF)
-internal val Md3LightErrorContainer       = Color(0xFFFFDAD6)
-internal val Md3LightOnErrorContainer     = Color(0xFF410002)

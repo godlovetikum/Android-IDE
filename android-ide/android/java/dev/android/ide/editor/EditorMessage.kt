@@ -179,6 +179,12 @@ sealed class EditorOutbound {
      */
     data class InsertText(val text: String) : EditorOutbound()
 
+    /** Insert a matching delimiter pair, placing the cursor between the delimiters. */
+    data class InsertPair(val opening: String, val closing: String) : EditorOutbound()
+
+    /** Insert a Monaco snippet; replace a matching [trigger] token immediately before the cursor. */
+    data class InsertSnippet(val trigger: String, val snippet: String) : EditorOutbound()
+
     /** Show Monaco's built-in find widget. */
     object ShowFind : EditorOutbound()
 
@@ -259,6 +265,8 @@ sealed class EditorOutbound {
             is ForceLayout     -> put("type", "forceLayout")
             is ExecuteCommand  -> { put("type", "executeCommand"); put("command", msg.command) }
             is InsertText      -> { put("type", "insertText");     put("text", msg.text) }
+            is InsertPair      -> { put("type", "insertPair"); put("opening", msg.opening); put("closing", msg.closing) }
+            is InsertSnippet   -> { put("type", "insertSnippet"); put("trigger", msg.trigger); put("snippet", msg.snippet) }
             is ShowFind           -> put("type", "showFind")
             is ShowReplace        -> put("type", "showReplace")
             is CloseSearch        -> put("type", "closeSearch")

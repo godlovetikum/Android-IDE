@@ -8,6 +8,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
@@ -30,6 +31,7 @@ fun EditorProjectActionsMenu(
     onDeleteProject: () -> Unit,
     onRemoveProject: () -> Unit,
     onPasteAtRoot: (() -> Unit)? = null,
+    onOpenTerminal: (() -> Unit)? = null,
     includeCreationActions: Boolean = true,
 ) {
     val colors = LocalIdeColors.current
@@ -64,6 +66,13 @@ fun EditorProjectActionsMenu(
             text = { Text("Refresh files") },
             onClick = { onDismiss(); onRefresh() },
         )
+        onOpenTerminal?.let { openTerminal ->
+            DropdownMenuItem(
+                leadingIcon = { Icon(Icons.Default.Terminal, null) },
+                text = { Text("Open Terminal") },
+                onClick = { onDismiss(); openTerminal() },
+            )
+        }
         DropdownMenuItem(
             leadingIcon = { Icon(Icons.Default.Code, null) },
             text = { Text("Export project") },
@@ -81,8 +90,8 @@ fun EditorProjectActionsMenu(
             onClick = { onDismiss(); onDeleteProject() },
         )
         DropdownMenuItem(
-            leadingIcon = { Icon(Icons.Default.Delete, null, tint = colors.accent) },
-            text = { Text("Remove from registry", color = colors.accent) },
+            leadingIcon = { Icon(Icons.Default.Delete, null, tint = colors.textSecondary) },
+            text = { Text("Remove from registry", color = colors.textSecondary) },
             onClick = { onDismiss(); onRemoveProject() },
         )
     }

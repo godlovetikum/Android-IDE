@@ -36,6 +36,7 @@ import dev.android.ide.contracts.SessionAvailability
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
@@ -61,6 +62,7 @@ data class AppShellState(
     val terminalSessions: List<SessionDescriptor> = emptyList(),
     val selectedTerminalSessionId: String? = null,
     val terminalOutput: String = "",
+    val terminalProgress: String? = null,
     val terminalFeedback: OperationReport? = null,
     val navigationPromptVisible: Boolean = false,
     val pendingNavigation: Surface? = null,
@@ -107,6 +109,14 @@ class AppShellViewModel(application: Application) : AndroidViewModel(application
     val state: StateFlow<AppShellState> = _state.asStateFlow()
 
     init {
+        terminalRuntime.setTerminalFeedbackListener { report ->
+            _state.update { it.copy(terminalFeedback = report) }
+        }
+        viewModelScope.launch {
+            terminalRuntime.initializationProgress.collect { progress ->
+                _state.update { it.copy(terminalProgress = progress) }
+            }
+        }
         viewModelScope.launch {
             lifecycle.restore()
             refreshProjects()
@@ -114,8 +124,14 @@ class AppShellViewModel(application: Application) : AndroidViewModel(application
         }
         viewModelScope.launch {
             runtimeState.ensureReady()
-            terminalRuntime.initialize()
-            _state.update { it.copy(runtimeCapabilities = terminalRuntime.capabilities()) }
+            val initialization = terminalRuntime.initialize()
+            _state.update {
+                it.copy(
+                    runtimeCapabilities = terminalRuntime.capabilities(),
+                    terminalProgress = null,
+                    terminalFeedback = initialization.takeUnless { report -> report.outcome == OperationOutcome.COMPLETE },
+                )
+            }
             refreshTerminalSessions()
         }
     }
@@ -144,49 +160,79 @@ class AppShellViewModel(application: Application) : AndroidViewModel(application
 
     fun createTerminalSession(workingDirectory: String? = null, name: String = "") {
         viewModelScope.launch {
-            val inheritedDirectory = workingDirectory ?: _state.value.terminalSessions
+            val previousDirectory = _state.value.terminalSessions
                 .firstOrNull { it.id == _state.value.selectedTerminalSessionId && it.availability == SessionAvailability.AVAILABLE }
                 ?.workingDirectory
+            // Direct/global sessions inherit a still-usable session directory; otherwise null
+            // deliberately selects the initialized Termux home. Explicit paths remain strict.
+            val inheritedDirectory = workingDirectory ?: previousDirectory
+                ?.takeIf(terminalRuntime::isUsableWorkingDirectory)
             val session = terminalRuntime.createSession(
                 inheritedDirectory,
                 name.trim().ifBlank { "Untitled session" },
             )
-            _state.update { it.copy(selectedTerminalSessionId = session.id, terminalFeedback = null) }
+            _state.update { state ->
+                val launchFailure = session.terminationReason?.let { reason ->
+                    OperationReport(OperationOutcome.BLOCKED, reason, ErrorCategory.UNAVAILABLE_RUNTIME)
+                }
+                val packageWarning = state.terminalFeedback?.takeIf {
+                    it.outcome == OperationOutcome.PARTIAL && it.errorCategory == ErrorCategory.PACKAGE_FAILURE
+                }
+                state.copy(
+                    selectedTerminalSessionId = session.id.takeIf { session.availability == SessionAvailability.AVAILABLE },
+                    terminalFeedback = launchFailure ?: packageWarning,
+                )
+            }
             refreshTerminalSessions()
         }
     }
 
     /** Open a terminal for a project using its accessible filesystem directory when available. */
-    fun openTerminalForProject(projectId: String) {
+    fun openTerminalForProject(projectId: String, directoryUri: String? = null) {
         viewModelScope.launch {
             val project = _state.value.projects.firstOrNull { it.id == projectId }
             if (project == null) {
-                _state.update { it.copy(terminalFeedback = OperationReport(OperationOutcome.BLOCKED, "The selected project is no longer available", ErrorCategory.PERMISSION_LOST)) }
+                reportTerminalLaunchFailure(OperationReport(OperationOutcome.BLOCKED, "The selected project is no longer available", ErrorCategory.PERMISSION_LOST))
                 return@launch
             }
-            val access = terminalRuntime.inspectProjectAccess(project)
+            val terminalProject = directoryUri?.let { uri ->
+                project.copy(location = project.location.copy(stableId = uri, userVisiblePath = uri, displayLabel = uri))
+            } ?: project
+            val access = terminalRuntime.inspectProjectAccess(terminalProject)
             if (!access.available) {
-                _state.update {
-                    it.copy(
-                        terminalFeedback = OperationReport(
-                            OperationOutcome.BLOCKED,
-                            access.explanation ?: "The selected project cannot be opened in Terminal",
-                            ErrorCategory.UNSUPPORTED_PROVIDER_CAPABILITY,
-                        ),
-                    )
-                }
+                reportTerminalLaunchFailure(OperationReport(
+                    OperationOutcome.BLOCKED,
+                    access.explanation ?: "The selected project or folder cannot be opened in Terminal",
+                    ErrorCategory.UNSUPPORTED_PROVIDER_CAPABILITY,
+                ))
                 return@launch
             }
-            val directory = terminalRuntime.workingDirectory(project)
+            val directory = terminalRuntime.workingDirectory(terminalProject)
             if (directory == null) {
-                _state.update { it.copy(terminalFeedback = OperationReport(OperationOutcome.BLOCKED, "The selected project has no accessible terminal working directory", ErrorCategory.PERMISSION_LOST)) }
+                reportTerminalLaunchFailure(OperationReport(OperationOutcome.BLOCKED, "The selected project or folder has no accessible terminal working directory", ErrorCategory.PERMISSION_LOST))
+                return@launch
+            }
+            if (!terminalRuntime.isUsableWorkingDirectory(directory)) {
+                reportTerminalLaunchFailure(OperationReport(OperationOutcome.BLOCKED, "Terminal cannot read, write, or enter the selected project folder: $directory", ErrorCategory.PERMISSION_LOST))
                 return@launch
             }
             val session = terminalRuntime.createSession(directory, project.name)
-            _state.update { it.copy(selectedTerminalSessionId = session.id, terminalFeedback = null) }
+            if (session.availability != SessionAvailability.AVAILABLE) {
+                reportTerminalLaunchFailure(OperationReport(
+                    OperationOutcome.BLOCKED,
+                    session.terminationReason ?: "Terminal could not start in the selected project folder",
+                    ErrorCategory.UNAVAILABLE_RUNTIME,
+                ))
+                return@launch
+            }
+            _state.update { it.copy(selectedTerminalSessionId = session.id, terminalFeedback = null, operationReport = null, statusMessage = null) }
             refreshTerminalSessions()
             navigate(Surface.TERMINAL)
         }
+    }
+
+    private fun reportTerminalLaunchFailure(report: OperationReport) {
+        _state.update { it.copy(terminalFeedback = report, operationReport = report, statusMessage = report.message) }
     }
 
     fun resizeTerminal(columns: Int, rows: Int) {
@@ -214,7 +260,9 @@ class AppShellViewModel(application: Application) : AndroidViewModel(application
         val sessionId = _state.value.selectedTerminalSessionId ?: return
         viewModelScope.launch {
             val report = terminalRuntime.sendInput(sessionId, input)
-            _state.update { it.copy(terminalFeedback = report) }
+            if (report.outcome != OperationOutcome.COMPLETE) {
+                _state.update { it.copy(terminalFeedback = report) }
+            }
             refreshTerminalOutput()
         }
     }
@@ -262,6 +310,8 @@ class AppShellViewModel(application: Application) : AndroidViewModel(application
     }
 
     override fun onCleared() {
+        terminalRuntime.setTerminalFeedbackListener(null)
+        terminalRuntime.shutdown()
         super.onCleared()
     }
 
@@ -533,7 +583,7 @@ class AppShellViewModel(application: Application) : AndroidViewModel(application
         val projectId = _state.value.selectedProjectId ?: return
         val generation = restoreGeneration
         viewModelScope.launch {
-            _state.update { it.copy(detailsLoading = true, statusMessage = null, operationReport = null) }
+            _state.update { it.copy(detailsLoading = true, projectDetails = null, statusMessage = null, operationReport = null) }
             val details = detailsService.load(projectId)
             if (generation != restoreGeneration || _state.value.selectedProjectId != projectId) return@launch
             when (details) {

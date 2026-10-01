@@ -16,6 +16,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import dev.android.ide.contracts.OperationOutcome
 import dev.android.ide.contracts.OperationReport
+import dev.android.ide.ui.theme.LocalIdeColors
 
 internal enum class ProjectOperationKind { DUPLICATE, RELOCATE }
 
@@ -43,14 +44,14 @@ internal fun ProjectOperationDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (completed) {
-                    Text(operationReport!!.message, color = MaterialTheme.colorScheme.primary)
+                    Text(operationReport!!.message, color = LocalIdeColors.current.success)
                 } else {
                     sourceLocation?.takeIf { it.isNotBlank() }?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
                     OutlinedTextField(value = name, onValueChange = onNameChange, label = { Text(if (kind == ProjectOperationKind.DUPLICATE) "Project name" else "Display name") }, enabled = !operationInProgress, singleLine = true)
                     if (kind == ProjectOperationKind.DUPLICATE) OutlinedTextField(value = description, onValueChange = onDescriptionChange, label = { Text("Description") }, enabled = !operationInProgress)
                     destination?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
                     Button(onClick = onChooseDestination, enabled = !operationInProgress) { Text(if (destination == null) "Choose destination" else "Choose another location") }
-                    operationReport?.let { report -> Text(report.message, color = MaterialTheme.colorScheme.error) }
+                    operationReport?.let { report -> Text(report.message, color = dev.android.ide.ui.theme.operationStatusColor(report.outcome)) }
                     if (operationInProgress) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             CircularProgressIndicator(Modifier, strokeWidth = 2.dp)

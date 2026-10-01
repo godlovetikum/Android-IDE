@@ -11,6 +11,7 @@ import android.provider.DocumentsProvider
 import java.io.File
 import java.io.FileNotFoundException
 import java.io.IOException
+import java.nio.file.Files
 
 /**
  * Exposes only Android IDE's durable user-files root through SAF.
@@ -23,34 +24,35 @@ class AndroidIdeDocumentsProvider : DocumentsProvider() {
         get() = requireNotNull(context).filesDir.resolve(USER_FILES_DIRECTORY)
 
     override fun onCreate(): Boolean {
-        rootDirectory.mkdirs()
+        if (!rootDirectory.isDirectory && !rootDirectory.mkdirs()) return false
         return rootDirectory.isDirectory
     }
 
     override fun queryRoots(projection: Array<out String>?): Cursor {
-        val result = MatrixCursor(resolveProjection(projection, ROOT_PROJECTION))
-        rootDirectory.mkdirs()
-        result.newRow().apply {
-            add(DocumentsContract.Root.COLUMN_ROOT_ID, ROOT_ID)
-            add(DocumentsContract.Root.COLUMN_DOCUMENT_ID, ROOT_DOCUMENT_ID)
-            add(DocumentsContract.Root.COLUMN_TITLE, "Android IDE files")
-            add(DocumentsContract.Root.COLUMN_SUMMARY, "Development files accessible through SAF")
-            add(DocumentsContract.Root.COLUMN_FLAGS,
-                DocumentsContract.Root.FLAG_SUPPORTS_CREATE or
-                    DocumentsContract.Root.FLAG_SUPPORTS_RECENTS or
-                    DocumentsContract.Root.FLAG_SUPPORTS_SEARCH)
-            add(DocumentsContract.Root.COLUMN_MIME_TYPES, "*/*\n${DocumentsContract.Document.MIME_TYPE_DIR}")
-            add(DocumentsContract.Root.COLUMN_AVAILABLE_BYTES, rootDirectory.usableSpace)
-            add(DocumentsContract.Root.COLUMN_ICON, android.R.drawable.ic_menu_save)
+        val columns = resolveProjection(projection, ROOT_PROJECTION)
+        val result = MatrixCursor(columns)
+        if (!rootDirectory.isDirectory && !rootDirectory.mkdirs()) {
+            throw IOException("Android IDE storage root could not be created")
         }
+        result.addProjectedRow(columns, mapOf(
+            DocumentsContract.Root.COLUMN_ROOT_ID to ROOT_ID,
+            DocumentsContract.Root.COLUMN_DOCUMENT_ID to ROOT_DOCUMENT_ID,
+            DocumentsContract.Root.COLUMN_TITLE to "Android IDE",
+            DocumentsContract.Root.COLUMN_SUMMARY to "Development files accessible through SAF",
+            DocumentsContract.Root.COLUMN_FLAGS to DocumentsContract.Root.FLAG_SUPPORTS_CREATE,
+            DocumentsContract.Root.COLUMN_MIME_TYPES to "*/*\n${DocumentsContract.Document.MIME_TYPE_DIR}",
+            DocumentsContract.Root.COLUMN_AVAILABLE_BYTES to rootDirectory.usableSpace,
+            DocumentsContract.Root.COLUMN_ICON to android.R.drawable.ic_menu_save,
+        ))
         return result
     }
 
     override fun queryDocument(documentId: String, projection: Array<out String>?): Cursor {
         val file = fileForDocumentId(documentId)
         if (!file.exists()) throw FileNotFoundException(documentId)
-        return MatrixCursor(resolveProjection(projection, DOCUMENT_PROJECTION)).also { cursor ->
-            appendDocument(cursor, documentId, file)
+        val columns = resolveProjection(projection, DOCUMENT_PROJECTION)
+        return MatrixCursor(columns).also { cursor ->
+            appendDocument(cursor, columns, documentId, file)
         }
     }
 
@@ -61,12 +63,14 @@ class AndroidIdeDocumentsProvider : DocumentsProvider() {
     ): Cursor {
         val parent = fileForDocumentId(parentDocumentId)
         if (!parent.isDirectory) throw FileNotFoundException(parentDocumentId)
-        val result = MatrixCursor(resolveProjection(projection, DOCUMENT_PROJECTION))
-        parent.listFiles()
-            ?.sortedWith(compareBy<File>({ !it.isDirectory }, { it.name.lowercase() }))
-            ?.forEach { child ->
-                appendDocument(result, documentIdForFile(child), child)
-            }
+        val columns = resolveProjection(projection, DOCUMENT_PROJECTION)
+        val result = MatrixCursor(columns)
+        val children = parent.listFiles() ?: throw IOException("Android IDE storage directory could not be listed")
+        children.asSequence()
+            .filterNot { child -> runCatching { Files.isSymbolicLink(child.toPath()) }.getOrDefault(true) }
+            .filter { child -> runCatching { child.canonicalFile.toPath().startsWith(rootDirectory.canonicalFile.toPath()) }.getOrDefault(false) }
+            .sortedWith(compareBy<File>({ !it.isDirectory }, { it.name.lowercase() }))
+            .forEach { child -> appendDocument(result, columns, documentIdForFile(child), child) }
         return result
     }
 
@@ -118,35 +122,50 @@ class AndroidIdeDocumentsProvider : DocumentsProvider() {
     override fun queryRecentDocuments(rootId: String, projection: Array<out String>?): Cursor =
         MatrixCursor(resolveProjection(projection, DOCUMENT_PROJECTION))
 
-    private fun appendDocument(cursor: MatrixCursor, documentId: String, file: File) {
+    private fun appendDocument(cursor: MatrixCursor, columns: Array<String>, documentId: String, file: File) {
         val isDirectory = file.isDirectory
-        cursor.newRow().apply {
-            add(DocumentsContract.Document.COLUMN_DOCUMENT_ID, documentId)
-            add(DocumentsContract.Document.COLUMN_DISPLAY_NAME, file.name.ifBlank { "Android IDE files" })
-            add(DocumentsContract.Document.COLUMN_MIME_TYPE,
-                if (isDirectory) DocumentsContract.Document.MIME_TYPE_DIR else mimeType(file.name))
-            add(DocumentsContract.Document.COLUMN_FLAGS,
-                (if (isDirectory) DocumentsContract.Document.FLAG_DIR_SUPPORTS_CREATE else 0) or
-                    DocumentsContract.Document.FLAG_SUPPORTS_WRITE or
-                    DocumentsContract.Document.FLAG_SUPPORTS_DELETE or
-                    DocumentsContract.Document.FLAG_SUPPORTS_RENAME)
-            add(DocumentsContract.Document.COLUMN_SIZE, if (isDirectory) 0L else file.length())
-            add(DocumentsContract.Document.COLUMN_LAST_MODIFIED, file.lastModified())
-            add(DocumentsContract.Document.COLUMN_ICON, android.R.drawable.ic_menu_save)
+        val isRoot = file.canonicalFile == rootDirectory.canonicalFile
+        var flags = 0
+        if (isDirectory && file.canWrite() && file.canExecute()) {
+            flags = flags or DocumentsContract.Document.FLAG_DIR_SUPPORTS_CREATE
         }
+        if (!isRoot && file.parentFile?.canWrite() == true) {
+            flags = flags or DocumentsContract.Document.FLAG_SUPPORTS_DELETE or DocumentsContract.Document.FLAG_SUPPORTS_RENAME
+        }
+        if (!isDirectory && file.canWrite()) flags = flags or DocumentsContract.Document.FLAG_SUPPORTS_WRITE
+        cursor.addProjectedRow(columns, mapOf(
+            DocumentsContract.Document.COLUMN_DOCUMENT_ID to documentId,
+            DocumentsContract.Document.COLUMN_DISPLAY_NAME to file.name.ifBlank { "Android IDE" },
+            DocumentsContract.Document.COLUMN_MIME_TYPE to
+                (if (isDirectory) DocumentsContract.Document.MIME_TYPE_DIR else mimeType(file.name)),
+            DocumentsContract.Document.COLUMN_FLAGS to flags,
+            DocumentsContract.Document.COLUMN_SIZE to (if (isDirectory) 0L else file.length()),
+            DocumentsContract.Document.COLUMN_LAST_MODIFIED to file.lastModified(),
+            DocumentsContract.Document.COLUMN_ICON to android.R.drawable.ic_menu_save,
+        ))
     }
 
     private fun fileForDocumentId(documentId: String): File {
         val root = rootDirectory.canonicalFile
-        val file = if (documentId == ROOT_DOCUMENT_ID) root else File(root, documentId).canonicalFile
+        val relative = when {
+            documentId == ROOT_DOCUMENT_ID -> ""
+            documentId.startsWith(FILE_DOCUMENT_ID_PREFIX) -> documentId.removePrefix(FILE_DOCUMENT_ID_PREFIX)
+            else -> documentId // Accept existing pre-prefix child IDs while older projects migrate.
+        }
+        if (documentId.startsWith(FILE_DOCUMENT_ID_PREFIX) && relative.isBlank()) {
+            throw FileNotFoundException("Empty child document ID")
+        }
+        val file = if (relative.isEmpty()) root else File(root, relative).canonicalFile
         if (!file.toPath().startsWith(root.toPath())) throw FileNotFoundException("Document is outside provider root")
         return file
     }
 
-    private fun documentIdForFile(file: File): String =
-        file.canonicalFile.toPath().let { rootDirectory.canonicalFile.toPath().relativize(it).toString() }
+    private fun documentIdForFile(file: File): String {
+        val relative = file.canonicalFile.toPath()
+            .let { rootDirectory.canonicalFile.toPath().relativize(it).toString() }
             .replace(File.separatorChar, '/')
-            .ifBlank { ROOT_DOCUMENT_ID }
+        return if (relative.isBlank()) ROOT_DOCUMENT_ID else FILE_DOCUMENT_ID_PREFIX + relative
+    }
 
     private fun modeFlags(mode: String): Int = when (mode) {
         "r" -> ParcelFileDescriptor.MODE_READ_ONLY
@@ -173,10 +192,15 @@ class AndroidIdeDocumentsProvider : DocumentsProvider() {
     private fun resolveProjection(projection: Array<out String>?, defaults: Array<String>): Array<String> =
         projection?.toList()?.toTypedArray() ?: defaults
 
+    private fun MatrixCursor.addProjectedRow(columns: Array<String>, values: Map<String, Any?>) {
+        addRow(columns.map { column -> values[column] }.toTypedArray())
+    }
+
     companion object {
         const val AUTHORITY = "dev.android.ide.documents"
         const val ROOT_ID = "android-ide-files"
         const val ROOT_DOCUMENT_ID = "root"
+        private const val FILE_DOCUMENT_ID_PREFIX = "file:"
         const val USER_FILES_DIRECTORY = "android-ide-files"
 
         fun isProviderUri(uriString: String): Boolean =
@@ -192,7 +216,13 @@ class AndroidIdeDocumentsProvider : DocumentsProvider() {
                 else -> return@runCatching null
             }
             val root = context.filesDir.resolve(USER_FILES_DIRECTORY).canonicalFile
-            val candidate = if (documentId == ROOT_DOCUMENT_ID) root else File(root, documentId).canonicalFile
+            val relative = when {
+                documentId == ROOT_DOCUMENT_ID -> ""
+                documentId.startsWith(FILE_DOCUMENT_ID_PREFIX) -> documentId.removePrefix(FILE_DOCUMENT_ID_PREFIX)
+                else -> documentId // Existing project URIs use the legacy relative ID form.
+            }
+            if (documentId.startsWith(FILE_DOCUMENT_ID_PREFIX) && relative.isBlank()) return@runCatching null
+            val candidate = if (relative.isEmpty()) root else File(root, relative).canonicalFile
             candidate.takeIf { it.toPath().startsWith(root.toPath()) }
         }.getOrNull()
 

@@ -18,7 +18,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import dev.android.ide.app.AppShellState
 import dev.android.ide.app.AppShellViewModel
+import dev.android.ide.contracts.OperationOutcome
 import dev.android.ide.project.CreateProjectTemplate
+import dev.android.ide.ui.theme.LocalIdeColors
+import dev.android.ide.ui.theme.operationStatusColor
 
 @Composable
 internal fun CreateNewProjectDialog(
@@ -60,7 +63,7 @@ internal fun CreateNewProjectDialog(
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     if (acquiredId != null) {
-                        Text(state.operationReport?.message ?: "Project created successfully.", color = MaterialTheme.colorScheme.primary)
+                        Text(state.operationReport?.message ?: "Project created successfully.", color = LocalIdeColors.current.success)
                     } else {
                         Text(template.title, style = MaterialTheme.typography.bodyMedium)
                         OutlinedTextField(name, onNameChange, label = { Text("Project name") }, enabled = !state.operationInProgress, singleLine = true)
@@ -130,19 +133,20 @@ internal fun LoadExistingProjectDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (acquiredId != null) {
-                    Text(state.operationReport?.message ?: "Project loaded successfully.", color = MaterialTheme.colorScheme.primary)
+                    Text(state.operationReport?.message ?: "Project loaded successfully.", color = LocalIdeColors.current.success)
                 } else {
                     folderUri?.let { Text(onLocation(it), style = MaterialTheme.typography.bodySmall) }
                     OutlinedTextField(description, onDescriptionChange, label = { Text("Description") }, enabled = !state.operationInProgress, minLines = 2)
-                    AcquisitionStatus(
-                        message = state.operationReport?.message ?: when {
+                        AcquisitionStatus(
+                            message = state.operationReport?.message ?: when {
                             state.operationInProgress -> "Loading project…"
                             inspection == null -> "Inspecting project location…"
                             !ready -> "Choose another folder"
                             else -> "Ready"
-                        },
-                        busy = state.operationInProgress || inspection == null,
-                    )
+                            },
+                            busy = state.operationInProgress || inspection == null,
+                            outcome = state.operationReport?.outcome,
+                        )
                 }
             }
         },
@@ -186,7 +190,7 @@ internal fun ImportZipProjectDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (acquiredId != null) {
-                    Text(state.operationReport?.message ?: "Project imported successfully.", color = MaterialTheme.colorScheme.primary)
+                    Text(state.operationReport?.message ?: "Project imported successfully.", color = LocalIdeColors.current.success)
                 } else {
                     archiveUri?.let { Text(onLocation(it), style = MaterialTheme.typography.bodySmall) }
                     OutlinedTextField(name, onNameChange, label = { Text("Project name") }, enabled = !state.operationInProgress, singleLine = true)
@@ -201,6 +205,7 @@ internal fun ImportZipProjectDialog(
                             else -> "Ready"
                         },
                         state.operationInProgress,
+                        outcome = state.operationReport?.outcome,
                     )
                 }
             }
@@ -260,9 +265,10 @@ private fun AcquisitionPicker(
 }
 
 @Composable
-private fun AcquisitionStatus(message: String, busy: Boolean) {
+private fun AcquisitionStatus(message: String, busy: Boolean, outcome: OperationOutcome? = null) {
+    val statusColor = outcome?.let { operationStatusColor(it) } ?: MaterialTheme.colorScheme.onSurfaceVariant
     Row(verticalAlignment = Alignment.CenterVertically) {
         if (busy) CircularProgressIndicator(Modifier.padding(end = 8.dp), strokeWidth = 2.dp)
-        Text(message, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(message, style = MaterialTheme.typography.bodySmall, color = statusColor)
     }
 }

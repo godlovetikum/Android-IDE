@@ -49,7 +49,6 @@ class EditorSettingsRepository(context: Context) {
             ?.split(',')
             ?.filter { it.isNotBlank() }
             ?.distinct()
-            ?.ifEmpty { EditorSettings.DEFAULT_KEYBOARD_TOOLBAR_ORDER }
             ?: EditorSettings.DEFAULT_KEYBOARD_TOOLBAR_ORDER,
         showStatusBar        = prefs.getBoolean(KEY_SHOW_STATUS_BAR, true),
         hideGitFolder        = prefs.getBoolean(KEY_HIDE_GIT_FOLDER, true),

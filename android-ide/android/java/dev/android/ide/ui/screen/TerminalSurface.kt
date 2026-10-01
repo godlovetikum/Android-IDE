@@ -19,10 +19,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Menu
-import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -41,8 +38,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.delay
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
@@ -53,6 +52,9 @@ import dev.android.ide.app.AppShellState
 import dev.android.ide.app.AppShellViewModel
 import dev.android.ide.contracts.RuntimeAvailability
 import dev.android.ide.contracts.SessionAvailability
+import dev.android.ide.ui.theme.LocalIdeColors
+import dev.android.ide.ui.theme.operationStatusContainerColor
+import dev.android.ide.ui.theme.operationStatusContentColor
 
 @Composable
 fun TerminalSurface(state: AppShellState, viewModel: AppShellViewModel, onOpenNavigation: () -> Unit, modifier: Modifier = Modifier) {
@@ -64,7 +66,15 @@ fun TerminalSurface(state: AppShellState, viewModel: AppShellViewModel, onOpenNa
     val selected = sessions.firstOrNull { it.id == state.selectedTerminalSessionId && it.availability == SessionAvailability.AVAILABLE }
     val runtimeAvailable = state.runtimeCapabilities?.availability == RuntimeAvailability.AVAILABLE
     val context = LocalContext.current
+    val colors = LocalIdeColors.current
     val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
+
+    LaunchedEffect(state.terminalFeedback) {
+        if (state.terminalFeedback?.outcome == dev.android.ide.contracts.OperationOutcome.COMPLETE) {
+            delay(2_500)
+            viewModel.clearTerminalFeedback()
+        }
+    }
 
     LaunchedEffect(runtimeAvailable) {
         if (runtimeAvailable && !initialSessionRequested && sessions.none { it.availability == SessionAvailability.AVAILABLE }) {
@@ -87,7 +97,30 @@ fun TerminalSurface(state: AppShellState, viewModel: AppShellViewModel, onOpenNa
             Column(Modifier.weight(1f)) {
                 Text("Terminal", style = MaterialTheme.typography.headlineSmall)
             }
-            IconButton(onClick = viewModel::refreshTerminalSessions) { Icon(Icons.Default.Refresh, "Refresh terminal sessions") }
+        }
+        state.terminalFeedback?.let { report ->
+            val contentColor = operationStatusContentColor(report.outcome)
+            Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = operationStatusContainerColor(report.outcome))) {
+                Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("Terminal status", style = MaterialTheme.typography.titleSmall, color = contentColor)
+                    Text(report.message, style = MaterialTheme.typography.bodySmall, color = contentColor)
+                    report.recoveryHint?.let {
+                        Text(it, style = MaterialTheme.typography.bodySmall, color = contentColor)
+                    }
+                }
+            }
+        }
+        state.terminalProgress?.let { progress ->
+            Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+                Row(
+                    Modifier.fillMaxWidth().padding(12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                    Text(progress, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
         }
         if (selected == null || selected.availability != dev.android.ide.contracts.SessionAvailability.AVAILABLE) {
             Card(Modifier.fillMaxWidth().weight(1f), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
@@ -104,7 +137,7 @@ fun TerminalSurface(state: AppShellState, viewModel: AppShellViewModel, onOpenNa
                 modifier = Modifier.fillMaxWidth().weight(1f),
                     factory = { context ->
                     TerminalView(context, null).also { terminalView ->
-                        terminalView.setBackgroundColor(android.graphics.Color.rgb(16, 18, 22))
+                        terminalView.setBackgroundColor(colors.terminalBackground.toArgb())
                         terminalView.isFocusable = true
                         terminalView.isFocusableInTouchMode = true
                         terminalView.setTerminalViewClient(IdeTerminalViewClient())
@@ -138,10 +171,6 @@ fun TerminalSurface(state: AppShellState, viewModel: AppShellViewModel, onOpenNa
                     viewModel.sendTerminalInput(encodeTerminalShortcut(key, ctrlLatched, altLatched, escapeLatched))
                 },
             )
-            Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                Text("Tap the terminal to type. Long-press for selection and copy.", Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
-                IconButton(onClick = viewModel::interruptTerminalSession, enabled = selected.availability == dev.android.ide.contracts.SessionAvailability.AVAILABLE) { Icon(Icons.Default.Stop, "Interrupt session") }
-            }
         }
     }
     }
@@ -216,7 +245,7 @@ private fun TerminalShortcutButton(label: String, selected: Boolean = false, onC
             contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 0.dp),
             colors = ButtonDefaults.buttonColors(
                 containerColor = MaterialTheme.colorScheme.primaryContainer,
-                contentColor = MaterialTheme.colorScheme.primary,
+                contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
             ),
         ) { Text(label, style = MaterialTheme.typography.labelMedium) }
     } else {

@@ -14,7 +14,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -39,6 +39,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.android.ide.CrashReportSummary
+import dev.android.ide.ui.theme.LocalIdeColors
 import java.text.DateFormat
 import java.util.Date
 
@@ -47,7 +48,7 @@ import java.util.Date
 fun CrashConsoleSurface(
     reports: List<CrashReportSummary>,
     recoveryCount: Int = 0,
-    onBack: () -> Unit,
+    onOpenNavigation: () -> Unit,
     onRefresh: () -> Unit,
     onCopy: (CrashReportSummary) -> Unit,
     onShare: (CrashReportSummary) -> Unit,
@@ -64,8 +65,8 @@ fun CrashConsoleSurface(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Diagnostics console") },
-                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Back") } },
+                title = { Text("Console") },
+                navigationIcon = { IconButton(onClick = onOpenNavigation) { Icon(Icons.Default.Menu, "Open sidebar") } },
                 actions = { IconButton(onClick = onRefresh) { Icon(Icons.Default.Refresh, "Refresh diagnostics") } },
             )
         },
@@ -79,7 +80,7 @@ fun CrashConsoleSurface(
                 style = MaterialTheme.typography.bodySmall,
             )
             operationFeedback?.let {
-                Text(it, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodySmall)
+                Text(it, color = LocalIdeColors.current.success, style = MaterialTheme.typography.bodySmall)
             }
             Column(
                 modifier = Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()),
@@ -158,7 +159,6 @@ fun CrashConsoleSurface(
                     }
                 }
             }
-            TextButton(onClick = onBack, modifier = Modifier.fillMaxWidth()) { Text("Back to previous surface") }
         }
     }
     exportCandidate?.let { report ->

@@ -1,47 +1,9 @@
 package dev.android.ide.ui.components
 
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.ArrowForward
-import androidx.compose.material.icons.filled.Block
-import androidx.compose.material.icons.filled.Code
-import androidx.compose.material.icons.filled.ContentCopy
-import androidx.compose.material.icons.filled.ContentCut
-import androidx.compose.material.icons.filled.ContentPaste
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.ExpandMore
-import androidx.compose.material.icons.filled.ExpandLess
-import androidx.compose.material.icons.filled.FormatIndentDecrease
-import androidx.compose.material.icons.filled.FormatIndentIncrease
-import androidx.compose.material.icons.filled.Keyboard
-import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.KeyboardArrowLeft
-import androidx.compose.material.icons.filled.KeyboardArrowRight
-import androidx.compose.material.icons.filled.KeyboardArrowUp
-import androidx.compose.material.icons.filled.Lightbulb
-import androidx.compose.material.icons.filled.Link
-import androidx.compose.material.icons.filled.List
-import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.Redo
-import androidx.compose.material.icons.filled.SelectAll
-import androidx.compose.material.icons.filled.Sort
-import androidx.compose.material.icons.filled.SwapHoriz
-import androidx.compose.material.icons.filled.Tune
-import androidx.compose.material.icons.filled.Undo
-import androidx.compose.material.icons.filled.UnfoldLess
-import androidx.compose.material.icons.filled.UnfoldMore
-import androidx.compose.material.icons.filled.WrapText
-import androidx.compose.material.icons.filled.ZoomIn
-import androidx.compose.material.icons.filled.ZoomOut
-import androidx.compose.ui.graphics.vector.ImageVector
-
-/** One mobile toolbar shortcut. The command is delegated to Monaco when present. */
+/** One mobile toolbar shortcut. Commands are resolved by this stable action ID. */
 data class EditorToolbarAction(
     val id: String,
     val label: String,
-    val icon: ImageVector,
     val commandId: String? = id,
     val requiresSelection: Boolean = false,
     val isPaste: Boolean = false,
@@ -49,7 +11,113 @@ data class EditorToolbarAction(
     val repeatable: Boolean = false,
     val languageServerDependent: Boolean = false,
     val shortcut: String? = null,
+    val description: String,
 )
+
+private fun toolbarAction(
+    id: String,
+    label: String,
+    commandId: String? = id,
+    requiresSelection: Boolean = false,
+    isPaste: Boolean = false,
+    isKeyboardToggle: Boolean = false,
+    repeatable: Boolean = false,
+    languageServerDependent: Boolean = false,
+    shortcut: String? = null,
+    description: String = toolbarActionDescription(id),
+) = EditorToolbarAction(
+    id = id,
+    label = label,
+    commandId = commandId,
+    requiresSelection = requiresSelection,
+    isPaste = isPaste,
+    isKeyboardToggle = isKeyboardToggle,
+    repeatable = repeatable,
+    languageServerDependent = languageServerDependent,
+    shortcut = shortcut,
+    description = description,
+)
+
+private fun toolbarActionDescription(id: String): String = when (id) {
+    "cursorLeft" -> "Move the insertion point one character to the left."
+    "cursorRight" -> "Move the insertion point one character to the right."
+    "cursorUp" -> "Move the insertion point to the previous line."
+    "cursorDown" -> "Move the insertion point to the next line."
+    "cursorHome" -> "Move the insertion point to the start of the line."
+    "cursorEnd" -> "Move the insertion point to the end of the line."
+    "cursorWordLeft" -> "Move the insertion point to the previous word."
+    "cursorWordRight" -> "Move the insertion point to the next word."
+    "cursorPageUp" -> "Move the insertion point one page up."
+    "cursorPageDown" -> "Move the insertion point one page down."
+    "cursorDocumentStart" -> "Move the insertion point to the start of the document."
+    "cursorDocumentEnd" -> "Move the insertion point to the end of the document."
+    "indent" -> "Indent the current line or selected lines."
+    "outdent" -> "Reduce indentation on the current line or selected lines."
+    "undo" -> "Revert the most recent editor change."
+    "redo" -> "Reapply the most recently undone change."
+    "deleteLeft" -> "Delete the character before the insertion point."
+    "deleteRight" -> "Delete the character after the insertion point."
+    "deleteWordLeft" -> "Delete the previous word."
+    "deleteWordRight" -> "Delete the next word."
+    "insertLineAfter" -> "Create a new line below the current line."
+    "insertLineBefore" -> "Create a new line above the current line."
+    "cut" -> "Copy selected text to the clipboard and remove it."
+    "copy" -> "Copy selected text to the system clipboard."
+    "paste" -> "Insert text from the system clipboard."
+    "selectAll" -> "Select all text in the current document."
+    "selectLine" -> "Select the current line."
+    "selectWord" -> "Select the word at the insertion point."
+    "selectLeft" -> "Extend the selection one character to the left."
+    "selectRight" -> "Extend the selection one character to the right."
+    "selectUp" -> "Extend the selection to the previous line."
+    "selectDown" -> "Extend the selection to the next line."
+    "selectWordLeft" -> "Extend the selection to the previous word."
+    "selectWordRight" -> "Extend the selection to the next word."
+    "selectToStart" -> "Extend the selection to the start of the line."
+    "selectToEnd" -> "Extend the selection to the end of the line."
+    "expandSelection" -> "Expand the current selection to a larger syntax range."
+    "shrinkSelection" -> "Shrink the selection to a smaller syntax range."
+    "duplicateSelection" -> "Duplicate the selected text."
+    "addCursorAbove" -> "Add another insertion point on the line above."
+    "addCursorBelow" -> "Add another insertion point on the line below."
+    "addCursorAtLineEnds" -> "Add an insertion point at each selected line end."
+    "addNextOccurrence" -> "Add the next matching occurrence to the selection."
+    "addPreviousOccurrence" -> "Add the previous matching occurrence to the selection."
+    "selectAllOccurrences" -> "Select every matching occurrence in the document."
+    "formatDocument" -> "Format the entire document using the active formatter."
+    "formatSelection" -> "Format the selected text using the active formatter."
+    "commentLine" -> "Toggle a line comment on the current line."
+    "commentSelection" -> "Toggle comments on the selected lines."
+    "moveLineUp" -> "Move the current line or selected lines upward."
+    "moveLineDown" -> "Move the current line or selected lines downward."
+    "joinLines" -> "Join the current line with the following line."
+    "sortLinesAscending" -> "Sort selected lines in ascending order."
+    "sortLinesDescending" -> "Sort selected lines in descending order."
+    "fold" -> "Collapse the code region at the insertion point."
+    "unfold" -> "Expand the code region at the insertion point."
+    "foldAll" -> "Collapse all foldable code regions."
+    "unfoldAll" -> "Expand all collapsed code regions."
+    "foldLevel1" -> "Collapse code regions to the first nesting level."
+    "foldLevel2" -> "Collapse code regions to the second nesting level."
+    "goToDefinition" -> "Navigate to the symbol definition using language intelligence."
+    "goToDeclaration" -> "Navigate to the symbol declaration using language intelligence."
+    "goToTypeDefinition" -> "Navigate to the symbol's type definition."
+    "goToImplementation" -> "Navigate to the symbol's implementation."
+    "goBack" -> "Return to the previous editor navigation location."
+    "goForward" -> "Move forward to the next editor navigation location."
+    "triggerSuggest" -> "Request code completions from the editor or language server."
+    "triggerParameterHints" -> "Show the active function's parameter information."
+    "quickFix" -> "Request a quick fix for the code at the insertion point."
+    "renameSymbol" -> "Rename the symbol across language-server-known references."
+    "findReferences" -> "Find references to the symbol at the insertion point."
+    "codeAction" -> "Request context-aware actions for the current code."
+    "organizeImports" -> "Sort, group, or remove imports using language intelligence."
+    "toggleKeyboard" -> "Show or hide the on-screen keyboard."
+    "toggleWordWrap" -> "Toggle wrapping for long editor lines."
+    "zoomIn" -> "Increase the editor's text size."
+    "zoomOut" -> "Decrease the editor's text size."
+    else -> "Run this editor action."
+}
 
 const val KEYBOARD_TOOLBAR_PAGE_SIZE = 5
 
@@ -57,104 +125,107 @@ const val KEYBOARD_TOOLBAR_PAGE_SIZE = 5
  * The complete set of actions intentionally exposed by the mobile toolbar.
  * Search is omitted because Find/Replace already live in the editor top bar.
  * Every command below is a Monaco action or keyboard-handler ID; this catalog
- * does not invent application-side editing commands.
+ * does not invent application-side editing commands or derive commands by position.
  */
 val EDITOR_TOOLBAR_ACTIONS: List<EditorToolbarAction> = listOf(
     // Navigation and cursor movement.
-    EditorToolbarAction("cursorLeft", "Move cursor left", Icons.Default.KeyboardArrowLeft, "cursorLeft", shortcut = "←"),
-    EditorToolbarAction("cursorRight", "Move cursor right", Icons.Default.KeyboardArrowRight, "cursorRight", shortcut = "→"),
-    EditorToolbarAction("cursorUp", "Move cursor up", Icons.Default.KeyboardArrowUp, "cursorUp", shortcut = "↑"),
-    EditorToolbarAction("cursorDown", "Move cursor down", Icons.Default.KeyboardArrowDown, "cursorDown", shortcut = "↓"),
-    EditorToolbarAction("cursorHome", "Move to line start", Icons.Default.ArrowBack, "cursorHome"),
-    EditorToolbarAction("cursorEnd", "Move to line end", Icons.Default.ArrowForward, "cursorEnd"),
-    EditorToolbarAction("cursorWordLeft", "Move one word left", Icons.Default.ArrowBack, "cursorWordLeft"),
-    EditorToolbarAction("cursorWordRight", "Move one word right", Icons.Default.ArrowForward, "cursorWordRight"),
-    EditorToolbarAction("cursorPageUp", "Move page up", Icons.Default.ExpandLess, "cursorPageUp"),
-    EditorToolbarAction("cursorPageDown", "Move page down", Icons.Default.ExpandMore, "cursorPageDown"),
-    EditorToolbarAction("cursorDocumentStart", "Move to document start", Icons.Default.UnfoldLess, "cursorTop"),
-    EditorToolbarAction("cursorDocumentEnd", "Move to document end", Icons.Default.UnfoldMore, "cursorBottom"),
+    toolbarAction("cursorLeft", "Move cursor left", shortcut = "←"),
+    toolbarAction("cursorRight", "Move cursor right", shortcut = "→"),
+    toolbarAction("cursorUp", "Move cursor up", shortcut = "↑"),
+    toolbarAction("cursorDown", "Move cursor down", shortcut = "↓"),
+    toolbarAction("cursorHome", "Move to line start"),
+    toolbarAction("cursorEnd", "Move to line end"),
+    toolbarAction("cursorWordLeft", "Move one word left"),
+    toolbarAction("cursorWordRight", "Move one word right"),
+    toolbarAction("cursorPageUp", "Move page up"),
+    toolbarAction("cursorPageDown", "Move page down"),
+    toolbarAction("cursorDocumentStart", "Move to document start", commandId = "cursorTop"),
+    toolbarAction("cursorDocumentEnd", "Move to document end", commandId = "cursorBottom"),
 
     // Indentation and common editing.
-    EditorToolbarAction("indent", "Indent", Icons.Default.FormatIndentIncrease, "smartIndent", shortcut = "Tab"),
-    EditorToolbarAction("outdent", "Outdent", Icons.Default.FormatIndentDecrease, "smartOutdent", shortcut = "Shift+Tab"),
-    EditorToolbarAction("undo", "Undo", Icons.Default.Undo, "undo", shortcut = "Ctrl+Z"),
-    EditorToolbarAction("redo", "Redo", Icons.Default.Redo, "redo", shortcut = "Ctrl+Y"),
-    EditorToolbarAction("deleteLeft", "Delete backward", Icons.Default.Delete, "deleteLeft"),
-    EditorToolbarAction("deleteRight", "Delete forward", Icons.Default.Delete, "deleteRight"),
-    EditorToolbarAction("deleteWordLeft", "Delete previous word", Icons.Default.Delete, "deleteWordLeft"),
-    EditorToolbarAction("deleteWordRight", "Delete next word", Icons.Default.Delete, "deleteWordRight"),
-    EditorToolbarAction("insertLineAfter", "Insert line after", Icons.Default.Add, "editor.action.insertLineAfter"),
-    EditorToolbarAction("insertLineBefore", "Insert line before", Icons.Default.Add, "editor.action.insertLineBefore"),
+    toolbarAction("indent", "Indent", commandId = "smartIndent", shortcut = "Tab"),
+    toolbarAction("outdent", "Outdent", commandId = "smartOutdent", shortcut = "Shift+Tab"),
+    toolbarAction("undo", "Undo", shortcut = "Ctrl+Z"),
+    toolbarAction("redo", "Redo", shortcut = "Ctrl+Y"),
+    toolbarAction("deleteLeft", "Delete backward"),
+    toolbarAction("deleteRight", "Delete forward"),
+    toolbarAction("deleteWordLeft", "Delete previous word"),
+    toolbarAction("deleteWordRight", "Delete next word"),
+    toolbarAction("insertLineAfter", "Insert line after", commandId = "editor.action.insertLineAfter"),
+    toolbarAction("insertLineBefore", "Insert line before", commandId = "editor.action.insertLineBefore"),
 
     // Clipboard and selection.
-    EditorToolbarAction("cut", "Cut", Icons.Default.ContentCut, "requestCut", requiresSelection = true, shortcut = "Ctrl+X"),
-    EditorToolbarAction("copy", "Copy", Icons.Default.ContentCopy, "requestCopy", requiresSelection = true, shortcut = "Ctrl+C"),
-    EditorToolbarAction("paste", "Paste", Icons.Default.ContentPaste, commandId = null, isPaste = true, shortcut = "Ctrl+V"),
-    EditorToolbarAction("selectAll", "Select all", Icons.Default.SelectAll, "editor.action.selectAll", shortcut = "Ctrl+A"),
-    EditorToolbarAction("selectLine", "Select line", Icons.Default.List, "cursorLineSelect"),
-    EditorToolbarAction("selectWord", "Select word", Icons.Default.Code, "cursorWordSelect"),
-    EditorToolbarAction("selectLeft", "Extend selection left", Icons.Default.KeyboardArrowLeft, "cursorLeftSelect", repeatable = true),
-    EditorToolbarAction("selectRight", "Extend selection right", Icons.Default.KeyboardArrowRight, "cursorRightSelect", repeatable = true),
-    EditorToolbarAction("selectUp", "Extend selection up", Icons.Default.KeyboardArrowUp, "cursorUpSelect", repeatable = true),
-    EditorToolbarAction("selectDown", "Extend selection down", Icons.Default.KeyboardArrowDown, "cursorDownSelect", repeatable = true),
-    EditorToolbarAction("selectWordLeft", "Select previous word", Icons.Default.ArrowBack, "cursorWordLeftSelect", repeatable = true),
-    EditorToolbarAction("selectWordRight", "Select next word", Icons.Default.ArrowForward, "cursorWordRightSelect", repeatable = true),
-    EditorToolbarAction("selectToStart", "Select to line start", Icons.Default.ArrowBack, "cursorHomeSelect", repeatable = true),
-    EditorToolbarAction("selectToEnd", "Select to line end", Icons.Default.ArrowForward, "cursorEndSelect", repeatable = true),
-    EditorToolbarAction("expandSelection", "Expand selection", Icons.Default.ExpandMore, "editor.action.smartSelect.expand"),
-    EditorToolbarAction("shrinkSelection", "Shrink selection", Icons.Default.ExpandLess, "editor.action.smartSelect.shrink"),
-    EditorToolbarAction("duplicateSelection", "Duplicate selection", Icons.Default.ContentCopy, "editor.action.duplicateSelection"),
-    EditorToolbarAction("addCursorAbove", "Add cursor above", Icons.Default.Add, "editor.action.insertCursorAbove"),
-    EditorToolbarAction("addCursorBelow", "Add cursor below", Icons.Default.Add, "editor.action.insertCursorBelow"),
-    EditorToolbarAction("addCursorAtLineEnds", "Add cursors to line ends", Icons.Default.MoreVert, "editor.action.insertCursorAtEndOfEachLineSelected"),
-    EditorToolbarAction("addNextOccurrence", "Select next occurrence", Icons.Default.SelectAll, "editor.action.addSelectionToNextFindMatch"),
-    EditorToolbarAction("addPreviousOccurrence", "Select previous occurrence", Icons.Default.SelectAll, "editor.action.addSelectionToPreviousFindMatch"),
-    EditorToolbarAction("selectAllOccurrences", "Select all occurrences", Icons.Default.SelectAll, "editor.action.selectHighlights"),
+    toolbarAction("cut", "Cut", commandId = "requestCut", requiresSelection = true, shortcut = "Ctrl+X"),
+    toolbarAction("copy", "Copy", commandId = "requestCopy", requiresSelection = true, shortcut = "Ctrl+C"),
+    toolbarAction("paste", "Paste", commandId = null, isPaste = true, shortcut = "Ctrl+V"),
+    toolbarAction("selectAll", "Select all", commandId = "editor.action.selectAll", shortcut = "Ctrl+A"),
+    toolbarAction("selectLine", "Select line", commandId = "cursorLineSelect"),
+    toolbarAction("selectWord", "Select word", commandId = "cursorWordSelect"),
+    toolbarAction("selectLeft", "Extend selection left", commandId = "cursorLeftSelect", repeatable = true),
+    toolbarAction("selectRight", "Extend selection right", commandId = "cursorRightSelect", repeatable = true),
+    toolbarAction("selectUp", "Extend selection up", commandId = "cursorUpSelect", repeatable = true),
+    toolbarAction("selectDown", "Extend selection down", commandId = "cursorDownSelect", repeatable = true),
+    toolbarAction("selectWordLeft", "Select previous word", commandId = "cursorWordLeftSelect", repeatable = true),
+    toolbarAction("selectWordRight", "Select next word", commandId = "cursorWordRightSelect", repeatable = true),
+    toolbarAction("selectToStart", "Select to line start", commandId = "cursorHomeSelect", repeatable = true),
+    toolbarAction("selectToEnd", "Select to line end", commandId = "cursorEndSelect", repeatable = true),
+    toolbarAction("expandSelection", "Expand selection", commandId = "editor.action.smartSelect.expand"),
+    toolbarAction("shrinkSelection", "Shrink selection", commandId = "editor.action.smartSelect.shrink"),
+    toolbarAction("duplicateSelection", "Duplicate selection", commandId = "editor.action.duplicateSelection"),
+    toolbarAction("addCursorAbove", "Add cursor above", commandId = "editor.action.insertCursorAbove"),
+    toolbarAction("addCursorBelow", "Add cursor below", commandId = "editor.action.insertCursorBelow"),
+    toolbarAction("addCursorAtLineEnds", "Add cursors to line ends", commandId = "editor.action.insertCursorAtEndOfEachLineSelected"),
+    toolbarAction("addNextOccurrence", "Select next occurrence", commandId = "editor.action.addSelectionToNextFindMatch"),
+    toolbarAction("addPreviousOccurrence", "Select previous occurrence", commandId = "editor.action.addSelectionToPreviousFindMatch"),
+    toolbarAction("selectAllOccurrences", "Select all occurrences", commandId = "editor.action.selectHighlights"),
 
     // Formatting, comments, and line structure.
-    EditorToolbarAction("formatDocument", "Format document", Icons.Default.Code, "editor.action.formatDocument", shortcut = "Alt+Shift+F"),
-    EditorToolbarAction("formatSelection", "Format selection", Icons.Default.Code, "editor.action.formatSelection", requiresSelection = true),
-    EditorToolbarAction("commentLine", "Comment or uncomment line", Icons.Default.Block, "editor.action.commentLine", shortcut = "Ctrl+/"),
-    EditorToolbarAction("commentSelection", "Comment or uncomment selection", Icons.Default.Block, "editor.action.commentLine", requiresSelection = true),
-    EditorToolbarAction("moveLineUp", "Move line up", Icons.Default.KeyboardArrowUp, "editor.action.moveLinesUpAction"),
-    EditorToolbarAction("moveLineDown", "Move line down", Icons.Default.KeyboardArrowDown, "editor.action.moveLinesDownAction"),
-    EditorToolbarAction("joinLines", "Join lines", Icons.Default.SwapHoriz, "editor.action.joinLines"),
-    EditorToolbarAction("sortLinesAscending", "Sort lines ascending", Icons.Default.Sort, "editor.action.sortLinesAscending"),
-    EditorToolbarAction("sortLinesDescending", "Sort lines descending", Icons.Default.Sort, "editor.action.sortLinesDescending"),
+    toolbarAction("formatDocument", "Format document", commandId = "editor.action.formatDocument", languageServerDependent = true, shortcut = "Alt+Shift+F"),
+    toolbarAction("formatSelection", "Format selection", commandId = "editor.action.formatSelection", requiresSelection = true, languageServerDependent = true),
+    toolbarAction("commentLine", "Comment or uncomment line", commandId = "editor.action.commentLine", shortcut = "Ctrl+/"),
+    toolbarAction("commentSelection", "Comment or uncomment selection", commandId = "editor.action.commentLine", requiresSelection = true),
+    toolbarAction("moveLineUp", "Move line up", commandId = "editor.action.moveLinesUpAction"),
+    toolbarAction("moveLineDown", "Move line down", commandId = "editor.action.moveLinesDownAction"),
+    toolbarAction("joinLines", "Join lines", commandId = "editor.action.joinLines"),
+    toolbarAction("sortLinesAscending", "Sort lines ascending", commandId = "editor.action.sortLinesAscending"),
+    toolbarAction("sortLinesDescending", "Sort lines descending", commandId = "editor.action.sortLinesDescending"),
 
     // Folding and navigation.
-    EditorToolbarAction("fold", "Fold", Icons.Default.UnfoldLess, "editor.action.fold"),
-    EditorToolbarAction("unfold", "Unfold", Icons.Default.UnfoldMore, "editor.action.unfold"),
-    EditorToolbarAction("foldAll", "Fold all", Icons.Default.UnfoldLess, "editor.action.foldAll"),
-    EditorToolbarAction("unfoldAll", "Unfold all", Icons.Default.UnfoldMore, "editor.action.unfoldAll"),
-    EditorToolbarAction("foldLevel1", "Fold to level 1", Icons.Default.UnfoldLess, "editor.action.foldLevel1"),
-    EditorToolbarAction("foldLevel2", "Fold to level 2", Icons.Default.UnfoldLess, "editor.action.foldLevel2"),
-    EditorToolbarAction("goToDefinition", "Go to definition", Icons.Default.Link, "editor.action.revealDefinition", languageServerDependent = true, shortcut = "F12"),
-    EditorToolbarAction("goToDeclaration", "Go to declaration", Icons.Default.Link, "editor.action.revealDeclaration", languageServerDependent = true),
-    EditorToolbarAction("goToTypeDefinition", "Go to type definition", Icons.Default.Link, "editor.action.revealTypeDefinition", languageServerDependent = true),
-    EditorToolbarAction("goToImplementation", "Go to implementation", Icons.Default.Link, "editor.action.goToImplementation", languageServerDependent = true),
-    EditorToolbarAction("goBack", "Navigate back", Icons.Default.ArrowBack, "editor.action.navigateBack"),
-    EditorToolbarAction("goForward", "Navigate forward", Icons.Default.ArrowForward, "editor.action.navigateForward"),
+    toolbarAction("fold", "Fold", commandId = "editor.action.fold"),
+    toolbarAction("unfold", "Unfold", commandId = "editor.action.unfold"),
+    toolbarAction("foldAll", "Fold all", commandId = "editor.action.foldAll"),
+    toolbarAction("unfoldAll", "Unfold all", commandId = "editor.action.unfoldAll"),
+    toolbarAction("foldLevel1", "Fold to level 1", commandId = "editor.action.foldLevel1"),
+    toolbarAction("foldLevel2", "Fold to level 2", commandId = "editor.action.foldLevel2"),
+    toolbarAction("goToDefinition", "Go to definition", commandId = "editor.action.revealDefinition", languageServerDependent = true, shortcut = "F12"),
+    toolbarAction("goToDeclaration", "Go to declaration", commandId = "editor.action.revealDeclaration", languageServerDependent = true),
+    toolbarAction("goToTypeDefinition", "Go to type definition", commandId = "editor.action.revealTypeDefinition", languageServerDependent = true),
+    toolbarAction("goToImplementation", "Go to implementation", commandId = "editor.action.goToImplementation", languageServerDependent = true),
+    toolbarAction("goBack", "Navigate back", commandId = "editor.action.navigateBack"),
+    toolbarAction("goForward", "Navigate forward", commandId = "editor.action.navigateForward"),
 
     // Language-server-backed intelligence. Monaco invokes these actions when available.
-    EditorToolbarAction("triggerSuggest", "Show suggestions", Icons.Default.Lightbulb, "editor.action.triggerSuggest", languageServerDependent = true, shortcut = "Ctrl+Space"),
-    EditorToolbarAction("triggerParameterHints", "Show parameter hints", Icons.Default.Code, "editor.action.triggerParameterHints", languageServerDependent = true),
-    EditorToolbarAction("quickFix", "Quick fix", Icons.Default.Lightbulb, "editor.action.quickFix", languageServerDependent = true),
-    EditorToolbarAction("renameSymbol", "Rename symbol", Icons.Default.Edit, "editor.action.rename", languageServerDependent = true, shortcut = "F2"),
-    EditorToolbarAction("findReferences", "Find references", Icons.Default.Link, "editor.action.referenceSearch.trigger", languageServerDependent = true),
-    EditorToolbarAction("codeAction", "Code actions", Icons.Default.Tune, "editor.action.quickFix", languageServerDependent = true),
-    EditorToolbarAction("organizeImports", "Organize imports", Icons.Default.Sort, "editor.action.organizeImports", languageServerDependent = true),
+    toolbarAction("triggerSuggest", "Show suggestions", commandId = "editor.action.triggerSuggest", languageServerDependent = true, shortcut = "Ctrl+Space"),
+    toolbarAction("triggerParameterHints", "Show parameter hints", commandId = "editor.action.triggerParameterHints", languageServerDependent = true),
+    toolbarAction("quickFix", "Quick fix", commandId = "editor.action.quickFix", languageServerDependent = true),
+    toolbarAction("renameSymbol", "Rename symbol", commandId = "editor.action.rename", languageServerDependent = true, shortcut = "F2"),
+    toolbarAction("findReferences", "Find references", commandId = "editor.action.referenceSearch.trigger", languageServerDependent = true),
+    toolbarAction("codeAction", "Code actions", commandId = "editor.action.quickFix", languageServerDependent = true),
+    toolbarAction("organizeImports", "Organize imports", commandId = "editor.action.organizeImports", languageServerDependent = true),
 
     // View, save, and input controls.
-    EditorToolbarAction("toggleKeyboard", "Show or hide keyboard", Icons.Default.Keyboard, commandId = null, isKeyboardToggle = true),
-    EditorToolbarAction("toggleWordWrap", "Toggle word wrap", Icons.Default.WrapText, "editor.action.toggleWordWrap"),
-    EditorToolbarAction("zoomIn", "Increase editor size", Icons.Default.ZoomIn, "editor.action.fontZoomIn"),
-    EditorToolbarAction("zoomOut", "Decrease editor size", Icons.Default.ZoomOut, "editor.action.fontZoomOut"),
+    toolbarAction("toggleKeyboard", "Show or hide keyboard", commandId = null, isKeyboardToggle = true),
+    toolbarAction("toggleWordWrap", "Toggle word wrap", commandId = "editor.action.toggleWordWrap"),
+    toolbarAction("zoomIn", "Increase editor size", commandId = "editor.action.fontZoomIn"),
+    toolbarAction("zoomOut", "Decrease editor size", commandId = "editor.action.fontZoomOut"),
 )
 
 private val ACTION_BY_ID = EDITOR_TOOLBAR_ACTIONS.associateBy { it.id }
 
 fun editorToolbarAction(id: String): EditorToolbarAction? = ACTION_BY_ID[id]
+
+/** Return a command from its stable action ID; never infer it from a page or list index. */
+fun editorToolbarCommandId(actionId: String): String? = ACTION_BY_ID[actionId]?.commandId
 
 /** Removes stale IDs, duplicates, and search actions from persisted user order. */
 fun normalizeEditorToolbarOrder(order: List<String>): List<String> = order

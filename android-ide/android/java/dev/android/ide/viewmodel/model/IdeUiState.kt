@@ -75,6 +75,15 @@ data class IdeUiState(
     /** Files containing the current project-content query. */
     val contentSearchResults: List<FileSearchResult> = emptyList(),
 
+    /** Query value whose scan has completed; null means results are not current. */
+    val contentSearchCompletedQuery: String? = null,
+
+    /** True while the current explicit content-search request is scanning. */
+    val contentSearchRunning: Boolean = false,
+
+    /** Non-fatal scan issue, such as a directory the provider would not list. */
+    val contentSearchWarning: String? = null,
+
     /** Content-search matching preferences, aligned with Monaco find behavior. */
     val contentSearchMatchCase: Boolean = false,
     val contentSearchWholeWord: Boolean = false,
@@ -111,6 +120,9 @@ data class IdeUiState(
 
     /** Whether Monaco currently has a non-empty text selection. */
     val hasEditorSelection: Boolean = false,
+
+    /** True only when the active file's project language server has initialized. */
+    val languageIntelligenceAvailable: Boolean = false,
 
     /** True once Monaco sends the "ready" message. */
     val isEditorReady: Boolean = false,

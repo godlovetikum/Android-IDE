@@ -1,11 +1,11 @@
 package dev.android.ide.ui
 
 import android.app.Activity
-import android.graphics.Color
 import android.content.Intent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -20,6 +20,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.Modifier
 import androidx.compose.foundation.isSystemInDarkTheme
 import dev.android.ide.app.AppShellViewModel
@@ -56,6 +57,7 @@ fun AppRoot(viewModel: AppShellViewModel, ideViewModel: IdeViewModel, onExit: ()
     var zipDescription by remember { mutableStateOf("") }
     var zipDestination by remember { mutableStateOf<String?>(null) }
     var feedback by remember { mutableStateOf<String?>(null) }
+    var pickerFeedback by remember { mutableStateOf<String?>(null) }
     var gitCloneVisible by remember { mutableStateOf(false) }
     var gitRepository by remember { mutableStateOf("") }
     var operationKind by remember { mutableStateOf<ProjectOperationKind?>(null) }
@@ -70,12 +72,13 @@ fun AppRoot(viewModel: AppShellViewModel, ideViewModel: IdeViewModel, onExit: ()
     val openFolder = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) {
             viewModel.clearOperationFeedback()
-            persistTreePermission(context, uri)
-            folderUri = uri.toString()
-            folderName = uri.lastPathSegment?.substringAfterLast(':')?.substringAfterLast('/') ?: ""
-            folderDescription = ""
-            viewModel.inspectExistingFolder(uri.toString())
-            folderReviewVisible = true
+            if (persistTreePermission(context, uri)) {
+                folderUri = uri.toString()
+                folderName = uri.lastPathSegment?.substringAfterLast(':')?.substringAfterLast('/') ?: ""
+                folderDescription = ""
+                viewModel.inspectExistingFolder(uri.toString())
+                folderReviewVisible = true
+            } else pickerFeedback = "Android did not grant durable read and write access to this folder. Choose a location that supports persistent access, then try again."
         }
     }
     val openZip = rememberLauncherForActivityResult(
@@ -83,30 +86,31 @@ fun AppRoot(viewModel: AppShellViewModel, ideViewModel: IdeViewModel, onExit: ()
     ) { uri ->
         if (uri != null) {
             viewModel.clearOperationFeedback()
-            persistDocumentPermission(context, uri)
-            zipUri = uri.toString()
-            zipName = uri.lastPathSegment?.substringAfterLast('/')?.removeSuffix(".zip") ?: "Imported project"
-            zipDescription = ""
-            zipDestination = null
-            zipReviewVisible = true
+            if (persistDocumentPermission(context, uri)) {
+                zipUri = uri.toString()
+                zipName = uri.lastPathSegment?.substringAfterLast('/')?.removeSuffix(".zip") ?: "Imported project"
+                zipDescription = ""
+                zipDestination = null
+                zipReviewVisible = true
+            } else pickerFeedback = "Android did not grant durable read access to this archive. Choose an archive from a document provider that supports persistent access."
         }
     }
     val createDestinationPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) {
-            persistTreePermission(context, uri)
-            createDestination = uri.toString()
+            if (persistTreePermission(context, uri)) createDestination = uri.toString()
+            else pickerFeedback = "Android did not grant durable read and write access to this project destination."
         }
     }
     val zipDestinationPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) {
-            persistTreePermission(context, uri)
-            zipDestination = uri.toString()
+            if (persistTreePermission(context, uri)) zipDestination = uri.toString()
+            else pickerFeedback = "Android did not grant durable read and write access to this ZIP destination."
         }
     }
     val operationDestinationPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) {
-            persistTreePermission(context, uri)
-            operationDestination = uri.toString()
+            if (persistTreePermission(context, uri)) operationDestination = uri.toString()
+            else pickerFeedback = "Android did not grant durable read and write access to this operation destination."
         }
     }
     val exportFilePicker = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
@@ -118,8 +122,8 @@ fun AppRoot(viewModel: AppShellViewModel, ideViewModel: IdeViewModel, onExit: ()
     }
     val batchExportDestinationPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null && pendingBatchExportIds.isNotEmpty()) {
-            persistTreePermission(context, uri)
-            viewModel.exportProjects(pendingBatchExportIds.toList(), uri.toString())
+            if (persistTreePermission(context, uri)) viewModel.exportProjects(pendingBatchExportIds.toList(), uri.toString())
+            else pickerFeedback = "Android did not grant durable read and write access to the batch export destination."
         }
         pendingBatchExportIds = emptySet()
     }
@@ -133,18 +137,19 @@ fun AppRoot(viewModel: AppShellViewModel, ideViewModel: IdeViewModel, onExit: ()
         dev.android.ide.data.model.AppTheme.SYSTEM -> systemDark
     }
     val rootView = LocalView.current
-    SideEffect {
-        val activity = rootView.context as? Activity
-        activity?.window?.let { window ->
-            window.statusBarColor = if (resolvedDark) Color.rgb(30, 30, 30) else Color.WHITE
-            window.navigationBarColor = if (resolvedDark) Color.BLACK else Color.WHITE
-            androidx.core.view.WindowCompat.getInsetsController(window, rootView).apply {
-                isAppearanceLightStatusBars = !resolvedDark
-                isAppearanceLightNavigationBars = !resolvedDark
+    AndroidIDETheme(appTheme = ideState.appTheme) {
+        val systemBarColor = MaterialTheme.colorScheme.background.toArgb()
+        SideEffect {
+            val activity = rootView.context as? Activity
+            activity?.window?.let { window ->
+                window.statusBarColor = systemBarColor
+                window.navigationBarColor = systemBarColor
+                androidx.core.view.WindowCompat.getInsetsController(window, rootView).apply {
+                    isAppearanceLightStatusBars = !resolvedDark
+                    isAppearanceLightNavigationBars = !resolvedDark
+                }
             }
         }
-    }
-    AndroidIDETheme(appTheme = ideState.appTheme) {
         CompositionLocalProvider(
             LocalDensity provides androidx.compose.ui.unit.Density(
                 density = baseDensity.density * uiScale,
@@ -252,6 +257,14 @@ fun AppRoot(viewModel: AppShellViewModel, ideViewModel: IdeViewModel, onExit: ()
             onClone = { feedback = "Coming soon: Git repository cloning is not wired yet." },
             onDismiss = { gitCloneVisible = false; feedback = null },
         )
+        pickerFeedback?.let { message ->
+            AlertDialog(
+                onDismissRequest = { pickerFeedback = null },
+                title = { Text("Storage access unavailable") },
+                text = { Text(message) },
+                confirmButton = { TextButton(onClick = { pickerFeedback = null }) { Text("OK") } },
+            )
+        }
         val exportProject = shellState.projects.firstOrNull { it.id == pendingExportProjectId }
         ProjectExportDialog(
             visible = exportReviewVisible,
@@ -299,20 +312,28 @@ fun AppRoot(viewModel: AppShellViewModel, ideViewModel: IdeViewModel, onExit: ()
     }
 }
 
-private fun persistTreePermission(context: android.content.Context, uri: android.net.Uri) {
-    runCatching {
-        context.contentResolver.takePersistableUriPermission(
+private fun persistTreePermission(context: android.content.Context, uri: android.net.Uri): Boolean {
+    val resolver = context.contentResolver
+    if (resolver.persistedUriPermissions.any { it.uri == uri && it.isReadPermission && it.isWritePermission }) return true
+    val persisted = runCatching {
+        resolver.takePersistableUriPermission(
             uri,
             Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
         )
-    }
+        true
+    }.getOrDefault(false)
+    return persisted && resolver.persistedUriPermissions.any { it.uri == uri && it.isReadPermission && it.isWritePermission }
 }
 
-private fun persistDocumentPermission(context: android.content.Context, uri: android.net.Uri) {
-    runCatching {
-        context.contentResolver.takePersistableUriPermission(
+private fun persistDocumentPermission(context: android.content.Context, uri: android.net.Uri): Boolean {
+    val resolver = context.contentResolver
+    if (resolver.persistedUriPermissions.any { it.uri == uri && it.isReadPermission }) return true
+    val persisted = runCatching {
+        resolver.takePersistableUriPermission(
             uri,
             Intent.FLAG_GRANT_READ_URI_PERMISSION,
         )
-    }
+        true
+    }.getOrDefault(false)
+    return persisted && resolver.persistedUriPermissions.any { it.uri == uri && it.isReadPermission }
 }

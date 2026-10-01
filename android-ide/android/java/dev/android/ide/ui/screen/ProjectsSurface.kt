@@ -68,6 +68,8 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import dev.android.ide.app.AppShellState
 import dev.android.ide.app.AppShellViewModel
+import dev.android.ide.ui.theme.LocalIdeColors
+import dev.android.ide.ui.theme.operationStatusColor
 import dev.android.ide.contracts.ProjectIdentity
 import dev.android.ide.contracts.CapabilityState
 import dev.android.ide.contracts.OperationReport
@@ -204,16 +206,10 @@ fun ProjectsSurface(
                 },
             )
         }
-        state.registryWarning?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+        state.registryWarning?.let { Text(it, color = LocalIdeColors.current.warning) }
         if (state.statusMessage != null && !state.operationInProgress) {
-            val statusColor = when (state.operationReport?.outcome) {
-                dev.android.ide.contracts.OperationOutcome.COMPLETE -> MaterialTheme.colorScheme.primary
-                dev.android.ide.contracts.OperationOutcome.BLOCKED,
-                dev.android.ide.contracts.OperationOutcome.FAILED,
-                dev.android.ide.contracts.OperationOutcome.PARTIAL,
-                dev.android.ide.contracts.OperationOutcome.INTERRUPTED -> MaterialTheme.colorScheme.error
-                else -> MaterialTheme.colorScheme.onSurfaceVariant
-            }
+            val statusColor = state.operationReport?.let { operationStatusColor(it.outcome) }
+                ?: MaterialTheme.colorScheme.onSurfaceVariant
             Text(state.statusMessage!!, color = statusColor, style = MaterialTheme.typography.bodySmall)
         }
         if (state.selectedProjectIds.isNotEmpty()) {
@@ -242,7 +238,7 @@ fun ProjectsSurface(
                 title = { Text(if (completed) "Deletion complete" else "Permanently delete selected projects?") },
                 text = {
                     Column {
-                        if (completed) Text(state.operationReport!!.message, color = MaterialTheme.colorScheme.primary)
+                        if (completed) Text(state.operationReport!!.message, color = LocalIdeColors.current.success)
                         else {
                             Text("This permanently removes ${state.selectedProjectIds.size} selected project location(s). This action cannot be undone.")
                             Text("Selected projects: ${state.projects.filter { it.id in state.selectedProjectIds }.joinToString { it.name }}")
@@ -251,7 +247,7 @@ fun ProjectsSurface(
                         }
                     }
                 },
-                confirmButton = { Button(onClick = if (completed) ({ confirmBatchDelete = false }) else ({ viewModel.permanentlyDeleteProjects(state.selectedProjectIds.toList()) }), enabled = !state.operationInProgress && (completed || enteredBatchDeleteCode == batchDeleteCode), colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)) { Text(if (completed) "Done" else if (state.operationInProgress) "Deleting…" else "Delete permanently") } },
+                confirmButton = { Button(onClick = if (completed) ({ confirmBatchDelete = false }) else ({ viewModel.permanentlyDeleteProjects(state.selectedProjectIds.toList()) }), enabled = !state.operationInProgress && (completed || enteredBatchDeleteCode == batchDeleteCode), colors = ButtonDefaults.buttonColors(containerColor = if (completed) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error, contentColor = if (completed) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onError)) { Text(if (completed) "Done" else if (state.operationInProgress) "Deleting…" else "Delete permanently") } },
                 dismissButton = { if (!completed) TextButton(onClick = { confirmBatchDelete = false }, enabled = !state.operationInProgress) { Text(if (state.operationInProgress) "Please wait" else "Cancel") } },
             )
         }
@@ -260,7 +256,7 @@ fun ProjectsSurface(
             AlertDialog(
                 onDismissRequest = { if (!state.operationInProgress) confirmBatchRemove = false },
                 title = { Text(if (completed) "Removal complete" else "Remove selected projects from registry?") },
-                text = { if (completed) Text(state.operationReport!!.message, color = MaterialTheme.colorScheme.primary) else Text("${state.selectedProjectIds.size} project record(s) will be removed from Android IDE. User files, Git data, and locations remain unchanged.") },
+                text = { if (completed) Text(state.operationReport!!.message, color = LocalIdeColors.current.success) else Text("${state.selectedProjectIds.size} project record(s) will be removed from Android IDE. User files, Git data, and locations remain unchanged.") },
                 confirmButton = { Button(onClick = if (completed) ({ confirmBatchRemove = false }) else ({ viewModel.removeProjectsFromRegistry(state.selectedProjectIds.toList()) }), enabled = !state.operationInProgress) { Text(if (completed) "Done" else if (state.operationInProgress) "Removing…" else "Remove from Registry") } },
                 dismissButton = { if (!completed) TextButton(onClick = { confirmBatchRemove = false }, enabled = !state.operationInProgress) { Text(if (state.operationInProgress) "Please wait" else "Cancel") } },
             )
@@ -273,10 +269,10 @@ fun ProjectsSurface(
                 title = { Text(if (completed) "Export complete" else "Export selected projects as ZIP") },
                 text = {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        if (completed) Text(state.operationReport!!.message, color = MaterialTheme.colorScheme.primary)
+                        if (completed) Text(state.operationReport!!.message, color = LocalIdeColors.current.success)
                         else {
                             Text("Selected projects: $selectedNames\n\nOne ZIP archive per project will be created in a destination you choose. Source projects remain unchanged.")
-                            state.operationReport?.let { report -> Text(report.message, color = MaterialTheme.colorScheme.error) }
+                            state.operationReport?.let { report -> Text(report.message, color = operationStatusColor(report.outcome)) }
                             if (state.operationInProgress) Row(verticalAlignment = Alignment.CenterVertically) {
                                 CircularProgressIndicator(Modifier.padding(end = 8.dp), strokeWidth = 2.dp)
                                 Text("Exporting…")
@@ -435,14 +431,14 @@ private fun ProjectCard(
             if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
         ),
         colors = CardDefaults.cardColors(
-            containerColor = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
+            containerColor = if (selected) LocalIdeColors.current.activeHighlight else MaterialTheme.colorScheme.surface,
         ),
         elevation = CardDefaults.cardElevation(defaultElevation = if (selected) 5.dp else 2.dp),
     ) {
         Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.Top) {
             Column(Modifier.weight(1f)) {
-                Text(project.name, style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.primary)
+                Text(project.name, style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
                 Text(if (project.description.isBlank()) "No description" else project.description, maxLines = 1, style = MaterialTheme.typography.bodySmall)
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -460,7 +456,7 @@ private fun ProjectCard(
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                     if (!summaryLoading && summary?.hasGit == true) {
-                        ProjectBadge("Git", MaterialTheme.colorScheme.primaryContainer, MaterialTheme.colorScheme.primary)
+                        ProjectBadge("Git", MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     if (!summaryLoading) {
                         projectAttentionLabel(project, summary)?.let { (label, container, content) ->
@@ -491,7 +487,7 @@ private fun ProjectCard(
                         onCopyPath = { onCopyPath(project.id) },
                         onCopyRemoteUrls = { onCopyRemoteUrls(project.id) },
                         onOpenEditor = { onOpen(project.id) },
-                        onOpenGit = { onFeedback("Git is managed through the project Terminal for now. Open Terminal and run git commands in this project.") },
+                        onOpenGit = { viewModel.selectProject(project.id); viewModel.navigate(dev.android.ide.contracts.Surface.GIT) },
                         onOpenTerminal = { onOpenTerminal(project.id) },
                         onOpenBrowser = { onFeedback("Browser preview is coming soon") },
                         onRemoveFromRegistry = { onPrepareOperation(); onSelect(project.id); confirmRemove = true },
@@ -511,7 +507,7 @@ private fun ProjectCard(
             AlertDialog(
                 onDismissRequest = { confirmRemove = false },
                 title = { Text(if (completed) "Removal complete" else "Remove project from registry?") },
-                text = { if (completed) Text(operationReport!!.message, color = MaterialTheme.colorScheme.primary) else Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { Text("${project.name} will be removed from Android IDE, but its files, Git data, and location will remain unchanged.\n\nLocation: ${humanReadableStorageLocation(project.location.userVisiblePath ?: project.location.displayLabel)}") }; if (operationInProgress) Row(verticalAlignment = Alignment.CenterVertically) { CircularProgressIndicator(Modifier.padding(end = 8.dp), strokeWidth = 2.dp); Text("Removing…") } },
+                text = { if (completed) Text(operationReport!!.message, color = LocalIdeColors.current.success) else Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { Text("${project.name} will be removed from Android IDE, but its files, Git data, and location will remain unchanged.\n\nLocation: ${humanReadableStorageLocation(project.location.userVisiblePath ?: project.location.displayLabel)}") }; if (operationInProgress) Row(verticalAlignment = Alignment.CenterVertically) { CircularProgressIndicator(Modifier.padding(end = 8.dp), strokeWidth = 2.dp); Text("Removing…") } },
                 confirmButton = { Button(onClick = if (completed) ({ confirmRemove = false }) else onRemove, enabled = !operationInProgress) { Text(if (completed) "Done" else if (operationInProgress) "Removing…" else "Remove from Registry") } },
                 dismissButton = { if (!completed) TextButton(onClick = { confirmRemove = false }, enabled = !operationInProgress) { Text(if (operationInProgress) "Please wait" else "Cancel") } },
             )
@@ -523,7 +519,7 @@ private fun ProjectCard(
                 title = { Text(if (completed) "Deletion complete" else "Permanently delete ${project.name}?") },
                 text = {
                     Column {
-                        if (completed) Text(operationReport!!.message, color = MaterialTheme.colorScheme.primary)
+                        if (completed) Text(operationReport!!.message, color = LocalIdeColors.current.success)
                         else {
                             Text("This permanently removes the project data from its selected storage location. This action cannot be undone.")
                             Text("Project: ${project.name}")
@@ -534,7 +530,7 @@ private fun ProjectCard(
                         }
                     }
                 },
-                confirmButton = { Button(onClick = if (completed) ({ confirmDelete = false }) else onDelete, enabled = !operationInProgress && (completed || enteredDeleteCode == deleteCode), colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)) { Text(if (completed) "Done" else if (operationInProgress) "Deleting…" else "Delete permanently") } },
+                confirmButton = { Button(onClick = if (completed) ({ confirmDelete = false }) else onDelete, enabled = !operationInProgress && (completed || enteredDeleteCode == deleteCode), colors = ButtonDefaults.buttonColors(containerColor = if (completed) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error, contentColor = if (completed) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onError)) { Text(if (completed) "Done" else if (operationInProgress) "Deleting…" else "Delete permanently") } },
                 dismissButton = { if (!completed) TextButton(onClick = { confirmDelete = false }, enabled = !operationInProgress) { Text(if (operationInProgress) "Please wait" else "Cancel") } },
             )
         }
@@ -543,7 +539,7 @@ private fun ProjectCard(
             AlertDialog(
                 onDismissRequest = { renameVisible = false },
                 title = { Text(if (completed) "Rename complete" else "Change project display name") },
-                text = { if (completed) Text(operationReport!!.message, color = MaterialTheme.colorScheme.primary) else Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { OutlinedTextField(renameValue, { renameValue = it }, label = { Text("Project name") }, singleLine = true, enabled = !operationInProgress); if (operationInProgress) Row(verticalAlignment = Alignment.CenterVertically) { CircularProgressIndicator(Modifier.padding(end = 8.dp), strokeWidth = 2.dp); Text("Renaming…") } } },
+                text = { if (completed) Text(operationReport!!.message, color = LocalIdeColors.current.success) else Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { OutlinedTextField(renameValue, { renameValue = it }, label = { Text("Project name") }, singleLine = true, enabled = !operationInProgress); if (operationInProgress) Row(verticalAlignment = Alignment.CenterVertically) { CircularProgressIndicator(Modifier.padding(end = 8.dp), strokeWidth = 2.dp); Text("Renaming…") } } },
                 confirmButton = {
                     Button(onClick = if (completed) ({ renameVisible = false }) else ({ onSelect(project.id); onRename(renameValue) }), enabled = !operationInProgress && (completed || renameValue.isNotBlank())) { Text(if (completed) "Done" else if (operationInProgress) "Saving…" else "Save") }
                 },
@@ -578,17 +574,18 @@ private fun projectAttentionLabel(
     val status = summary?.status
     return when {
         project.location.capabilityState == CapabilityState.PERMISSION_LOST -> Triple("Permission needed", MaterialTheme.colorScheme.errorContainer, MaterialTheme.colorScheme.onErrorContainer)
-        project.location.capabilityState == CapabilityState.UNSUPPORTED -> Triple("Provider unsupported", MaterialTheme.colorScheme.errorContainer, MaterialTheme.colorScheme.onErrorContainer)
-        project.location.capabilityState == CapabilityState.UNAVAILABLE -> Triple("Location unavailable", MaterialTheme.colorScheme.errorContainer, MaterialTheme.colorScheme.onErrorContainer)
+        project.location.capabilityState == CapabilityState.UNSUPPORTED -> Triple("Provider unsupported", LocalIdeColors.current.warningContainer, LocalIdeColors.current.onWarningContainer)
+        project.location.capabilityState == CapabilityState.UNAVAILABLE -> Triple("Location unavailable", LocalIdeColors.current.warningContainer, LocalIdeColors.current.onWarningContainer)
         status != null -> {
-        val shortLabel = when {
-            status.contains("permission", ignoreCase = true) -> "Permission needed"
-            status.contains("unsupported", ignoreCase = true) -> "Provider unsupported"
-            status.contains("unavailable", ignoreCase = true) -> "Location unavailable"
-            status.contains("inspect", ignoreCase = true) -> "Inspection needed"
-            else -> "Needs attention"
-        }
-        Triple(shortLabel, MaterialTheme.colorScheme.errorContainer, MaterialTheme.colorScheme.onErrorContainer)
+            val shortLabel = when {
+                status.contains("permission", ignoreCase = true) -> "Permission needed"
+                status.contains("unsupported", ignoreCase = true) -> "Provider unsupported"
+                status.contains("unavailable", ignoreCase = true) -> "Location unavailable"
+                status.contains("inspect", ignoreCase = true) -> "Inspection needed"
+                else -> "Needs attention"
+            }
+            if (shortLabel == "Permission needed") Triple(shortLabel, MaterialTheme.colorScheme.errorContainer, MaterialTheme.colorScheme.onErrorContainer)
+            else Triple(shortLabel, LocalIdeColors.current.warningContainer, LocalIdeColors.current.onWarningContainer)
         }
         else -> null
     }

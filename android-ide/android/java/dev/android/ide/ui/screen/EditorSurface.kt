@@ -39,6 +39,7 @@ import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -59,7 +60,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
@@ -73,11 +73,14 @@ import androidx.compose.ui.unit.dp
 import dev.android.ide.app.AppShellState
 import dev.android.ide.app.AppShellViewModel
 import dev.android.ide.contracts.Surface
+import dev.android.ide.contracts.OperationReport
 import dev.android.ide.ui.components.EditorPane
 import dev.android.ide.ui.components.EditorProjectActionsMenu
 import dev.android.ide.ui.components.EditorTabBar
 import dev.android.ide.ui.components.FileTreePanel
 import dev.android.ide.ui.theme.LocalIdeColors
+import dev.android.ide.ui.theme.operationStatusContainerColor
+import dev.android.ide.ui.theme.operationStatusContentColor
 import dev.android.ide.viewmodel.IdeViewModel
 import dev.android.ide.viewmodel.model.EditorTab
 import dev.android.ide.viewmodel.model.FileNode
@@ -117,6 +120,7 @@ fun EditorSurface(
         EditorEmptyState(
             projectName = project?.name,
             onOpenProjects = { shellViewModel.navigate(Surface.PROJECTS) },
+            onOpenNavigation = onOpenGlobalNavigation,
             modifier = modifier,
         )
         EditorDialogHost(state, ideViewModel, onChooseExportDestination = { dialog -> exportZip.launch("${dialog.node.displayName}.zip") })
@@ -127,6 +131,7 @@ fun EditorSurface(
         state = state,
         ideViewModel = ideViewModel,
         fileTree = state.fileTree,
+        terminalFeedback = shellState.terminalFeedback,
         onOpenGlobalNavigation = onOpenGlobalNavigation,
         onOpenSettings = onOpenSettings,
         onFeedback = onFeedback,
@@ -134,7 +139,7 @@ fun EditorSurface(
     )
     if (state.fileMutationLoading) {
         Box(
-            Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.28f)).clickable { },
+            Modifier.fillMaxSize().background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.28f)).clickable { },
             contentAlignment = Alignment.Center,
         ) {
             androidx.compose.material3.Surface(
@@ -173,7 +178,7 @@ private fun EditorSidebarActionTile(
                 this.selected = selected
             },
     ) {
-        Icon(icon, contentDescription = label, modifier = Modifier.size(18.dp))
+        Icon(icon, contentDescription = label, tint = if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
     }
 }
 
@@ -201,6 +206,7 @@ fun EditorSidebar(
     onRemoveProject: () -> Unit,
     onOpenSettings: () -> Unit,
     onFeedback: (String) -> Unit,
+    onOpenTerminal: (String) -> Unit,
     rootNode: FileNode?,
     ideViewModel: IdeViewModel,
     modifier: Modifier,
@@ -256,6 +262,7 @@ fun EditorSidebar(
                     onShowDetails = onShowDetails,
                     onDeleteProject = onDeleteProject,
                     onRemoveProject = onRemoveProject,
+                    onOpenTerminal = { onOpenTerminal(root.documentUri) },
                     includeCreationActions = false,
                 )
             }
@@ -319,9 +326,10 @@ fun EditorSidebar(
                 onReplaceFileContents = ideViewModel::replaceFileContents,
                 onClearContentSearchResults = ideViewModel::clearContentSearchResults,
                 onHideFileSearch = onHideFileSearch,
-                onHideContentSearch = onHideContentSearch,
                 onSearchFileSelect = { result -> onFileSelected(result.documentUri) },
                 onExecuteContentSearch = { ideViewModel.searchProjectContents(state.contentSearchQuery) },
+                onOpenTerminalAtRoot = { onOpenTerminal(root.documentUri) },
+                onOpenTerminalAt = { onOpenTerminal(it.documentUri) },
                 modifier = Modifier.weight(1f),
             )
             EditorPanel.FILENAME_SEARCH -> FileTreePanel(
@@ -345,7 +353,7 @@ fun EditorSidebar(
                 onReplaceProjectContents = ideViewModel::replaceProjectContents,
                 onReplaceFileContents = ideViewModel::replaceFileContents,
                 onClearContentSearchResults = ideViewModel::clearContentSearchResults,
-                onHideFileSearch = { onHideFileSearch(); onPanelSelected(EditorPanel.FILES) }, onHideContentSearch = onHideContentSearch, onSearchFileSelect = { result -> onFileSelected(result.documentUri) }, onExecuteContentSearch = { ideViewModel.searchProjectContents(state.contentSearchQuery) }, modifier = Modifier.weight(1f),
+                onHideFileSearch = { onHideFileSearch(); onPanelSelected(EditorPanel.FILES) }, onSearchFileSelect = { result -> onFileSelected(result.documentUri) }, onExecuteContentSearch = { ideViewModel.searchProjectContents(state.contentSearchQuery) }, onOpenTerminalAtRoot = { onOpenTerminal(root.documentUri) }, onOpenTerminalAt = { onOpenTerminal(it.documentUri) }, modifier = Modifier.weight(1f),
             )
             EditorPanel.CONTENT_SEARCH -> FileTreePanel(
                 nodes = state.fileTree, clipboardItems = state.clipboardItems, clipboardIsCut = state.clipboardIsCut,
@@ -354,6 +362,9 @@ fun EditorSidebar(
                 hideGitFolder = state.editorSettings.hideGitFolder, isMultiSelectMode = false, selectedUris = emptySet(),
                 isSearchVisible = false, isContentSearchVisible = true, fileSearchQuery = state.fileSearchQuery, fileSearchResults = state.fileSearchResults,
                 contentSearchQuery = state.contentSearchQuery, contentSearchResults = state.contentSearchResults,
+                contentSearchCompletedQuery = state.contentSearchCompletedQuery,
+                contentSearchRunning = state.contentSearchRunning,
+                contentSearchWarning = state.contentSearchWarning,
                 contentSearchMatchCase = state.contentSearchMatchCase, contentSearchWholeWord = state.contentSearchWholeWord,
                 contentSearchRegex = state.contentSearchRegex, contentSearchShowContext = state.contentSearchShowContext,
                 onFileClick = onFileSelected, onFileDoubleClick = ideViewModel::openFilePermanent,
@@ -368,7 +379,7 @@ fun EditorSidebar(
                 onReplaceProjectContents = ideViewModel::replaceProjectContents,
                 onReplaceFileContents = ideViewModel::replaceFileContents,
                 onClearContentSearchResults = ideViewModel::clearContentSearchResults,
-                onHideFileSearch = onHideFileSearch, onHideContentSearch = { onHideContentSearch(); onPanelSelected(EditorPanel.FILES) }, onSearchFileSelect = onSearchResultSelected, onExecuteContentSearch = { ideViewModel.searchProjectContents(state.contentSearchQuery) }, modifier = Modifier.weight(1f),
+                onHideFileSearch = onHideFileSearch, onSearchFileSelect = onSearchResultSelected, onExecuteContentSearch = { ideViewModel.searchProjectContents(state.contentSearchQuery) }, onOpenTerminalAtRoot = { onOpenTerminal(root.documentUri) }, onOpenTerminalAt = { onOpenTerminal(it.documentUri) }, modifier = Modifier.weight(1f),
             )
         }
     }
@@ -378,7 +389,7 @@ fun EditorSidebar(
 private fun SidebarIcon(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, selected: Boolean, onClick: () -> Unit) {
     val colors = LocalIdeColors.current
     IconButton(onClick = onClick) {
-        Icon(icon, label, tint = if (selected) colors.accent else colors.textSecondary)
+        Icon(icon, label, tint = if (selected) colors.primary else colors.textSecondary)
     }
 }
 
@@ -387,6 +398,7 @@ private fun EditorWorkspace(
     state: IdeUiState,
     ideViewModel: IdeViewModel,
     fileTree: List<FileNode>,
+    terminalFeedback: OperationReport?,
     onOpenGlobalNavigation: () -> Unit,
     onOpenSettings: () -> Unit,
     onFeedback: (String) -> Unit,
@@ -397,6 +409,15 @@ private fun EditorWorkspace(
     val keyboardVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
     var moreOpen by remember { mutableStateOf(false) }
     Column(modifier.background(colors.background)) {
+        terminalFeedback?.takeIf { it.outcome != dev.android.ide.contracts.OperationOutcome.COMPLETE }?.let { report ->
+            val contentColor = operationStatusContentColor(report.outcome)
+            Row(
+                Modifier.fillMaxWidth().background(operationStatusContainerColor(report.outcome)).padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("Terminal: ${report.message}", color = contentColor, style = MaterialTheme.typography.bodySmall)
+            }
+        }
         EditorTopBar(
             state = state, activeTab = activeTab, fileTree = fileTree,
             projectRootUri = state.projectRootUri,
@@ -432,6 +453,8 @@ private fun EditorWorkspace(
             isEditorReady = state.isEditorReady, editorBindRevision = state.editorBindRevision, editorCommands = ideViewModel.editorCommand,
             onEditorRendererGone = ideViewModel::onEditorRendererGone, onEditorMessage = ideViewModel::onEditorMessage,
             onInsertText = { ideViewModel.sendEditorCommand(EditorOutbound.InsertText(it)) }, onExecuteCommand = { ideViewModel.sendEditorCommand(EditorOutbound.ExecuteCommand(it)) },
+            onInsertPair = { opening, closing -> ideViewModel.sendEditorCommand(EditorOutbound.InsertPair(opening, closing)) },
+            onInsertSnippet = { trigger, snippet -> ideViewModel.sendEditorCommand(EditorOutbound.InsertSnippet(trigger, snippet)) },
             onPasteFromClipboard = ideViewModel::pasteFromKotlinClipboard, hasEditorSelection = state.hasEditorSelection,
             showKeyboardToolbar = state.editorSettings.showKeyboardToolbar, showSymbolBar = state.editorSettings.showSymbolBar,
             keyboardToolbarOrder = state.editorSettings.keyboardToolbarOrder,
@@ -498,7 +521,7 @@ private fun EditorTopBar(
                 val currentUri = navCurrentUri ?: activeParentUri
                 val parentUri = currentUri?.let { uri -> fileTree.findNode(uri)?.parentDocumentUri }
                 DropdownMenuItem(
-                    text = { Text("..", color = colors.accent) },
+                    text = { Text("..", color = colors.primary) },
                     enabled = parentUri != null,
                     onClick = {
                         parentUri?.let { navCurrentUri = it }
@@ -515,7 +538,7 @@ private fun EditorTopBar(
                                         Icon(Icons.Default.FolderOpen, contentDescription = null, tint = colors.textSecondary, modifier = Modifier.size(18.dp))
                                         Spacer(Modifier.width(8.dp))
                                     }
-                                    Text(if (sibling.isDirectory) "${sibling.displayName}/" else sibling.displayName, color = if (sibling.documentUri == activeTab?.documentUri) colors.accent else colors.textPrimary)
+                                    Text(if (sibling.isDirectory) "${sibling.displayName}/" else sibling.displayName, color = if (sibling.documentUri == activeTab?.documentUri) colors.primary else colors.textPrimary)
                                 }
                             },
                             onClick = {
@@ -548,15 +571,21 @@ private fun EditorStatusBar(state: IdeUiState, activeTab: EditorTab?) {
 }
 
 @Composable
-private fun EditorEmptyState(projectName: String?, onOpenProjects: () -> Unit, modifier: Modifier) {
+private fun EditorEmptyState(projectName: String?, onOpenProjects: () -> Unit, onOpenNavigation: () -> Unit, modifier: Modifier) {
     val colors = LocalIdeColors.current
-    Box(modifier.fillMaxSize().background(colors.background), contentAlignment = Alignment.Center) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.padding(24.dp)) {
-            Icon(Icons.Default.FolderOpen, null, tint = colors.accentLight, modifier = Modifier.size(44.dp))
-            Text(if (projectName == null) "Open a project to start editing" else "Restoring $projectName…", style = MaterialTheme.typography.titleMedium)
-            if (projectName == null) {
-                Text("The editor opens files from the project's selected location.", color = colors.textSecondary, style = MaterialTheme.typography.bodyMedium)
-                Button(onClick = onOpenProjects) { Text("Open Projects") }
+    Column(modifier.fillMaxSize().background(colors.background)) {
+        Row(Modifier.fillMaxWidth().height(56.dp).background(colors.surface), verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onOpenNavigation) { Icon(Icons.Default.Menu, contentDescription = "Open sidebar", tint = colors.textPrimary) }
+            Text("Editor", style = MaterialTheme.typography.titleMedium, color = colors.textPrimary)
+        }
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.padding(24.dp)) {
+                Icon(Icons.Default.FolderOpen, null, tint = colors.secondary, modifier = Modifier.size(44.dp))
+                Text(if (projectName == null) "Open a project to start editing" else "Restoring $projectName…", style = MaterialTheme.typography.titleMedium)
+                if (projectName == null) {
+                    Text("The editor opens files from the project's selected location.", color = colors.textSecondary, style = MaterialTheme.typography.bodyMedium)
+                    Button(onClick = onOpenProjects) { Text("Open Projects") }
+                }
             }
         }
     }
@@ -575,7 +604,7 @@ private fun EditorDialogHost(state: IdeUiState, ideViewModel: IdeViewModel, onCh
                 text = {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         if (completed) {
-                            Text(dialog.resultMessage!!, color = MaterialTheme.colorScheme.primary)
+                            Text(dialog.resultMessage!!, color = LocalIdeColors.current.success)
                         } else {
                             Text("Project path: $path")
                             Text("This permanently removes the selected item and its contents. This action cannot be undone.")
@@ -584,11 +613,11 @@ private fun EditorDialogHost(state: IdeUiState, ideViewModel: IdeViewModel, onCh
                         }
                     }
                 },
-                confirmButton = { TextButton(onClick = if (completed) ideViewModel::dismissFileOpDialog else ({ ideViewModel.deleteNode(dialog.node, dialog.selectedNodes) }), enabled = !dialog.isSubmitting) { Text(if (completed) "Done" else if (dialog.isSubmitting) "Deleting…" else if (dialog.errorMessage != null) "Retry delete" else "Delete") } },
+                confirmButton = { Button(onClick = if (completed) ideViewModel::dismissFileOpDialog else ({ ideViewModel.deleteNode(dialog.node, dialog.selectedNodes) }), enabled = !dialog.isSubmitting, colors = ButtonDefaults.buttonColors(containerColor = if (completed) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error, contentColor = if (completed) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onError)) { Text(if (completed) "Done" else if (dialog.isSubmitting) "Deleting…" else if (dialog.errorMessage != null) "Retry delete" else "Delete") } },
                 dismissButton = { if (!completed) TextButton(onClick = ideViewModel::dismissFileOpDialog, enabled = !dialog.isSubmitting) { Text(if (dialog.isSubmitting) "Please wait" else "Cancel") } },
             )
         }
-        is FileOpDialog.UnsavedClose -> AlertDialog(onDismissRequest = ideViewModel::dismissFileOpDialog, title = { Text("Unsaved changes") }, text = { Text("${dialog.displayName} has unsaved changes. Choose how to close it.") }, confirmButton = { TextButton(onClick = { ideViewModel.saveAndCloseTab(dialog.tabId) }) { Text("Save and close") } }, dismissButton = { Row { TextButton(onClick = { ideViewModel.confirmCloseTab(dialog.tabId) }) { Text("Discard") }; TextButton(onClick = ideViewModel::dismissFileOpDialog) { Text("Cancel") } } })
+        is FileOpDialog.UnsavedClose -> AlertDialog(onDismissRequest = ideViewModel::dismissFileOpDialog, title = { Text("Unsaved changes") }, text = { Text("${dialog.displayName} has unsaved changes. Choose how to close it.") }, confirmButton = { TextButton(onClick = { ideViewModel.saveAndCloseTab(dialog.tabId) }) { Text("Save and close") } }, dismissButton = { Row { TextButton(onClick = { ideViewModel.confirmCloseTab(dialog.tabId) }) { Text("Discard", color = MaterialTheme.colorScheme.error) }; TextButton(onClick = ideViewModel::dismissFileOpDialog) { Text("Cancel") } } })
         is FileOpDialog.Rename -> EditorTextDialog("Rename ${dialog.node.displayName}", "New name or path", dialog.node.displayName, dialog.errorMessage, dialog.resultMessage, ideViewModel::dismissFileOpDialog, dialog.isSubmitting) { ideViewModel.renameNode(dialog.node, it) }
         is FileOpDialog.Duplicate -> EditorTextDialog("Duplicate ${dialog.node.displayName}", "New name or path", "Copy of ${dialog.node.displayName}", dialog.errorMessage, dialog.resultMessage, ideViewModel::dismissFileOpDialog, dialog.isSubmitting) { ideViewModel.duplicateFile(dialog.node, it) }
         is FileOpDialog.Export -> {
@@ -597,10 +626,10 @@ private fun EditorDialogHost(state: IdeUiState, ideViewModel: IdeViewModel, onCh
                 onDismissRequest = { if (!dialog.isSubmitting) ideViewModel.dismissFileOpDialog() },
                 title = { Text(if (completed) "Export complete" else "Export ${dialog.node.displayName}") },
                 text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (completed) Text(dialog.resultMessage!!, color = MaterialTheme.colorScheme.primary)
+                    if (completed) Text(dialog.resultMessage!!, color = LocalIdeColors.current.success)
                     else {
                         Text("The selected ${if (dialog.node.isDirectory) "folder" else "file"} will be exported as a ZIP without changing the source.")
-                        dialog.resultMessage?.let { Text(it, color = if (dialog.failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary) }
+                        dialog.resultMessage?.let { Text(it, color = if (dialog.failed) MaterialTheme.colorScheme.error else LocalIdeColors.current.success) }
                         if (dialog.isSubmitting) Row(verticalAlignment = Alignment.CenterVertically) { CircularProgressIndicator(Modifier.padding(end = 8.dp), strokeWidth = 2.dp); Text("Exporting…") }
                     }
                 } },
@@ -616,7 +645,7 @@ private fun EditorDialogHost(state: IdeUiState, ideViewModel: IdeViewModel, onCh
             title = { Text("Replace project content?") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    dialog.resultMessage?.let { Text(it, color = if (it.contains("could not", true) || it.contains("failed", true)) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary) }
+                    dialog.resultMessage?.let { Text(it, color = if (it.contains("could not", true) || it.contains("failed", true)) MaterialTheme.colorScheme.error else LocalIdeColors.current.success) }
                         ?: run {
                             Text("Replace all occurrences of \"${dialog.find}\" with \"${dialog.replacement}\"?")
                             Text("${dialog.matches} match(es) across ${dialog.files} file(s) will be changed.")
@@ -643,7 +672,7 @@ private fun EditorDialogHost(state: IdeUiState, ideViewModel: IdeViewModel, onCh
             title = { Text("Replace matches in ${dialog.fileName}?") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    dialog.resultMessage?.let { Text(it, color = if (it.contains("could not", true) || it.contains("failed", true)) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary) }
+                    dialog.resultMessage?.let { Text(it, color = if (it.contains("could not", true) || it.contains("failed", true)) MaterialTheme.colorScheme.error else LocalIdeColors.current.success) }
                         ?: Text("Replace ${dialog.matches} occurrence(s) of \"${dialog.find}\" with \"${dialog.replacement}\" in this file?")
                     if (dialog.isSubmitting) Row(verticalAlignment = Alignment.CenterVertically) {
                         CircularProgressIndicator(Modifier.padding(end = 8.dp), strokeWidth = 2.dp)
@@ -673,7 +702,7 @@ private fun EditorTextDialog(title: String, label: String, initial: String, erro
     AlertDialog(
         onDismissRequest = { if (!submitting) onDismiss() },
         title = { Text(if (completed) "Operation complete" else title) },
-        text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { if (completed) Text(result!!, color = MaterialTheme.colorScheme.primary) else { OutlinedTextField(value, { value = it }, label = { Text(label) }, supportingText = { Text("Relative to the selected project folder, or an absolute path inside it.") }, enabled = !submitting, singleLine = true); if (error != null) Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall); if (submitting) Row(verticalAlignment = Alignment.CenterVertically) { CircularProgressIndicator(Modifier.padding(end = 8.dp), strokeWidth = 2.dp); Text("Working…") } } } },
+        text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { if (completed) Text(result!!, color = LocalIdeColors.current.success) else { OutlinedTextField(value, { value = it }, label = { Text(label) }, supportingText = { Text("Relative to the selected project folder, or an absolute path inside it.") }, enabled = !submitting, singleLine = true); if (error != null) Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall); if (submitting) Row(verticalAlignment = Alignment.CenterVertically) { CircularProgressIndicator(Modifier.padding(end = 8.dp), strokeWidth = 2.dp); Text("Working…") } } } },
         confirmButton = { Button(onClick = if (completed) onDismiss else ({ if (value.isNotBlank()) onConfirm(value.trim()) }), enabled = !submitting && (completed || value.isNotBlank())) { Text(if (completed) "Done" else if (submitting) "Working…" else "Confirm") } },
         dismissButton = { if (!completed) TextButton(onClick = onDismiss, enabled = !submitting) { Text("Cancel") } },
     )

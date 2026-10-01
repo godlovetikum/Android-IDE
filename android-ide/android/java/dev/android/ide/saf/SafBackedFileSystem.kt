@@ -61,13 +61,13 @@ class SafBackedFileSystem(context: Context) : ProjectFileSystemAdapter {
 
     override suspend fun mountedRoots(): List<FileSystemNode> = buildList {
         val androidIdeRoot = AndroidIdeDocumentsProvider.rootTreeUri()
-        if (saf.documentPresence(androidIdeRoot) != DocumentPresence.ABSENT) {
+        if (saf.documentPresence(androidIdeRoot) == DocumentPresence.EXISTS && saf.isDirectoryDocument(androidIdeRoot)) {
             add(
                 FileSystemNode(
                     virtualPath = virtualPath(androidIdeRoot),
                     providerUri = androidIdeRoot,
                     localPath = saf.localFilesystemPath(androidIdeRoot),
-                    displayLabel = "Android IDE files",
+                    displayLabel = "Android IDE",
                     isDirectory = true,
                     providerAuthority = Uri.parse(androidIdeRoot).authority,
                 ),
@@ -80,6 +80,7 @@ class SafBackedFileSystem(context: Context) : ProjectFileSystemAdapter {
             .filterNot { it == androidIdeRoot }
             .distinct()
             .forEach { grantedUri ->
+                if (saf.documentPresence(grantedUri) != DocumentPresence.EXISTS || !saf.isDirectoryDocument(grantedUri)) return@forEach
                 val label = saf.getDisplayName(grantedUri) ?: "Mounted storage"
                 add(
                     FileSystemNode(

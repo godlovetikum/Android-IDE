@@ -38,35 +38,18 @@ import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ContentCopy
-import androidx.compose.material.icons.filled.ContentCut
-import androidx.compose.material.icons.filled.ContentPaste
-import androidx.compose.material.icons.filled.FormatIndentDecrease
-import androidx.compose.material.icons.filled.FormatIndentIncrease
-import androidx.compose.material.icons.filled.Keyboard
-import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.KeyboardArrowLeft
-import androidx.compose.material.icons.filled.KeyboardArrowRight
-import androidx.compose.material.icons.filled.KeyboardArrowUp
-import androidx.compose.material.icons.filled.KeyboardHide
-import androidx.compose.material.icons.filled.Redo
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.SelectAll
-import androidx.compose.material.icons.filled.Undo
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.role
-import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.viewinterop.AndroidView
@@ -95,6 +78,8 @@ fun EditorPane(
     onEditorRendererGone: () -> Unit = {},
     onEditorMessage: (EditorInbound) -> Unit,
     onInsertText: (String) -> Unit,
+    onInsertPair: (String, String) -> Unit,
+    onInsertSnippet: (String, String) -> Unit,
     onExecuteCommand: (String) -> Unit,
     onPasteFromClipboard: () -> Unit,
     hasEditorSelection: Boolean = false,
@@ -284,7 +269,26 @@ fun EditorPane(
         // Symbol shortcut bar — shown above keyboard toolbar when a tab is active
         if (activeTab != null && showSymbolBar) {
             HorizontalDivider(thickness = 1.dp, color = colors.separator)
-            SymbolBar(symbols = EditorSettings.DEFAULT_SYMBOLS, onInsertSymbol = onInsertText)
+            val cursor = tabCursorPositions[activeTab.documentUri] ?: (1 to 1)
+            val content = activeTabContent ?: activeTab.content.orEmpty()
+            val cursorLine = remember(activeTab.id, content, cursor.first) {
+                content.lineSequence().drop((cursor.first - 1).coerceAtLeast(0)).firstOrNull().orEmpty()
+            }
+            val cursorOffset = (cursor.second - 1).coerceIn(0, cursorLine.length)
+            val shortcuts = editorSymbolBarContent(
+                languageId = activeTab.language,
+                linePrefix = cursorLine.take(cursorOffset),
+                lineSuffix = cursorLine.drop(cursorOffset),
+                hasSelection = hasEditorSelection,
+            )
+            SymbolBar(
+                shortcuts = shortcuts,
+                hasSelection = hasEditorSelection,
+                onInsertSymbol = onInsertText,
+                onInsertPair = onInsertPair,
+                onInsertSnippet = onInsertSnippet,
+                onShowCompletions = { onExecuteCommand("editor.action.triggerSuggest") },
+            )
         }
 
         // Keyboard toolbar — fixed five-item pages, no horizontal scrolling
@@ -345,8 +349,12 @@ private fun EditorCrashedBox(modifier: Modifier = Modifier, onReload: () -> Unit
 
 @Composable
 private fun SymbolBar(
-    symbols: List<String>,
+    shortcuts: EditorSymbolBarContent,
+    hasSelection: Boolean,
     onInsertSymbol: (String) -> Unit,
+    onInsertPair: (String, String) -> Unit,
+    onInsertSnippet: (String, String) -> Unit,
+    onShowCompletions: () -> Unit,
 ) {
     val colors = LocalIdeColors.current
     Row(
@@ -354,22 +362,67 @@ private fun SymbolBar(
             .height(36.dp)
             .fillMaxWidth()
             .background(colors.surface)
-            .horizontalScroll(rememberScrollState()),
+            .horizontalScroll(rememberScrollState())
+            .semantics {
+                contentDescription = "${shortcuts.languageLabel} ${shortcuts.contextLabel} editor shortcuts"
+            },
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Spacer(Modifier.width(4.dp))
-        symbols.forEach { symbol ->
+        Text("Pairs", style = MaterialTheme.typography.labelSmall, color = colors.textSecondary)
+        shortcuts.pairs.forEach { pair ->
             TextButton(
-                onClick        = { onInsertSymbol(symbol) },
-                modifier       = Modifier.height(32.dp).widthIn(min = 32.dp),
+                onClick        = { onInsertPair(pair.opening, pair.closing) },
+                modifier       = Modifier.height(32.dp).widthIn(min = 36.dp).semantics {
+                    contentDescription = if (hasSelection) {
+                        "Wrap selection with ${pair.opening} and ${pair.closing}"
+                    } else {
+                        "Insert ${pair.opening} and ${pair.closing} with cursor between"
+                    }
+                },
                 contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp),
             ) {
                 Text(
-                    text  = symbol,
+                    text  = pair.label,
                     style = MaterialTheme.typography.labelMedium,
-                    color = colors.accent,
+                    color = colors.primary,
                 )
             }
+        }
+        Spacer(Modifier.width(3.dp))
+        Text("Symbols", style = MaterialTheme.typography.labelSmall, color = colors.textSecondary)
+        shortcuts.punctuation.forEach { symbol ->
+            TextButton(
+                onClick = { onInsertSymbol(symbol) },
+                modifier = Modifier.height(32.dp).widthIn(min = 30.dp),
+                contentPadding = PaddingValues(horizontal = 5.dp, vertical = 0.dp),
+            ) {
+                Text(symbol, style = MaterialTheme.typography.labelMedium, color = colors.primary)
+            }
+        }
+        if (shortcuts.snippets.isNotEmpty()) {
+            Spacer(Modifier.width(3.dp))
+            Text("Templates", style = MaterialTheme.typography.labelSmall, color = colors.textSecondary)
+            shortcuts.snippets.forEach { template ->
+                TextButton(
+                    onClick = { onInsertSnippet(template.trigger, template.body) },
+                    modifier = Modifier.height(32.dp).widthIn(min = 38.dp).semantics {
+                        contentDescription = "Insert ${shortcuts.languageLabel} ${template.label} template"
+                    },
+                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp),
+                ) {
+                    Text(template.label, style = MaterialTheme.typography.labelMedium, color = colors.primary)
+                }
+            }
+        }
+        TextButton(
+            onClick = onShowCompletions,
+            modifier = Modifier.height(32.dp).widthIn(min = 48.dp).semantics {
+                contentDescription = "Show language-server completions and local snippets for ${shortcuts.languageLabel} at the cursor"
+            },
+            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp),
+        ) {
+            Text("Suggest", style = MaterialTheme.typography.labelMedium, color = colors.secondary)
         }
         Spacer(Modifier.width(4.dp))
     }
@@ -387,12 +440,8 @@ private fun KeyboardToolbar(
 ) {
     val colors = LocalIdeColors.current
     val actionCatalog = EDITOR_TOOLBAR_ACTIONS.associateBy { it.id }
-    val orderedActions = actionOrder
-        .distinct()
+    val orderedActions = normalizeEditorToolbarOrder(actionOrder)
         .mapNotNull(actionCatalog::get)
-        .ifEmpty {
-            EditorSettings.DEFAULT_KEYBOARD_TOOLBAR_ORDER.mapNotNull(actionCatalog::get)
-        }
     val pages = orderedActions.chunked(KEYBOARD_TOOLBAR_PAGE_SIZE)
     var selectedPage by rememberSaveable { mutableIntStateOf(0) }
     val pageIndex = selectedPage.coerceIn(0, pages.lastIndex.coerceAtLeast(0))
@@ -400,7 +449,7 @@ private fun KeyboardToolbar(
     val keyboardShowing = WindowInsets.ime.getBottom(density) > 0
 
     LaunchedEffect(actionOrder) {
-        selectedPage = selectedPage.coerceIn(0, pages.lastIndex.coerceAtLeast(0))
+        selectedPage = 0
     }
 
     Column(
@@ -408,54 +457,68 @@ private fun KeyboardToolbar(
             .fillMaxWidth()
             .background(colors.surface),
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth().height(48.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            IconButton(
-                onClick = { selectedPage = (pageIndex - 1).coerceAtLeast(0) },
-                enabled = pageIndex > 0,
-                modifier = Modifier.size(44.dp),
+        if (pages.isEmpty()) {
+            Box(
+                modifier = Modifier.fillMaxWidth().height(48.dp),
+                contentAlignment = Alignment.Center,
             ) {
-                Icon(Icons.Default.KeyboardArrowLeft, contentDescription = "Previous toolbar page")
+                Text("No toolbar actions enabled", style = MaterialTheme.typography.labelSmall, color = colors.textSecondary)
             }
+        } else {
             Row(
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.fillMaxWidth().height(48.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceEvenly,
             ) {
-                pages.getOrElse(pageIndex) { emptyList() }.forEach { action ->
-                    ToolbarIconButton(
-                        action = action,
-                        icon = if (action.isKeyboardToggle && keyboardShowing) {
-                            Icons.Default.KeyboardHide
-                        } else {
-                            action.icon
-                        },
-                        enabled = !action.requiresSelection || hasEditorSelection,
-                        onExecuteCommand = onExecuteCommand,
-                        onPaste = onPasteFromClipboard,
-                        onCustomClick = if (action.isKeyboardToggle) {
-                            { onToggleKeyboard(!keyboardShowing) }
-                        } else null,
+                IconButton(
+                    onClick = { selectedPage = (pageIndex - 1).coerceAtLeast(0) },
+                    enabled = pageIndex > 0,
+                    modifier = Modifier.size(44.dp).semantics { contentDescription = "Previous toolbar page" },
+                ) {
+                    EditorToolbarGlyph(
+                        actionId = "toolbarPagePrevious",
+                        tint = if (pageIndex > 0) colors.textSecondary else colors.textDisabled,
+                        modifier = Modifier.size(24.dp),
+                    )
+                }
+                Row(
+                    modifier = Modifier.weight(1f),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceEvenly,
+                ) {
+                    pages.getOrElse(pageIndex) { emptyList() }.forEach { action ->
+                        val disabledReason = when {
+                            action.requiresSelection && !hasEditorSelection -> "Select text first"
+                            else -> null
+                        }
+                        key(action.id) {
+                            ToolbarIconButton(
+                                action = action,
+                                keyboardShowing = keyboardShowing,
+                                enabled = disabledReason == null,
+                                disabledReason = disabledReason,
+                                onExecuteAction = { actionId ->
+                                    editorToolbarCommandId(actionId)?.let(onExecuteCommand)
+                                },
+                                onPaste = onPasteFromClipboard,
+                                onCustomClick = if (action.isKeyboardToggle) {
+                                    { onToggleKeyboard(!keyboardShowing) }
+                                } else null,
+                            )
+                        }
+                    }
+                }
+                IconButton(
+                    onClick = { selectedPage = (pageIndex + 1).coerceAtMost(pages.lastIndex) },
+                    enabled = pageIndex < pages.lastIndex,
+                    modifier = Modifier.size(44.dp).semantics { contentDescription = "Next toolbar page" },
+                ) {
+                    EditorToolbarGlyph(
+                        actionId = "toolbarPageNext",
+                        tint = if (pageIndex < pages.lastIndex) colors.textSecondary else colors.textDisabled,
+                        modifier = Modifier.size(24.dp),
                     )
                 }
             }
-            IconButton(
-                onClick = { selectedPage = (pageIndex + 1).coerceAtMost(pages.lastIndex.coerceAtLeast(0)) },
-                enabled = pageIndex < pages.lastIndex,
-                modifier = Modifier.size(44.dp),
-            ) {
-                Icon(Icons.Default.KeyboardArrowRight, contentDescription = "Next toolbar page")
-            }
-        }
-        if (pages.size > 1) {
-            Text(
-                text = "Page ${pageIndex + 1} of ${pages.size}",
-                style = MaterialTheme.typography.labelSmall,
-                color = colors.textSecondary,
-                modifier = Modifier.align(Alignment.CenterHorizontally).padding(bottom = 2.dp),
-            )
         }
     }
 }
@@ -464,43 +527,51 @@ private fun KeyboardToolbar(
 @Composable
 private fun ToolbarIconButton(
     action: EditorToolbarAction,
-    icon: ImageVector,
+    keyboardShowing: Boolean,
     enabled: Boolean = true,
-    onExecuteCommand: (String) -> Unit,
+    disabledReason: String? = null,
+    onExecuteAction: (String) -> Unit,
     onPaste: () -> Unit,
     onCustomClick: (() -> Unit)? = null,
 ) {
     val colors = LocalIdeColors.current
     val tooltipState = rememberTooltipState()
+    val currentAction by rememberUpdatedState(action)
+    val currentExecuteAction by rememberUpdatedState(onExecuteAction)
+    val currentPaste by rememberUpdatedState(onPaste)
+    val currentCustomClick by rememberUpdatedState(onCustomClick)
+    val description = buildList {
+        add(action.label)
+        add(action.description)
+        if (action.languageServerDependent) add("Requires a running language server; may be unavailable if it is stopped or fails")
+        disabledReason?.let(::add)
+    }.joinToString(". ")
 
     fun performAction() {
         when {
-            onCustomClick != null -> onCustomClick()
-            action.isPaste -> onPaste()
-            action.commandId != null -> onExecuteCommand(action.commandId)
+            currentCustomClick != null -> currentCustomClick?.invoke()
+            currentAction.isPaste -> currentPaste()
+            else -> currentExecuteAction(currentAction.id)
         }
     }
 
     TooltipBox(
-        positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
+            positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
         tooltip = {
             PlainTooltip {
-                Text(action.label, style = MaterialTheme.typography.labelSmall)
+                Text(description, style = MaterialTheme.typography.labelSmall)
             }
         },
         state = tooltipState,
     ) {
         IconButton(
-            onClick = ::performAction,
+            onClick = { performAction() },
             enabled = enabled,
             modifier = Modifier
                 .size(44.dp)
-                .semantics {
-                    role = Role.Button
-                    onClick(action.label) { performAction(); true }
-                }
-                .pointerInput(enabled, action.repeatable, action.commandId) {
-                    if (!enabled || !action.repeatable) return@pointerInput
+                .semantics { contentDescription = description }
+                .pointerInput(action.id, enabled, action.repeatable) {
+                    if (!enabled || !currentAction.repeatable) return@pointerInput
                     kotlinx.coroutines.coroutineScope {
                         val gestureScope = this
                         awaitPointerEventScope {
@@ -520,11 +591,11 @@ private fun ToolbarIconButton(
                     }
                 },
         ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = action.label,
+            EditorToolbarGlyph(
+                actionId = action.id,
                 tint = if (enabled) colors.textSecondary else colors.textDisabled,
                 modifier = Modifier.size(24.dp),
+                keyboardShowing = action.isKeyboardToggle && keyboardShowing,
             )
         }
     }

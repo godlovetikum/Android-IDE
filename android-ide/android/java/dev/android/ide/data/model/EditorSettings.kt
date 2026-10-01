@@ -68,7 +68,7 @@ data class EditorSettings(
 
 ) {
     companion object {
-        val DEFAULT_SYMBOLS = listOf("<", ">", "/", "=", "(", ")", "{", "}", "[", "]", "\"", "`")
+        val DEFAULT_SYMBOLS = listOf("()", "{}", "[]", "\"\"", "''", "``", "<>")
         /**
          * Practical mobile defaults. Find and close-search remain in the editor
          * top bar and are intentionally not duplicated in this list.

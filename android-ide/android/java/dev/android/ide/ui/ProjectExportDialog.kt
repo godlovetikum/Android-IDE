@@ -16,6 +16,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import dev.android.ide.contracts.OperationOutcome
 import dev.android.ide.contracts.OperationReport
+import dev.android.ide.ui.theme.operationStatusColor
 
 /**
  * Single project-export review surface.
@@ -45,13 +46,13 @@ fun ProjectExportDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (completed) {
-                    Text(operationReport!!.message, color = MaterialTheme.colorScheme.primary)
+                    Text(operationReport!!.message, color = operationStatusColor(operationReport!!.outcome))
                 } else {
                     storageLocation?.takeIf { it.isNotBlank() }?.let { Text(it) }
                     operationReport?.let { report ->
                         Text(
                             report.message,
-                            color = if (report.outcome == OperationOutcome.COMPLETE) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                            color = operationStatusColor(report.outcome),
                         )
                     }
                     if (operationInProgress) {

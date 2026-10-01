@@ -38,6 +38,7 @@ import dev.android.ide.saf.ExactCreateResult
 import dev.android.ide.saf.PathResolutionResult
 import dev.android.ide.saf.SafeMutationResult
 import dev.android.ide.saf.SafRepository
+import dev.android.ide.saf.TextDocumentCodec
 import dev.android.ide.saf.AndroidIdeDocumentsProvider
 import dev.android.ide.project.ProjectFileMutationService
 import dev.android.ide.project.ProjectStorageAdapterImpl
@@ -52,8 +53,6 @@ import dev.android.ide.viewmodel.model.ProjectSwitchRequest
 import dev.android.ide.viewmodel.model.NormalizedPathResult
 import dev.android.ide.viewmodel.model.ancestorsOf
 import org.json.JSONObject
-import java.nio.ByteBuffer
-import java.nio.charset.CodingErrorAction
 import java.nio.charset.StandardCharsets
 import dev.android.ide.viewmodel.model.findNode
 import dev.android.ide.viewmodel.model.normalizeProjectPath
@@ -71,6 +70,7 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -83,6 +83,7 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
     private data class LanguageServerContext(val projectId: String, val serverId: String)
 
     private var projectSearchJob: Job? = null
+    private var projectSearchGeneration = 0L
 
     private val safRepository      = SafRepository(application)
     private val storageAdapter     = ProjectStorageAdapterImpl(safRepository)
@@ -551,6 +552,7 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
             currentScreen  = if (restoreAtHome) AppScreen.HOME else AppScreen.EDITOR,
             openTabs       = emptyList(),
             activeTabId    = null,
+            languageIntelligenceAvailable = false,
             recoveryEntries = emptyList(),
         ) }
         projectRepository.upsert(
@@ -1033,6 +1035,7 @@ build/
                     fileTree       = emptyList(),
                     openTabs       = emptyList(),
                     activeTabId    = null,
+                    languageIntelligenceAvailable = false,
                     isEditorReady  = false,
                     currentScreen  = AppScreen.PROJECTS,
                 )
@@ -1351,6 +1354,7 @@ build/
         temporary: Boolean = false,
         pinned: Boolean = false,
     ) {
+        if (markActive) _uiState.update { it.copy(languageIntelligenceAvailable = false) }
         val existing = _uiState.value.openTabs.find { it.documentUri == documentUri }
         if (existing != null) {
             if (!temporary && existing.isTemporary) pinTab(existing.id)
@@ -1362,6 +1366,7 @@ build/
         if (temporary) {
             val oldTemp = _uiState.value.openTabs.firstOrNull { it.isTemporary }
             if (oldTemp != null) {
+                val replacedActiveTab = _uiState.value.activeTabId == oldTemp.id
                 pendingContent.remove(oldTemp.id)
                 _uiState.update { state ->
                     val remaining  = state.openTabs.filter { it.id != oldTemp.id }
@@ -1369,8 +1374,10 @@ build/
                     state.copy(
                         openTabs    = remaining.map { it.copy(isActive = it.id == newActive) },
                         activeTabId = newActive,
+                        languageIntelligenceAvailable = if (replacedActiveTab) false else state.languageIntelligenceAvailable,
                     )
                 }
+                if (replacedActiveTab && !markActive) _uiState.value.activeTabId?.let(::selectTab)
             }
         }
 
@@ -1389,13 +1396,14 @@ build/
             ?: safRepository.getDisplayName(documentUri)
             ?: displayNameFromUri(documentUri)
         // Binary content (.apk, .class, compiled assets) corrupts Monaco's text model.
-        if (isBinaryDocument(bytes)) {
+        val decodedFile = TextDocumentCodec.decode(bytes)
+        if (decodedFile == null) {
             _uiState.update { it.copy(fileOpDialog = FileOpDialog.BinaryOpenError(displayName)) }
             _uiState.update { it.copy(editorFileLoading = false) }
             return
         }
 
-        val content = String(bytes, Charsets.UTF_8)
+        val content = decodedFile.text
         val language = EditorLanguageRegistry.languageForFileName(displayName)
         val languageServer = startLanguageServerForActiveProject(language)
 
@@ -1419,6 +1427,7 @@ build/
                 activeTabId   = if (markActive) newTab.id else state.activeTabId,
                 currentScreen = AppScreen.EDITOR,
                 hasEditorSelection = false,
+                languageIntelligenceAvailable = if (markActive) languageServer != null else state.languageIntelligenceAvailable,
                 editorFileLoading = false,
             )
         }
@@ -1440,8 +1449,11 @@ build/
         scheduleWorkspaceSave()
     }
 
-    private suspend fun startLanguageServerForActiveProject(languageId: String): LanguageServerContext? {
-        val rootUri = _uiState.value.projectRootUri ?: return null
+    private suspend fun startLanguageServerForActiveProject(
+        languageId: String,
+        rootUri: String? = _uiState.value.projectRootUri,
+    ): LanguageServerContext? {
+        rootUri ?: return null
         val stored = projectRepository.getAll().firstOrNull {
             it.stableLocationId == rootUri || it.uri == rootUri
         } ?: return null
@@ -1529,12 +1541,24 @@ build/
     }
 
     fun selectTab(tabId: String) {
+        val selectionState = _uiState.value
+        val selectedTab = selectionState.openTabs.firstOrNull { it.id == tabId } ?: return
+        val projectRootUri = selectionState.projectRootUri
         _uiState.update { state ->
             state.copy(
                 openTabs    = state.openTabs.map { it.copy(isActive = it.id == tabId) },
                 activeTabId = tabId,
                 hasEditorSelection = false,
+                languageIntelligenceAvailable = false,
             )
+        }
+        viewModelScope.launch {
+            val available = startLanguageServerForActiveProject(selectedTab.language, projectRootUri) != null
+            _uiState.update { state ->
+                if (state.activeTabId == tabId && state.projectRootUri == projectRootUri) {
+                    state.copy(languageIntelligenceAvailable = available)
+                } else state
+            }
         }
         scheduleWorkspaceSave()
     }
@@ -1550,6 +1574,7 @@ build/
 
     /** Close a tab immediately, discarding unsaved changes without confirmation. */
     fun closeTab(tabId: String) {
+        val wasActive = _uiState.value.activeTabId == tabId
         val tab = _uiState.value.openTabs.find { it.id == tabId }
         tab?.let { closedTab ->
             sendLanguageServerNotificationForTab(
@@ -1571,6 +1596,10 @@ build/
                 openTabs    = remaining.map { it.copy(isActive = it.id == newActiveId) },
                 activeTabId = newActiveId,
             )
+        }
+        if (wasActive) {
+            _uiState.value.activeTabId?.let(::selectTab)
+                ?: _uiState.update { it.copy(languageIntelligenceAvailable = false) }
         }
         tab?.let { sendEditorCommand(EditorOutbound.CloseTab(it.documentUri)) }
         scheduleWorkspaceSave()
@@ -1635,6 +1664,7 @@ build/
                 fileTree = emptyList(),
                 openTabs = emptyList(),
                 activeTabId = null,
+                languageIntelligenceAvailable = false,
                 tabCursorPositions = emptyMap(),
                 tabScrollPositions = emptyMap(),
                 recoveryEntries = emptyList(),
@@ -1822,7 +1852,14 @@ build/
                 message.toString().toByteArray(Charsets.UTF_8),
             )
             if (report.outcome != OperationOutcome.COMPLETE) {
-                _uiState.update { it.copy(statusMessage = report.message) }
+                _uiState.update { state ->
+                    state.copy(
+                        statusMessage = report.message,
+                        languageIntelligenceAvailable = if (
+                            state.activeTabId == tab.id && state.projectRootUri == rootUri
+                        ) false else state.languageIntelligenceAvailable,
+                    )
+                }
             }
         }
     }
@@ -1954,74 +1991,142 @@ build/
         }
     }
 
+    private fun cancelProjectContentSearch() {
+        projectSearchGeneration++
+        projectSearchJob?.cancel()
+        projectSearchJob = null
+    }
+
+    private fun invalidateContentSearchRun() {
+        cancelProjectContentSearch()
+        _uiState.update {
+            it.copy(
+                contentSearchResults = emptyList(),
+                contentSearchCompletedQuery = null,
+                contentSearchRunning = false,
+                contentSearchWarning = null,
+            )
+        }
+    }
+
     fun showContentSearch() {
-        _uiState.update { it.copy(isContentSearchVisible = true, isSearchVisible = false, contentSearchQuery = "", contentSearchResults = emptyList()) }
+        invalidateContentSearchRun()
+        _uiState.update {
+            it.copy(isContentSearchVisible = true, isSearchVisible = false, contentSearchQuery = "")
+        }
     }
 
     fun hideContentSearch() {
-        projectSearchJob?.cancel()
-        _uiState.update { it.copy(isContentSearchVisible = false, contentSearchQuery = "", contentSearchResults = emptyList()) }
+        invalidateContentSearchRun()
+        _uiState.update {
+            it.copy(isContentSearchVisible = false, contentSearchQuery = "")
+        }
     }
 
     fun clearContentSearchResults() {
-        projectSearchJob?.cancel()
-        _uiState.update { it.copy(contentSearchResults = emptyList()) }
+        invalidateContentSearchRun()
     }
 
     fun setContentSearchQuery(query: String) {
+        if (_uiState.value.contentSearchQuery == query) return
+        invalidateContentSearchRun()
         _uiState.update { it.copy(contentSearchQuery = query) }
     }
 
     fun setContentSearchMatchCase(enabled: Boolean) {
+        if (_uiState.value.contentSearchMatchCase == enabled) return
+        invalidateContentSearchRun()
         _uiState.update { it.copy(contentSearchMatchCase = enabled) }
     }
 
     fun setContentSearchWholeWord(enabled: Boolean) {
+        if (_uiState.value.contentSearchWholeWord == enabled) return
+        invalidateContentSearchRun()
         _uiState.update { it.copy(contentSearchWholeWord = enabled) }
     }
 
     fun setContentSearchRegex(enabled: Boolean) {
+        if (_uiState.value.contentSearchRegex == enabled) return
+        invalidateContentSearchRun()
         _uiState.update { it.copy(contentSearchRegex = enabled) }
     }
 
     fun setContentSearchShowContext(enabled: Boolean) {
+        if (_uiState.value.contentSearchShowContext == enabled) return
+        invalidateContentSearchRun()
         _uiState.update { it.copy(contentSearchShowContext = enabled) }
     }
 
     fun searchProjectContents(query: String) {
-        _uiState.update { it.copy(contentSearchQuery = query) }
-        projectSearchJob?.cancel()
-        if (query.isBlank()) {
-            _uiState.update { it.copy(contentSearchResults = emptyList()) }
+        cancelProjectContentSearch()
+        val requestId = projectSearchGeneration
+        val options = _uiState.value
+        val rootUri = options.projectRootUri
+        _uiState.update {
+            it.copy(
+                contentSearchQuery = query,
+                contentSearchResults = emptyList(),
+                contentSearchCompletedQuery = null,
+                contentSearchRunning = query.isNotBlank(),
+                contentSearchWarning = null,
+            )
+        }
+        if (query.isBlank()) return
+        if (rootUri == null) {
+            _uiState.update {
+                it.copy(contentSearchCompletedQuery = query, contentSearchRunning = false, contentSearchWarning = "Open a project before searching.")
+            }
             return
         }
-        val rootUri = _uiState.value.projectRootUri ?: return
-        val options = _uiState.value
+
+        val regex = if (options.contentSearchRegex) {
+            runCatching {
+                Regex(query, if (options.contentSearchMatchCase) emptySet<RegexOption>() else setOf(RegexOption.IGNORE_CASE))
+            }.getOrNull()
+        } else null
+        if (options.contentSearchRegex && regex == null) {
+            _uiState.update {
+                it.copy(contentSearchCompletedQuery = query, contentSearchRunning = false, contentSearchWarning = "Invalid search expression.")
+            }
+            return
+        }
+
         projectSearchJob = viewModelScope.launch {
             val results = mutableListOf<FileSearchResult>()
-            val regex = if (options.contentSearchRegex) {
-                runCatching {
-                    Regex(query, if (options.contentSearchMatchCase) emptySet<RegexOption>() else setOf(RegexOption.IGNORE_CASE))
-                }.getOrNull()
-            } else null
-            if (options.contentSearchRegex && regex == null) {
-                _uiState.update { it.copy(contentSearchResults = emptyList(), statusMessage = "Invalid search expression") }
-                return@launch
-            }
+            val visitedDirectories = mutableSetOf(rootUri)
+            var unreadableDirectories = 0
+            var skippedFiles = 0
+
             suspend fun searchDirectory(uri: String, path: String) {
-                safRepository.listChildren(uri).forEach { node ->
+                val children = when (val inspection = safRepository.inspectChildren(uri)) {
+                    is ChildrenInspectionResult.Success -> inspection.children
+                    is ChildrenInspectionResult.Failed -> {
+                        unreadableDirectories++
+                        return
+                    }
+                }
+                children.forEach { node ->
                     val nodePath = if (path.isEmpty()) node.displayName else "$path/${node.displayName}"
-                    if (node.displayName == ".git" || node.displayName in setOf(
-                            ApplicationIdentity.TARGET_METADATA_DIRECTORY,
-                            ApplicationIdentity.LEGACY_METADATA_DIRECTORY,
-                        )) return@forEach
                     if (node.isDirectory) {
-                        searchDirectory(node.documentUri, nodePath)
+                        if (visitedDirectories.add(node.documentUri)) searchDirectory(node.documentUri, nodePath)
                     } else {
                         var lineIndex = 0
                         var previousLine = ""
+                        var pendingContextIndices = emptyList<Int>()
+                        val fileResults = mutableListOf<FileSearchResult>()
                         val streamed = safRepository.forEachTextLine(node.documentUri) { line ->
-                            val matches: List<MatchRange> = if (options.contentSearchRegex) {
+                            if (options.contentSearchShowContext && pendingContextIndices.isNotEmpty()) {
+                                val nextContext = line.trim().take(70)
+                                if (nextContext.isNotEmpty()) {
+                                    pendingContextIndices.forEach { index ->
+                                        fileResults[index] = fileResults[index].copy(
+                                            matchPreview = fileResults[index].matchPreview + "\n" + nextContext,
+                                        )
+                                    }
+                                }
+                            }
+                            val currentLineResultStart = fileResults.size
+                            val matches = if (options.contentSearchRegex) {
                                 regex!!.findAll(line).map { MatchRange(it.range.first, it.range.last + 1, it.value) }.toList()
                             } else {
                                 literalContentMatches(line, query, options.contentSearchMatchCase, options.contentSearchWholeWord)
@@ -2038,11 +2143,10 @@ build/
                                 val beforeContext = if (options.contentSearchShowContext && lineIndex > 0) {
                                     previousLine.trim().takeLast(70) + "\n"
                                 } else ""
-                                val afterContext = ""
                                 val linePreview = line.substring(windowStart, windowEnd)
-                                val preview = beforeContext + leadingMarker + linePreview + trailingMarker + afterContext
+                                val preview = beforeContext + leadingMarker + linePreview + trailingMarker
                                 val previewMatchStart = beforeContext.length + leadingMarker.length + (start - windowStart)
-                                results += FileSearchResult(
+                                fileResults += FileSearchResult(
                                     node.documentUri,
                                     node.displayName,
                                     "/$nodePath",
@@ -2055,36 +2159,83 @@ build/
                                     length,
                                 )
                             }
-                            previousLine = line
+                            pendingContextIndices = if (fileResults.size > currentLineResultStart) {
+                                (currentLineResultStart until fileResults.size).toList()
+                            } else {
+                                emptyList()
+                            }
+                            previousLine = line.takeLast(70)
                             lineIndex++
                         }
-                        if (!streamed) return@forEach
+                        if (streamed) results.addAll(fileResults) else skippedFiles++
                     }
                 }
             }
-            searchDirectory(rootUri, "")
-            if (_uiState.value.contentSearchQuery == query) {
-                _uiState.update { it.copy(contentSearchResults = results.sortedBy { result -> result.relativePath.lowercase() }) }
+
+            try {
+                searchDirectory(rootUri, "")
+                if (requestId != projectSearchGeneration) return@launch
+                val warnings = buildList {
+                    if (unreadableDirectories > 0) add("$unreadableDirectories folder(s) could not be inspected.")
+                    if (skippedFiles > 0) add("$skippedFiles binary or unreadable file(s) were skipped; text extensions are not filtered.")
+                }.joinToString(" ").ifBlank { null }
+                _uiState.update { state ->
+                    if (state.contentSearchQuery != query) state
+                    else state.copy(
+                        contentSearchResults = results.sortedWith(
+                            compareBy<FileSearchResult> { it.relativePath.lowercase() }
+                                .thenBy { it.matchLine ?: 0 }
+                                .thenBy { it.matchColumn ?: 0 },
+                        ),
+                        contentSearchCompletedQuery = query,
+                        contentSearchRunning = false,
+                        contentSearchWarning = warnings,
+                    )
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                if (requestId == projectSearchGeneration) {
+                    _uiState.update {
+                        it.copy(
+                            contentSearchResults = emptyList(),
+                            contentSearchCompletedQuery = query,
+                            contentSearchRunning = false,
+                            contentSearchWarning = error.message ?: "Project search failed.",
+                        )
+                    }
+                }
             }
         }
     }
 
     /** Show a preview before replacing; mutation starts only after confirmation. */
-    fun replaceProjectContents(find: String, replacement: String) {
+    fun replaceProjectContents(find: String, replacement: String, targetDocumentUris: List<String>) {
         if (find.isBlank()) return
-        val results = _uiState.value.contentSearchResults
+        val state = _uiState.value
+        if (state.contentSearchRunning || state.contentSearchCompletedQuery != find) {
+            _uiState.update { it.copy(statusMessage = "Run the current search before replacing project content") }
+            return
+        }
+        val selectedUris = targetDocumentUris.toSet()
+        val results = state.contentSearchResults.filter { it.documentUri in selectedUris }
         if (results.isEmpty()) {
             _uiState.update { it.copy(statusMessage = "No matching project content to replace") }
             return
         }
         val matchCount = results.size
-        _uiState.update { it.copy(fileOpDialog = FileOpDialog.ReplaceAll(find, replacement, results.map { r -> r.documentUri }.distinct().size, matchCount)) }
+        val documentUris = results.map { it.documentUri }.distinct()
+        _uiState.update {
+            it.copy(fileOpDialog = FileOpDialog.ReplaceAll(find, replacement, documentUris.size, matchCount, documentUris))
+        }
     }
 
     /** Show a confirmation before replacing only the matches belonging to one file. */
     fun replaceFileContents(documentUri: String, fileName: String, find: String, replacement: String) {
         if (find.isBlank()) return
-        val matches = _uiState.value.contentSearchResults.count { it.documentUri == documentUri }
+        val state = _uiState.value
+        if (state.contentSearchRunning || state.contentSearchCompletedQuery != find) return
+        val matches = state.contentSearchResults.count { it.documentUri == documentUri }
         if (matches == 0) return
         _uiState.update {
             it.copy(fileOpDialog = FileOpDialog.ReplaceFile(documentUri, fileName, find, replacement, matches))
@@ -2096,26 +2247,29 @@ build/
         val options = _uiState.value
         _uiState.update { it.copy(fileOpDialog = dialog.copy(isSubmitting = true)) }
         viewModelScope.launch {
+            val includedUris = dialog.documentUris.toSet()
             val results = _uiState.value.contentSearchResults
+                .filter { it.documentUri in includedUris }
+                .distinctBy { it.documentUri }
             var changedFiles = 0
             var failedFiles = 0
             results.forEach { result ->
                 val bytes = fileMutations.read(result.documentUri)
-                if (bytes == null || bytes.take(8192).any { it == 0.toByte() }) {
+                val decoded = bytes?.let(TextDocumentCodec::decode)
+                if (decoded == null) {
                     failedFiles++
                     return@forEach
                 }
-                val original = bytes.toString(Charsets.UTF_8)
                 val changed = replaceContentMatches(
-                    original,
+                    decoded.text,
                     dialog.find,
                     dialog.replacement,
                     options.contentSearchMatchCase,
                     options.contentSearchWholeWord,
                     options.contentSearchRegex,
                 )
-                if (changed == original) return@forEach
-                if (fileMutations.write(result.documentUri, changed.toByteArray(Charsets.UTF_8))) changedFiles++ else failedFiles++
+                if (changed == decoded.text) return@forEach
+                if (fileMutations.write(result.documentUri, decoded.encoding.encode(changed))) changedFiles++ else failedFiles++
             }
             val message = if (failedFiles == 0) {
                 "Replaced matches in $changedFiles file(s)"
@@ -2132,21 +2286,19 @@ build/
         val options = _uiState.value
         _uiState.update { it.copy(fileOpDialog = dialog.copy(isSubmitting = true)) }
         viewModelScope.launch {
-            val bytes = fileMutations.read(dialog.documentUri)
-            val changed = if (bytes == null || isBinaryDocument(bytes)) {
-                null
-            } else {
-                val original = bytes.toString(Charsets.UTF_8)
+            val decoded = fileMutations.read(dialog.documentUri)?.let(TextDocumentCodec::decode)
+            val changed = decoded?.let { source ->
                 replaceContentMatches(
-                    original,
+                    source.text,
                     dialog.find,
                     dialog.replacement,
                     options.contentSearchMatchCase,
                     options.contentSearchWholeWord,
                     options.contentSearchRegex,
-                ).takeUnless { it == original }
+                ).takeUnless { it == source.text }
             }
-            val written = changed != null && fileMutations.write(dialog.documentUri, changed.toByteArray(Charsets.UTF_8))
+            val written = changed != null && decoded != null &&
+                fileMutations.write(dialog.documentUri, decoded.encoding.encode(changed))
             _uiState.update {
                 val message = if (written) "Replaced matches in ${dialog.fileName}" else "Could not update ${dialog.fileName}"
                 it.copy(
@@ -2156,20 +2308,6 @@ build/
             }
             searchProjectContents(_uiState.value.contentSearchQuery)
         }
-    }
-
-    private fun isBinaryDocument(bytes: ByteArray): Boolean {
-        val prefix = bytes.copyOf(minOf(bytes.size, 16 * 1024))
-        if (prefix.any { it == 0.toByte() }) return true
-        return runCatching {
-            val text = StandardCharsets.UTF_8.newDecoder()
-                .onMalformedInput(CodingErrorAction.REPORT)
-                .onUnmappableCharacter(CodingErrorAction.REPORT)
-                .decode(ByteBuffer.wrap(prefix))
-                .toString()
-            val controls = text.count { it.code < 32 && it != '\n' && it != '\r' && it != '\t' && it != '\u000C' }
-            controls > text.length / 100
-        }.getOrDefault(true)
     }
 
     private fun literalContentMatches(
@@ -2537,6 +2675,7 @@ build/
                     fileTree                = if (wasCurrent) emptyList() else state.fileTree,
                     openTabs                = if (wasCurrent) emptyList() else state.openTabs,
                     activeTabId             = if (wasCurrent) null else state.activeTabId,
+                    languageIntelligenceAvailable = if (wasCurrent) false else state.languageIntelligenceAvailable,
                     isEditorReady           = if (wasCurrent) false else state.isEditorReady,
                     currentScreen           = if (wasCurrent) AppScreen.PROJECTS else state.currentScreen,
                     statusMessage           = if (metadataRemoved) "Project removed from registry" else "Project removed; metadata cleanup failed",
@@ -2608,6 +2747,7 @@ build/
                     fileTree = if (wasCurrent) emptyList() else current.fileTree,
                     openTabs = if (wasCurrent) emptyList() else current.openTabs,
                     activeTabId = if (wasCurrent) null else current.activeTabId,
+                    languageIntelligenceAvailable = if (wasCurrent) false else current.languageIntelligenceAvailable,
                     isEditorReady = if (wasCurrent) false else current.isEditorReady,
                     currentScreen = if (wasCurrent) AppScreen.PROJECTS else current.currentScreen,
                     statusMessage = "Project permanently deleted",

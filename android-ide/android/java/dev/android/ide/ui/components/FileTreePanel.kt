@@ -50,6 +50,7 @@ import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SwapHoriz
+import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.*
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -58,6 +59,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.compositeOver
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalDensity
@@ -136,13 +139,17 @@ fun FileTreePanel(
     onContentSearchWholeWordChange: (Boolean) -> Unit,
     onContentSearchRegexChange: (Boolean) -> Unit,
     onContentSearchShowContextChange: (Boolean) -> Unit,
-    onReplaceProjectContents: (String, String) -> Unit,
+    onReplaceProjectContents: (String, String, List<String>) -> Unit,
     onReplaceFileContents: (String, String, String, String) -> Unit,
     onClearContentSearchResults: () -> Unit,
     onHideFileSearch: () -> Unit,
-    onHideContentSearch: () -> Unit,
     onSearchFileSelect: (FileSearchResult) -> Unit,
     onExecuteContentSearch: () -> Unit = {},
+    contentSearchCompletedQuery: String? = null,
+    contentSearchRunning: Boolean = false,
+    contentSearchWarning: String? = null,
+    onOpenTerminalAtRoot: () -> Unit = {},
+    onOpenTerminalAt: (FileNode) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalIdeColors.current
@@ -152,199 +159,38 @@ fun FileTreePanel(
     val imeTrailingPadding = with(density) { (imeBottomPx * 1.2f).toDp() }
 
     when {
-        // ── Filename and project-content search panels ──────────────────────
-        isSearchVisible || isContentSearchVisible -> {
-            val query = if (isContentSearchVisible) contentSearchQuery else fileSearchQuery
-            val results = if (isContentSearchVisible) contentSearchResults else fileSearchResults
-            var replaceQuery by rememberSaveable { mutableStateOf("") }
-            var replaceOpen by rememberSaveable(isContentSearchVisible) { mutableStateOf(false) }
-            var excludedUris by rememberSaveable { mutableStateOf(emptySet<String>()) }
-            var expandedUris by rememberSaveable { mutableStateOf(emptySet<String>()) }
-            val replaceFocusRequester = remember { FocusRequester() }
-            val visibleResults = if (isContentSearchVisible) results.filterNot { it.documentUri in excludedUris } else results
-            val resultGroups = visibleResults.groupBy { it.documentUri }
-            val allResultsExpanded = resultGroups.isNotEmpty() && resultGroups.keys.all { it in expandedUris }
-            Column(modifier = modifier) {
-                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                    OutlinedTextField(
-                        value         = query,
-                        onValueChange = if (isContentSearchVisible) onContentSearchQueryChange else onSearchQueryChange,
-                        modifier      = Modifier.weight(1f),
-                        placeholder   = { Text(if (isContentSearchVisible) "Find in project…" else "Find filenames…", style = MaterialTheme.typography.bodyMedium) },
-                        singleLine    = true,
-                        leadingIcon   = { Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(18.dp)) },
-                        trailingIcon  = {
-                            if (query.isNotEmpty()) {
-                                IconButton(onClick = {
-                                    if (isContentSearchVisible) {
-                                        onContentSearchQueryChange("")
-                                        onClearContentSearchResults()
-                                    } else onSearchQueryChange("")
-                                }) {
-                                    Icon(Icons.Default.Close, contentDescription = "Clear search")
-                                }
-                            }
-                        },
-                        keyboardOptions = KeyboardOptions(
-                            imeAction = if (isContentSearchVisible && replaceOpen) ImeAction.Next else ImeAction.Search,
-                        ),
-                        keyboardActions = KeyboardActions(
-                            onSearch = { if (isContentSearchVisible) onExecuteContentSearch() },
-                            onNext = { if (isContentSearchVisible && replaceOpen) replaceFocusRequester.requestFocus() },
-                        ),
-                        textStyle     = MaterialTheme.typography.bodyMedium,
-                    )
-                }
-                if (isContentSearchVisible) {
-                    Row(
-                        Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp),
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text("SEARCH", style = MaterialTheme.typography.labelLarge, color = colors.textSecondary, modifier = Modifier.padding(end = 4.dp))
-                        IconButton(onClick = { replaceOpen = !replaceOpen }) {
-                            Icon(Icons.Default.SwapHoriz, contentDescription = if (replaceOpen) "Hide replace field" else "Show replace field", tint = if (replaceOpen) colors.accent else colors.textSecondary)
-                        }
-                        IconButton(onClick = { onContentSearchRegexChange(!contentSearchRegex) }) { Text(".*", color = if (contentSearchRegex) colors.accent else colors.textSecondary) }
-                        IconButton(onClick = { onContentSearchMatchCaseChange(!contentSearchMatchCase) }) { Text("Aa", color = if (contentSearchMatchCase) colors.accent else colors.textSecondary) }
-                        IconButton(onClick = { onContentSearchWholeWordChange(!contentSearchWholeWord) }) { Text("Ab|", color = if (contentSearchWholeWord) colors.accent else colors.textSecondary) }
-                        IconButton(onClick = { onContentSearchShowContextChange(!contentSearchShowContext) }) {
-                            Icon(Icons.Default.FilterList, contentDescription = "Show surrounding context", tint = if (contentSearchShowContext) colors.accent else colors.textSecondary)
-                        }
-                        Spacer(Modifier.weight(1f))
-                    }
-                }
-                if (isContentSearchVisible && replaceOpen) {
-                    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                        OutlinedTextField(
-                            value = replaceQuery,
-                            onValueChange = { replaceQuery = it },
-                            modifier = Modifier.weight(1f).focusRequester(replaceFocusRequester),
-                            placeholder = { Text("Replace Text") },
-                            leadingIcon = { Icon(Icons.Default.SwapHoriz, contentDescription = "Replace text") },
-                            trailingIcon = {
-                                if (replaceQuery.isNotEmpty()) {
-                                    IconButton(onClick = { replaceQuery = "" }) { Icon(Icons.Default.Close, contentDescription = "Clear replacement") }
-                                }
-                            },
-                            singleLine = true,
-                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                        )
-                    }
-                }
-                if (visibleResults.isEmpty() && query.isNotEmpty()) {
-                    Box(modifier = Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.TopCenter) {
-                        Text(
-                            text  = if (isContentSearchVisible) "No project content matching \u201c$query\u201d" else "No filenames matching \u201c$query\u201d",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = colors.textDisabled,
-                        )
-                    }
-                } else {
-                    LazyColumn(
-                        modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(bottom = imeTrailingPadding),
-                    ) {
-                        if (isContentSearchVisible) {
-                            item(key = "results-summary") {
-                                Row(
-                                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    Column(Modifier.weight(1f)) {
-                                        Text("RESULTS", style = MaterialTheme.typography.labelLarge, color = colors.textSecondary)
-                                        Text(
-                                            "${visibleResults.size} result${if (visibleResults.size == 1) "" else "s"} in ${visibleResults.map { it.documentUri }.distinct().size} file${if (visibleResults.map { it.documentUri }.distinct().size == 1) "" else "s"}",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = colors.textSecondary,
-                                        )
-                                    }
-                                    IconButton(
-                                        onClick = {
-                                            expandedUris = if (allResultsExpanded) emptySet() else resultGroups.keys
-                                        },
-                                        enabled = resultGroups.isNotEmpty(),
-                                    ) {
-                                        Icon(
-                                            if (allResultsExpanded) Icons.Default.IndeterminateCheckBox else Icons.Default.AddBox,
-                                            contentDescription = if (allResultsExpanded) "Collapse all matching files" else "Expand all matching files",
-                                        )
-                                    }
-                                    IconButton(onClick = onExecuteContentSearch) {
-                                        Icon(Icons.Default.Refresh, contentDescription = "Refresh results")
-                                    }
-                                    IconButton(onClick = { excludedUris = emptySet(); onClearContentSearchResults() }) {
-                                        Icon(Icons.Default.Block, contentDescription = "Clear search results")
-                                    }
-                                }
-                            }
-                            resultGroups.forEach { (documentUri, matches) ->
-                                val expanded = documentUri in expandedUris
-                                item(key = "file:$documentUri") {
-                                    Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .combinedClickable(onClick = {
-                                                expandedUris = if (expanded) expandedUris - documentUri else expandedUris + documentUri
-                                            })
-                                            .padding(horizontal = 16.dp, vertical = 8.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                    ) {
-                                        Icon(
-                                            imageVector = if (expanded) Icons.Default.ExpandMore else Icons.Default.ChevronRight,
-                                            contentDescription = if (expanded) "Collapse matches" else "Expand matches",
-                                            modifier = Modifier.size(18.dp),
-                                        )
-                                        Spacer(Modifier.width(6.dp))
-                                        FileTypeBadge(matches.first().displayName, muted = false, accent = false)
-                                        Spacer(Modifier.width(8.dp))
-                                        Column(Modifier.weight(1f)) {
-                                            Text(
-                                                matches.first().displayName,
-                                                style = MaterialTheme.typography.bodyMedium,
-                                                maxLines = 1,
-                                                overflow = TextOverflow.Ellipsis,
-                                            )
-                                        }
-                                        IconButton(
-                                            onClick = { onReplaceFileContents(documentUri, matches.first().displayName, query, replaceQuery) },
-                                            enabled = query.isNotBlank() && replaceQuery.isNotEmpty(),
-                                        ) { Icon(Icons.Default.SwapHoriz, contentDescription = "Replace matches in ${matches.first().displayName}") }
-                                        IconButton(onClick = { excludedUris = excludedUris + documentUri }) {
-                                            Icon(Icons.Default.Close, contentDescription = "Exclude ${matches.first().displayName}")
-                                        }
-                                    }
-                                }
-                                if (expanded) {
-                                    matches.forEachIndexed { matchIndex, result ->
-                                        item(key = "match:$documentUri:$matchIndex:${result.matchLine}:${result.matchColumn}") {
-                                            SearchResultRow(result = result, onSelect = onSearchFileSelect, compact = true)
-                                        }
-                                    }
-                                }
-                            }
-                        } else {
-                            itemsIndexed(
-                                results,
-                                key = { index, result ->
-                                    "${result.documentUri}:${result.matchLine}:${result.matchColumn}:${result.matchLength}:$index"
-                                },
-                            ) { _, result ->
-                                SearchResultRow(result = result, onSelect = onSearchFileSelect)
-                            }
-                        }
-                    }
-                }
-                if (!isContentSearchVisible) {
-                    TextButton(
-                        onClick = onHideFileSearch,
-                        modifier = Modifier.padding(horizontal = 8.dp),
-                    ) { Text("Close search") }
-                }
-            }
-        }
+        isContentSearchVisible -> ProjectContentSearchPanel(
+            query = contentSearchQuery,
+            results = contentSearchResults,
+            matchCase = contentSearchMatchCase,
+            wholeWord = contentSearchWholeWord,
+            regex = contentSearchRegex,
+            showContext = contentSearchShowContext,
+            completedQuery = contentSearchCompletedQuery,
+            running = contentSearchRunning,
+            warning = contentSearchWarning,
+            onQueryChange = onContentSearchQueryChange,
+            onMatchCaseChange = onContentSearchMatchCaseChange,
+            onWholeWordChange = onContentSearchWholeWordChange,
+            onRegexChange = onContentSearchRegexChange,
+            onShowContextChange = onContentSearchShowContextChange,
+            onReplaceProjectContents = onReplaceProjectContents,
+            onReplaceFileContents = onReplaceFileContents,
+            onClearResults = onClearContentSearchResults,
+            onSearchFileSelect = onSearchFileSelect,
+            onExecuteSearch = onExecuteContentSearch,
+            modifier = modifier,
+        )
+
+        // ── Filename search panel ──────────────────────────────────────────
+        isSearchVisible -> FilenameSearchPanel(
+            query = fileSearchQuery,
+            results = fileSearchResults,
+            onQueryChange = onSearchQueryChange,
+            onSelect = onSearchFileSelect,
+            onClose = onHideFileSearch,
+            modifier = modifier,
+        )
 
         // ── Empty state ────────────────────────────────────────────────────
         nodes.isEmpty() -> {
@@ -396,14 +242,14 @@ fun FileTreePanel(
                             Text(
                                 text     = "${selectedUris.size} selected",
                                 style    = MaterialTheme.typography.labelSmall,
-                                color    = colors.accent,
+                                color    = colors.primary,
                                 modifier = Modifier.weight(1f),
                             )
                             IconButton(onClick = onExitSelectionMode, modifier = Modifier.size(28.dp)) {
                                 Icon(
                                     imageVector        = Icons.Default.Close,
                                     contentDescription = "Exit selection mode",
-                                    tint               = colors.accent,
+                                    tint               = colors.primary,
                                     modifier           = Modifier.size(16.dp),
                                 )
                             }
@@ -427,6 +273,7 @@ fun FileTreePanel(
                             onDelete       = onDeleteProject,
                             onRemove       = onRemoveProject,
                             onPasteAtRoot  = onPasteAtRoot,
+                            onOpenTerminal = onOpenTerminalAtRoot,
                         )
                         HorizontalDivider(thickness = 0.5.dp, color = colors.separator)
                     }
@@ -461,6 +308,7 @@ fun FileTreePanel(
                         onCopyPath               = onCopyPath,
                         onSelect                 = onToggleNodeSelection,
                         onShowDuplicateDialog    = onShowDuplicateDialog,
+                        onOpenTerminalAt         = onOpenTerminalAt,
                     )
                 }
             }
@@ -515,7 +363,7 @@ private fun SearchResultRow(
             )
             }
             result.matchLine?.let { line ->
-                if (!compact) Text("Line $line", style = MaterialTheme.typography.labelSmall, color = colors.accent)
+                if (!compact) Text("Line $line", style = MaterialTheme.typography.labelSmall, color = colors.primary)
             }
             if (result.matchPreview.isNotBlank()) {
                 val highlightedPreview = remember(
@@ -528,7 +376,7 @@ private fun SearchResultRow(
                         val end = (start + result.previewMatchLength).coerceAtMost(result.matchPreview.length)
                         if (start >= 0 && start < end) {
                             append(result.matchPreview.substring(0, start))
-                            withStyle(SpanStyle(background = colors.accent.copy(alpha = 0.32f), color = colors.textPrimary)) {
+                            withStyle(SpanStyle(background = colors.primary.copy(alpha = 0.32f), color = colors.textPrimary)) {
                                 append(result.matchPreview.substring(start, end))
                             }
                             append(result.matchPreview.substring(end))
@@ -565,6 +413,7 @@ private fun RootProjectNode(
     onDelete: () -> Unit,
     onRemove: () -> Unit,
     onPasteAtRoot: () -> Unit,
+    onOpenTerminal: () -> Unit,
 ) {
     val colors     = LocalIdeColors.current
     var menuOpen   by remember { mutableStateOf(false) }
@@ -579,14 +428,14 @@ private fun RootProjectNode(
         Icon(
             imageVector        = Icons.Default.FolderOpen,
             contentDescription = null,
-            tint               = if (isActivePath) colors.accent else colors.accentLight,
+            tint               = if (isActivePath) colors.primary else colors.secondary,
             modifier           = Modifier.size(16.dp),
         )
         Spacer(Modifier.width(6.dp))
         Text(
             text     = projectName,
             style    = MaterialTheme.typography.labelMedium,
-            color    = if (isActivePath) colors.accent else colors.textPrimary,
+            color    = if (isActivePath) colors.primary else colors.textPrimary,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
@@ -612,6 +461,7 @@ private fun RootProjectNode(
                 onDeleteProject = onDelete,
                 onRemoveProject = onRemove,
                 onPasteAtRoot = onPasteAtRoot.takeIf { clipboardItems.isNotEmpty() },
+                onOpenTerminal = onOpenTerminal,
             )
         }
     }
@@ -645,6 +495,7 @@ private fun FileTreeRow(
     onCopyPath: (String) -> Unit,
     onSelect: (String) -> Unit,
     onShowDuplicateDialog: (FileNode) -> Unit,
+    onOpenTerminalAt: (FileNode) -> Unit,
 ) {
     val colors   = LocalIdeColors.current
     var menuOpen by remember { mutableStateOf(false) }
@@ -680,7 +531,7 @@ private fun FileTreeRow(
         repeat(depth) { level ->
             Canvas(Modifier.width(16.dp).height(36.dp)) {
                 drawLine(
-                    color = if (isActive || isActiveAncestor) colors.accent.copy(alpha = 0.7f) else colors.separator,
+                    color = if (isActive || isActiveAncestor) colors.primary.copy(alpha = 0.7f) else colors.separator,
                     start = androidx.compose.ui.geometry.Offset(size.width / 2f, 0f),
                     end = androidx.compose.ui.geometry.Offset(size.width / 2f, size.height),
                     strokeWidth = if ((isActive || isActiveAncestor) && level == depth - 1) 2.dp.toPx() else 1.dp.toPx(),
@@ -693,7 +544,7 @@ private fun FileTreeRow(
             Icon(
                 imageVector        = if (isSelected) Icons.Default.CheckBox else Icons.Default.CheckBoxOutlineBlank,
                 contentDescription = if (isSelected) "Deselect" else "Select",
-                tint               = if (isSelected) colors.accent else colors.textSecondary,
+                tint               = if (isSelected) colors.primary else colors.textSecondary,
                 modifier           = Modifier.size(16.dp),
             )
             Spacer(Modifier.width(4.dp))
@@ -726,8 +577,8 @@ private fun FileTreeRow(
             style = MaterialTheme.typography.bodyMedium,
             color = when {
                 isInClipboard && clipboardIsCut -> colors.textDisabled
-                isActive                        -> colors.accent
-                isActiveAncestor                -> colors.accent
+                isActive                        -> colors.primary
+                isActiveAncestor                -> colors.primary
                 else                            -> colors.textPrimary
             },
             maxLines = 1,
@@ -787,6 +638,11 @@ private fun FileTreeRow(
                         leadingIcon = { Icon(Icons.Default.Code, null) },
                         text    = { Text("Copy Path") },
                         onClick = { menuOpen = false; onCopyPath(node.documentUri) },
+                    )
+                    DropdownMenuItem(
+                        leadingIcon = { Icon(Icons.Default.Terminal, null) },
+                        text = { Text("Open Terminal") },
+                        onClick = { menuOpen = false; onOpenTerminalAt(node) },
                     )
                     DropdownMenuItem(
                         text    = { Text("Export\u2026") },
@@ -869,6 +725,278 @@ private fun FileTreeRow(
                         text    = { Text("Select") },
                         onClick = { menuOpen = false; onSelect(node.documentUri) },
                     )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun FilenameSearchPanel(
+    query: String,
+    results: List<FileSearchResult>,
+    onQueryChange: (String) -> Unit,
+    onSelect: (FileSearchResult) -> Unit,
+    onClose: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val colors = LocalIdeColors.current
+    val density = LocalDensity.current
+    val imeBottomPx = WindowInsets.ime.getBottom(density)
+    val imeBottomPadding = with(density) { imeBottomPx.toDp() }
+
+    Column(modifier = modifier.fillMaxSize()) {
+        OutlinedTextField(
+            value = query,
+            onValueChange = onQueryChange,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+            placeholder = { Text("Find filenames…") },
+            singleLine = true,
+            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+            trailingIcon = {
+                if (query.isNotEmpty()) {
+                    IconButton(onClick = { onQueryChange("") }) {
+                        Icon(Icons.Default.Close, contentDescription = "Clear filename search")
+                    }
+                }
+            },
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+        )
+        if (query.isNotEmpty() && results.isEmpty()) {
+            Text(
+                "No filenames matching “$query”",
+                modifier = Modifier.fillMaxWidth().padding(16.dp),
+                style = MaterialTheme.typography.bodyMedium,
+                color = colors.textDisabled,
+            )
+        } else {
+            LazyColumn(
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+                contentPadding = PaddingValues(bottom = imeBottomPadding + 12.dp),
+            ) {
+                itemsIndexed(results, key = { index, result -> "${result.documentUri}:$index" }) { _, result ->
+                    SearchResultRow(result, onSelect)
+                }
+            }
+        }
+        TextButton(onClick = onClose, modifier = Modifier.padding(horizontal = 8.dp)) {
+            Text("Close search")
+        }
+    }
+}
+
+@Composable
+private fun ProjectContentSearchPanel(
+    query: String,
+    results: List<FileSearchResult>,
+    matchCase: Boolean,
+    wholeWord: Boolean,
+    regex: Boolean,
+    showContext: Boolean,
+    completedQuery: String?,
+    running: Boolean,
+    warning: String?,
+    onQueryChange: (String) -> Unit,
+    onMatchCaseChange: (Boolean) -> Unit,
+    onWholeWordChange: (Boolean) -> Unit,
+    onRegexChange: (Boolean) -> Unit,
+    onShowContextChange: (Boolean) -> Unit,
+    onReplaceProjectContents: (String, String, List<String>) -> Unit,
+    onReplaceFileContents: (String, String, String, String) -> Unit,
+    onClearResults: () -> Unit,
+    onSearchFileSelect: (FileSearchResult) -> Unit,
+    onExecuteSearch: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val colors = LocalIdeColors.current
+    var replaceText by rememberSaveable { mutableStateOf("") }
+    var replaceOpen by rememberSaveable { mutableStateOf(false) }
+    var excludedUris by rememberSaveable { mutableStateOf(emptySet<String>()) }
+    var expandedUris by rememberSaveable { mutableStateOf(emptySet<String>()) }
+    val replaceFocus = remember { FocusRequester() }
+    val hasCurrentResults = query.isNotBlank() && completedQuery == query && !running
+    val visibleResults = results.filterNot { it.documentUri in excludedUris }
+    val groupedResults = visibleResults.groupBy { it.documentUri }
+    val allExpanded = groupedResults.isNotEmpty() && groupedResults.keys.all { it in expandedUris }
+    val density = LocalDensity.current
+    val imeBottomPx = WindowInsets.ime.getBottom(density)
+    val imeBottomPadding = with(density) { imeBottomPx.toDp() }
+
+    LaunchedEffect(completedQuery, query, running) {
+        if (running || completedQuery == null) {
+            expandedUris = emptySet()
+            excludedUris = emptySet()
+        } else if (hasCurrentResults) {
+            expandedUris = groupedResults.keys
+        }
+    }
+
+    Column(modifier = modifier.fillMaxSize()) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(start = 14.dp, end = 8.dp, top = 8.dp, bottom = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("SEARCH", style = MaterialTheme.typography.titleSmall, color = colors.textSecondary)
+            Spacer(Modifier.weight(1f))
+            IconButton(onClick = { onRegexChange(!regex) }, modifier = Modifier.size(38.dp)) {
+                Text(".*", color = if (regex) MaterialTheme.colorScheme.primary else colors.textSecondary, style = MaterialTheme.typography.labelLarge)
+            }
+            IconButton(onClick = { onMatchCaseChange(!matchCase) }, modifier = Modifier.size(38.dp)) {
+                Text("Aa", color = if (matchCase) MaterialTheme.colorScheme.primary else colors.textSecondary, style = MaterialTheme.typography.labelMedium)
+            }
+            IconButton(onClick = { onWholeWordChange(!wholeWord) }, modifier = Modifier.size(38.dp)) {
+                Text("Ab|", color = if (wholeWord) MaterialTheme.colorScheme.primary else colors.textSecondary, style = MaterialTheme.typography.labelSmall)
+            }
+            IconButton(onClick = { onShowContextChange(!showContext) }, modifier = Modifier.size(38.dp)) {
+                Icon(Icons.Default.FilterList, contentDescription = "Toggle context", tint = if (showContext) MaterialTheme.colorScheme.primary else colors.textSecondary)
+            }
+            IconButton(onClick = { replaceOpen = !replaceOpen }, modifier = Modifier.size(38.dp)) {
+                Icon(Icons.Default.SwapHoriz, contentDescription = if (replaceOpen) "Hide replace" else "Show replace", tint = if (replaceOpen) MaterialTheme.colorScheme.primary else colors.textSecondary)
+            }
+        }
+
+        OutlinedTextField(
+            value = query,
+            onValueChange = onQueryChange,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp),
+            singleLine = true,
+            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+            trailingIcon = {
+                if (query.isNotEmpty()) {
+                    IconButton(onClick = { onQueryChange(""); onClearResults(); excludedUris = emptySet() }) {
+                        Icon(Icons.Default.Close, contentDescription = "Clear search")
+                    }
+                }
+            },
+            placeholder = { Text("Find in project") },
+            keyboardOptions = KeyboardOptions(imeAction = if (replaceOpen) ImeAction.Next else ImeAction.Search),
+            keyboardActions = KeyboardActions(
+                onSearch = { if (query.isNotBlank()) onExecuteSearch() },
+                onNext = { replaceFocus.requestFocus() },
+            ),
+        )
+
+        if (replaceOpen) {
+            OutlinedTextField(
+                value = replaceText,
+                onValueChange = { replaceText = it },
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp).focusRequester(replaceFocus),
+                singleLine = true,
+                placeholder = { Text("Replace with") },
+                leadingIcon = { Icon(Icons.Default.SwapHoriz, contentDescription = null) },
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(
+                    onDone = {
+                        if (query.isNotBlank()) {
+                            if (hasCurrentResults) onReplaceProjectContents(query, replaceText, visibleResults.map { it.documentUri }.distinct())
+                            else onExecuteSearch()
+                        }
+                    },
+                ),
+            )
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(start = 14.dp, end = 8.dp, top = 8.dp, bottom = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("RESULTS", style = MaterialTheme.typography.titleSmall, color = colors.textSecondary)
+            Spacer(Modifier.weight(1f))
+            IconButton(
+                onClick = { expandedUris = if (allExpanded) emptySet() else groupedResults.keys },
+                enabled = groupedResults.isNotEmpty(),
+                modifier = Modifier.size(38.dp),
+            ) {
+                Icon(if (allExpanded) Icons.Default.IndeterminateCheckBox else Icons.Default.AddBox, contentDescription = if (allExpanded) "Collapse all results" else "Expand all results")
+            }
+            IconButton(onClick = onExecuteSearch, enabled = query.isNotBlank() && !running, modifier = Modifier.size(38.dp)) {
+                Icon(Icons.Default.Refresh, contentDescription = "Search again")
+            }
+            IconButton(
+                onClick = { onClearResults(); expandedUris = emptySet(); excludedUris = emptySet() },
+                enabled = completedQuery != null || results.isNotEmpty() || running,
+                modifier = Modifier.size(38.dp),
+            ) {
+                Icon(Icons.Default.Block, contentDescription = "Clear results")
+            }
+        }
+
+        if (running) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                Spacer(Modifier.width(10.dp))
+                Text("Searching project…", style = MaterialTheme.typography.bodySmall, color = colors.textSecondary)
+            }
+        } else if (hasCurrentResults) {
+            warning?.let {
+                Text(
+                    it,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (it.contains("Invalid", ignoreCase = true) || it.contains("failed", ignoreCase = true)) MaterialTheme.colorScheme.error else colors.warning,
+                )
+            }
+            if (visibleResults.isEmpty()) {
+                Text(
+                    if (results.isNotEmpty()) "All results are hidden." else "No matches found.",
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = colors.textSecondary,
+                )
+            } else {
+                LazyColumn(
+                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                    contentPadding = PaddingValues(bottom = imeBottomPadding + 12.dp),
+                ) {
+                    item(key = "content-search-summary") {
+                        Text(
+                            "${visibleResults.size} result(s) in ${groupedResults.size} file(s)",
+                            modifier = Modifier.fillMaxWidth().padding(start = 18.dp, end = 12.dp, top = 4.dp, bottom = 8.dp),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = colors.textSecondary,
+                        )
+                    }
+                    groupedResults.forEach { (documentUri, matches) ->
+                        val first = matches.first()
+                        val expanded = documentUri in expandedUris
+                        item(key = "content-search-file:$documentUri") {
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(start = 4.dp, end = 4.dp, top = 2.dp, bottom = 2.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                IconButton(onClick = {
+                                    expandedUris = if (expanded) expandedUris - documentUri else expandedUris + documentUri
+                                }, modifier = Modifier.size(36.dp)) {
+                                    Icon(if (expanded) Icons.Default.ExpandMore else Icons.Default.ChevronRight, contentDescription = if (expanded) "Collapse ${first.displayName}" else "Expand ${first.displayName}")
+                                }
+                                FileTypeBadge(first.displayName, muted = false, accent = false)
+                                Spacer(Modifier.width(8.dp))
+                                Text(first.displayName, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Medium)
+                                if (replaceOpen) {
+                                    IconButton(
+                                        onClick = { onReplaceFileContents(documentUri, first.displayName, query, replaceText) },
+                                        enabled = hasCurrentResults,
+                                        modifier = Modifier.size(36.dp),
+                                    ) {
+                                        Icon(Icons.Default.SwapHoriz, contentDescription = "Replace matches in ${first.displayName}", tint = colors.textSecondary)
+                                    }
+                                }
+                                IconButton(
+                                    onClick = { excludedUris = excludedUris + documentUri },
+                                    modifier = Modifier.size(36.dp),
+                                ) {
+                                    Icon(Icons.Default.Close, contentDescription = "Hide ${first.displayName}", tint = colors.textSecondary)
+                                }
+                            }
+                        }
+                        if (expanded) {
+                            itemsIndexed(matches, key = { index, result ->
+                                "content-search-match:$documentUri:${result.matchLine}:${result.matchColumn}:$index"
+                            }) { _, result ->
+                                SearchResultRow(result, onSearchFileSelect, compact = true)
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -983,16 +1111,19 @@ private fun FileTypeBadge(displayName: String, muted: Boolean, accent: Boolean) 
         FileIconKind.CODE -> Color(0xFF4F8CC9)
         FileIconKind.GENERIC -> Color(0xFF6B7280)
     }
+    val badgeColor = color.copy(alpha = if (muted) 0.28f else if (accent) 0.55f else 0.9f)
+    val badgeBackground = badgeColor.compositeOver(MaterialTheme.colorScheme.surface)
+    val badgeForeground = if (badgeBackground.luminance() > 0.179f) Color.Black else Color.White
     Surface(
-        color = color.copy(alpha = if (muted) 0.28f else if (accent) 0.55f else 0.9f),
+        color = badgeColor,
         shape = MaterialTheme.shapes.extraSmall,
         modifier = Modifier.size(24.dp),
     ) {
         Box(contentAlignment = Alignment.Center) {
             if (kind == FileIconKind.IMAGE || kind == FileIconKind.TEXT || kind == FileIconKind.GENERIC) {
-                Icon(icon, contentDescription = "$label file", tint = if (kind == FileIconKind.TEXT) Color.White else Color.White, modifier = Modifier.size(15.dp))
+                Icon(icon, contentDescription = "$label file", tint = badgeForeground, modifier = Modifier.size(15.dp))
             } else {
-                Text(label, color = if (kind == FileIconKind.JSON || kind == FileIconKind.JAVASCRIPT) Color.Black else Color.White, fontSize = 7.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                Text(label, color = badgeForeground, fontSize = 7.sp, fontWeight = FontWeight.Bold, maxLines = 1)
             }
         }
     }
