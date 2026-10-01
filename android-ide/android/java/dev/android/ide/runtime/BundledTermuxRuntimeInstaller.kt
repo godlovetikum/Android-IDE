@@ -15,8 +15,9 @@ import java.util.zip.ZipInputStream
 /** Installs the pinned Termux bootstrap into Android IDE's private runtime directory. */
 class BundledTermuxRuntimeInstaller(private val context: Context) {
     private val prefix = File(context.filesDir, "termux-prefix")
-    private val home = File(context.filesDir, "termux-home")
     private val userFiles = File(context.filesDir, "android-ide-files")
+    private val legacyHome = File(context.filesDir, "termux-home")
+    private val home get() = userFiles
     private val defaultPackagesMarker = File(context.filesDir, ".android-ide-default-packages-2026.09.30-r1")
 
     /** Runtime packages are installed through the terminal's own package manager; no second UI is needed. */
@@ -39,6 +40,7 @@ class BundledTermuxRuntimeInstaller(private val context: Context) {
             onProgress("Preparing the private terminal home and workspace…")
             ensureDirectory(home, PRIVATE_DIRECTORY_MODE, "Terminal home")
             ensureDirectory(userFiles, PRIVATE_DIRECTORY_MODE, "Android IDE storage")
+            migrateLegacyHome()
             ensureDirectory(File(prefix, "tmp"), PRIVATE_DIRECTORY_MODE, "Termux temporary directory")
             onProgress("Checking the bundled Termux bootstrap…")
             if (!marker.isFile) installBootstrap(assetName, marker)
@@ -74,6 +76,7 @@ class BundledTermuxRuntimeInstaller(private val context: Context) {
     /** Run the exact shell/cwd combination used by a new terminal session before advertising readiness. */
     fun shellStartupFailure(): String? = runCatching {
         ensureDirectory(home, PRIVATE_DIRECTORY_MODE, "Terminal home")
+        migrateLegacyHome()
         if (!repairRuntimeExecutables(includeNpm = false)) {
             throw IOException("${File(prefix, "bin/sh").absolutePath} is not executable")
         }
@@ -103,6 +106,7 @@ class BundledTermuxRuntimeInstaller(private val context: Context) {
         return runCatching {
             ensureDirectory(home, PRIVATE_DIRECTORY_MODE, "Terminal home")
             ensureDirectory(userFiles, PRIVATE_DIRECTORY_MODE, "Android IDE storage")
+            migrateLegacyHome()
             ensureDirectory(File(prefix, "tmp"), PRIVATE_DIRECTORY_MODE, "Termux temporary directory")
             if (!repairRuntimeExecutables(includeNpm = false)) {
                 return OperationReport(
@@ -167,6 +171,20 @@ class BundledTermuxRuntimeInstaller(private val context: Context) {
         listOf("curl", "git", "ssh", "python", "zip", "unzip", "ps").all { name ->
             File(prefix, "bin/$name").canExecute()
         } && File(prefix, "etc/tls/cert.pem").isFile
+
+    private fun migrateLegacyHome() {
+        if (!legacyHome.isDirectory || legacyHome.canonicalFile == home.canonicalFile) return
+        legacyHome.listFiles()?.forEach { source ->
+            val target = File(home, source.name)
+            if (target.exists()) return@forEach
+            if (!source.renameTo(target) && !source.copyRecursively(target, overwrite = false)) {
+                throw IOException("Unable to migrate legacy terminal home entry ${source.name}")
+            }
+            if (source.exists() && !source.deleteRecursively()) {
+                throw IOException("Unable to remove migrated terminal home entry ${source.name}")
+            }
+        }
+    }
 
     private fun installBootstrap(assetName: String, marker: File) {
         val assetPath = "termux/bootstrap-$assetName.zip"
@@ -244,6 +262,12 @@ class BundledTermuxRuntimeInstaller(private val context: Context) {
             setMode(executable, EXECUTABLE_FILE_MODE)
             if (!executable.canExecute()) throw IOException("${executable.absolutePath} is not executable")
         }
+        // ZIP extraction does not reliably preserve mode bits on Android.
+        // Repair every command wrapper and symlink target in bin, including
+        // pkg's apt wrapper and utilities installed by later bootstrap updates.
+        bin.listFiles()
+            ?.filter { it.isFile || Files.isSymbolicLink(it.toPath()) }
+            ?.forEach { setMode(it, EXECUTABLE_FILE_MODE) }
     }.isSuccess
 
     private fun ensureDirectory(directory: File, mode: Int, label: String) {

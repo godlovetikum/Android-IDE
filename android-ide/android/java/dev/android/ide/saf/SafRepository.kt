@@ -343,6 +343,13 @@ class SafRepository(private val context: Context) {
         file?.canonicalPath
     }.getOrNull()
 
+    private fun appOwnedLocalFile(uriString: String): File? =
+        if (AndroidIdeDocumentsProvider.isProviderUri(uriString)) {
+            AndroidIdeDocumentsProvider.localFileForUri(context, uriString)
+        } else {
+            null
+        }
+
     private fun unsupportedCapabilities(message: String) = ProjectStorageCapabilities(
         state = CapabilityState.UNSUPPORTED,
         readable = false,
@@ -503,8 +510,10 @@ class SafRepository(private val context: Context) {
      */
     suspend fun readFile(documentUriString: String): ByteArray? = withContext(Dispatchers.IO) {
         try {
-            if (isFileUri(documentUriString)) {
-                fileFromUri(documentUriString)
+            val localFile = appOwnedLocalFile(documentUriString)
+                ?: if (isFileUri(documentUriString)) fileFromUri(documentUriString) else null
+            if (localFile != null) {
+                localFile
                     ?.takeUnless { Files.isSymbolicLink(it.toPath()) }
                     ?.readBytes()
             } else {
@@ -597,8 +606,10 @@ class SafRepository(private val context: Context) {
             var written = 0L
             val writeCrc = CRC32()
             val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-            val output = if (isFileUri(documentUriString)) {
-                fileFromUri(documentUriString)
+            val localFile = appOwnedLocalFile(documentUriString)
+                ?: if (isFileUri(documentUriString)) fileFromUri(documentUriString) else null
+            val output = if (localFile != null) {
+                localFile
                     ?.takeUnless { Files.isSymbolicLink(it.toPath()) }
                     ?.outputStream()
             } else {
@@ -645,8 +656,10 @@ class SafRepository(private val context: Context) {
      */
     suspend fun writeFile(documentUriString: String, data: ByteArray): Boolean = withContext(Dispatchers.IO) {
         try {
-            if (isFileUri(documentUriString)) {
-                val file = fileFromUri(documentUriString) ?: return@withContext false
+            val localFile = appOwnedLocalFile(documentUriString)
+                ?: if (isFileUri(documentUriString)) fileFromUri(documentUriString) else null
+            if (localFile != null) {
+                val file = localFile
                 if (Files.isSymbolicLink(file.toPath())) return@withContext false
                 file.parentFile?.mkdirs()
                 file.writeBytes(data)
@@ -684,7 +697,9 @@ class SafRepository(private val context: Context) {
     ): String? = withContext(Dispatchers.IO) {
         if (!isValidLeafName(displayName)) return@withContext null
         try {
-            if (isFileUri(parentUriString)) {
+            if (AndroidIdeDocumentsProvider.isProviderUri(parentUriString)) {
+                AndroidIdeDocumentsProvider.createLocalDocument(context, parentUriString, mimeType, displayName)
+            } else if (isFileUri(parentUriString)) {
                 val parentDir = fileFromUri(parentUriString)?.canonicalFile ?: return@withContext null
                 if (!parentDir.isDirectory) return@withContext null
                 val newFile = File(parentDir, displayName).canonicalFile
@@ -954,23 +969,29 @@ class SafRepository(private val context: Context) {
         null
     }
 
-    private fun openInputStream(documentUriString: String): InputStream? =
-        if (isFileUri(documentUriString)) {
-            fileFromUri(documentUriString)
+    private fun openInputStream(documentUriString: String): InputStream? {
+        val localFile = appOwnedLocalFile(documentUriString)
+            ?: if (isFileUri(documentUriString)) fileFromUri(documentUriString) else null
+        return if (localFile != null) {
+            localFile
                 ?.takeUnless { Files.isSymbolicLink(it.toPath()) }
                 ?.inputStream()
         } else {
             resolver.openInputStream(Uri.parse(documentUriString))
         }
+    }
 
-    private fun openOutputStream(documentUriString: String): OutputStream? =
-        if (isFileUri(documentUriString)) {
-            fileFromUri(documentUriString)
+    private fun openOutputStream(documentUriString: String): OutputStream? {
+        val localFile = appOwnedLocalFile(documentUriString)
+            ?: if (isFileUri(documentUriString)) fileFromUri(documentUriString) else null
+        return if (localFile != null) {
+            localFile
                 ?.takeUnless { Files.isSymbolicLink(it.toPath()) }
                 ?.outputStream()
         } else {
             resolver.openOutputStream(Uri.parse(documentUriString), "w")
         }
+    }
 
     private suspend fun copyDocumentContents(sourceUriString: String, targetUriString: String): Boolean =
         withContext(Dispatchers.IO) {

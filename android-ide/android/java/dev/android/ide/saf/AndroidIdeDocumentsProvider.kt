@@ -8,6 +8,7 @@ import android.os.CancellationSignal
 import android.os.ParcelFileDescriptor
 import android.provider.DocumentsContract
 import android.provider.DocumentsProvider
+import dev.android.ide.R
 import java.io.File
 import java.io.FileNotFoundException
 import java.io.IOException
@@ -53,7 +54,7 @@ class AndroidIdeDocumentsProvider : DocumentsProvider() {
             ),
             DocumentsContract.Root.COLUMN_MIME_TYPES to "*/*\n${DocumentsContract.Document.MIME_TYPE_DIR}",
             DocumentsContract.Root.COLUMN_AVAILABLE_BYTES to rootDirectory.usableSpace,
-            DocumentsContract.Root.COLUMN_ICON to android.R.drawable.ic_menu_save,
+            DocumentsContract.Root.COLUMN_ICON to R.mipmap.ic_launcher,
         ))
         return result
     }
@@ -152,7 +153,7 @@ class AndroidIdeDocumentsProvider : DocumentsProvider() {
             DocumentsContract.Document.COLUMN_FLAGS to flags,
             DocumentsContract.Document.COLUMN_SIZE to (if (isDirectory) 0L else file.length()),
             DocumentsContract.Document.COLUMN_LAST_MODIFIED to file.lastModified(),
-            DocumentsContract.Document.COLUMN_ICON to android.R.drawable.ic_menu_save,
+            DocumentsContract.Document.COLUMN_ICON to R.mipmap.ic_launcher,
         ))
     }
 
@@ -238,6 +239,22 @@ class AndroidIdeDocumentsProvider : DocumentsProvider() {
         }.getOrNull()
 
         fun rootTreeUri(): String = DocumentsContract.buildTreeDocumentUri(AUTHORITY, ROOT_DOCUMENT_ID).toString()
+
+        fun createLocalDocument(context: Context, parentUriString: String, mimeType: String, displayName: String): String? = runCatching {
+            if (displayName.isBlank() || displayName == "." || displayName == ".." ||
+                displayName.any(Char::isISOControl) || '/' in displayName || '\\' in displayName
+            ) return@runCatching null
+            val parent = localFileForUri(context, parentUriString)?.canonicalFile
+                ?.takeIf { it.isDirectory }
+                ?: return@runCatching null
+            val target = File(parent, displayName).canonicalFile
+            val root = context.filesDir.resolve(USER_FILES_DIRECTORY).canonicalFile
+            if (!target.toPath().startsWith(root.toPath()) || target.exists()) return@runCatching null
+            val created = if (mimeType == DocumentsContract.Document.MIME_TYPE_DIR) target.mkdirs() else target.createNewFile()
+            if (!created) return@runCatching null
+            val relative = root.toPath().relativize(target.toPath()).toString().replace(File.separatorChar, '/')
+            DocumentsContract.buildDocumentUri(AUTHORITY, FILE_DOCUMENT_ID_PREFIX + relative).toString()
+        }.getOrNull()
 
         val ROOT_PROJECTION = arrayOf(
             DocumentsContract.Root.COLUMN_ROOT_ID,
