@@ -48,7 +48,11 @@ android {
     defaultConfig {
         applicationId = "dev.android.ide"
         minSdk = 26
-        targetSdk = 34
+        // Termux's writable private runtime requires the Android 10 compatibility
+        // behavior: target API 29+ denies execve() from the app home directory.
+        // Keep this aligned with the bundled runtime until APK-resident execution
+        // is implemented.
+        targetSdk = 28
         versionCode = 1
         versionName = "1.0.0-alpha"
         // The runtime bootstrap is ABI-specific. Keep the APK aligned with

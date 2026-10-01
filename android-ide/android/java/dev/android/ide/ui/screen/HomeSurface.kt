@@ -64,9 +64,9 @@ fun HomeSurface(
         add(HomeDestinationData(Icons.Default.FolderOpen, "Projects", "Manage your projects and workspace", true) { onNavigate(Surface.PROJECTS) })
         add(HomeDestinationData(Icons.Default.Code, "Editor", "Edit code and manage project files", true) { onNavigate(Surface.EDITOR) })
         add(HomeDestinationData(Icons.Default.Terminal, "Terminal", "Access your project and workspace from a command line interface", true) { onNavigate(Surface.TERMINAL) })
-        add(HomeDestinationData(Icons.Default.MergeType, "Git", "Review detected repository status; use Terminal for Git commands", true) { onNavigate(Surface.GIT) })
-        add(HomeDestinationData(Icons.Default.Language, "Browser", "Browser the web and access developer console", false) { onFeedback("Browser") })
-        add(HomeDestinationData(Icons.Default.Extension, "Extensions", "Install and manage Add-ons", false) { onFeedback("Extensions") })
+        add(HomeDestinationData(Icons.Default.MergeType, "Git", "Version Control and Remote Backups", true) { onNavigate(Surface.GIT) })
+        add(HomeDestinationData(Icons.Default.Language, "Browser", "Browser surface is not currently available", true) { onNavigate(Surface.BROWSER) })
+        add(HomeDestinationData(Icons.Default.Extension, "Extensions", "Extensions surface is not currently available", true) { onNavigate(Surface.EXTENSIONS) })
         add(HomeDestinationData(Icons.Default.Settings, "Settings", "Customize your workspace and app preferences", true) { onNavigate(Surface.SETTINGS) })
         val recoveryText = when (crashRecoveryCount) {
             1 -> "1 unsaved file is available to restore"

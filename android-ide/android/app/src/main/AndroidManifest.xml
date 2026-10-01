@@ -90,6 +90,7 @@
             android:permission="android.permission.MANAGE_DOCUMENTS">
             <intent-filter>
                 <action android:name="android.content.action.DOCUMENTS_PROVIDER" />
+                <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </provider>
 

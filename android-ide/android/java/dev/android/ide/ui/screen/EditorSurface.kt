@@ -73,14 +73,11 @@ import androidx.compose.ui.unit.dp
 import dev.android.ide.app.AppShellState
 import dev.android.ide.app.AppShellViewModel
 import dev.android.ide.contracts.Surface
-import dev.android.ide.contracts.OperationReport
 import dev.android.ide.ui.components.EditorPane
 import dev.android.ide.ui.components.EditorProjectActionsMenu
 import dev.android.ide.ui.components.EditorTabBar
 import dev.android.ide.ui.components.FileTreePanel
 import dev.android.ide.ui.theme.LocalIdeColors
-import dev.android.ide.ui.theme.operationStatusContainerColor
-import dev.android.ide.ui.theme.operationStatusContentColor
 import dev.android.ide.viewmodel.IdeViewModel
 import dev.android.ide.viewmodel.model.EditorTab
 import dev.android.ide.viewmodel.model.FileNode
@@ -131,7 +128,6 @@ fun EditorSurface(
         state = state,
         ideViewModel = ideViewModel,
         fileTree = state.fileTree,
-        terminalFeedback = shellState.terminalFeedback,
         onOpenGlobalNavigation = onOpenGlobalNavigation,
         onOpenSettings = onOpenSettings,
         onFeedback = onFeedback,
@@ -398,7 +394,6 @@ private fun EditorWorkspace(
     state: IdeUiState,
     ideViewModel: IdeViewModel,
     fileTree: List<FileNode>,
-    terminalFeedback: OperationReport?,
     onOpenGlobalNavigation: () -> Unit,
     onOpenSettings: () -> Unit,
     onFeedback: (String) -> Unit,
@@ -409,15 +404,6 @@ private fun EditorWorkspace(
     val keyboardVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
     var moreOpen by remember { mutableStateOf(false) }
     Column(modifier.background(colors.background)) {
-        terminalFeedback?.takeIf { it.outcome != dev.android.ide.contracts.OperationOutcome.COMPLETE }?.let { report ->
-            val contentColor = operationStatusContentColor(report.outcome)
-            Row(
-                Modifier.fillMaxWidth().background(operationStatusContainerColor(report.outcome)).padding(horizontal = 12.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text("Terminal: ${report.message}", color = contentColor, style = MaterialTheme.typography.bodySmall)
-            }
-        }
         EditorTopBar(
             state = state, activeTab = activeTab, fileTree = fileTree,
             projectRootUri = state.projectRootUri,

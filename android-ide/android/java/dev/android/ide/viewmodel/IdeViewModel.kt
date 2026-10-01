@@ -74,6 +74,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.yield
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.UUID
@@ -82,8 +83,10 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
 
     private data class LanguageServerContext(val projectId: String, val serverId: String)
 
+    private var fileSearchJob: Job? = null
     private var projectSearchJob: Job? = null
     private var projectSearchGeneration = 0L
+    private val searchBatchSize = 32
 
     private val safRepository      = SafRepository(application)
     private val storageAdapter     = ProjectStorageAdapterImpl(safRepository)
@@ -142,6 +145,8 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     override fun onCleared() {
+        fileSearchJob?.cancel()
+        projectSearchJob?.cancel()
         languageServers.shutdown()
         super.onCleared()
         lifecycleStore.markExplicitExit()
@@ -669,6 +674,7 @@ These files are project-local and travel with the project. Global application pr
             _uiState.update { it.copy(projectMetadataLoading = true) }
             val projects = projectRepository.getAll()
             _uiState.update { it.copy(projectDetailsByUri = emptyMap() ) }
+            val capabilitiesByUri = mutableMapOf<String, dev.android.ide.contracts.ProjectStorageCapabilities>()
             val verifiedProjects = projects.map { project ->
                 val capabilities = safRepository.inspectProjectStorage(
                     ProjectLocation(
@@ -677,6 +683,7 @@ These files are project-local and travel with the project. Global application pr
                         userVisiblePath = project.locationLabel,
                     ),
                 )
+                capabilitiesByUri[project.uri] = capabilities
                 project.copy(
                     capabilityState = capabilities.state,
                     capabilityMessage = capabilities.explanation,
@@ -698,14 +705,15 @@ These files are project-local and travel with the project. Global application pr
                     fileCount = metadata.fileCount,
                     folderCount = metadata.folderCount,
                     totalBytes = metadata.totalBytes,
-                    storageCapabilities = safRepository.inspectProjectStorage(
-                        ProjectLocation(
-                            stableId = project.stableLocationId,
-                            displayLabel = project.locationLabel,
-                            userVisiblePath = project.locationLabel,
-                            capabilityState = project.capabilityState,
+                    storageCapabilities = capabilitiesByUri[project.uri]
+                        ?: safRepository.inspectProjectStorage(
+                            ProjectLocation(
+                                stableId = project.stableLocationId,
+                                displayLabel = project.locationLabel,
+                                userVisiblePath = project.locationLabel,
+                                capabilityState = project.capabilityState,
+                            ),
                         ),
-                    ),
                     languageBytes = metadata.languageBytes,
                     git = metadata.git,
                 )
@@ -1953,14 +1961,19 @@ build/
     // ── File search ────────────────────────────────────────────────────────
 
     fun showFileSearch() {
+        fileSearchJob?.cancel()
         _uiState.update { it.copy(isSearchVisible = true, isContentSearchVisible = false, fileSearchQuery = "", fileSearchResults = emptyList()) }
     }
 
     fun hideFileSearch() {
+        fileSearchJob?.cancel()
+        fileSearchJob = null
         _uiState.update { it.copy(isSearchVisible = false, fileSearchQuery = "", fileSearchResults = emptyList()) }
     }
 
     fun searchFiles(query: String) {
+        fileSearchJob?.cancel()
+        fileSearchJob = null
         _uiState.update { it.copy(fileSearchQuery = query) }
         if (query.isBlank()) {
             _uiState.update { it.copy(fileSearchResults = emptyList()) }
@@ -1976,17 +1989,29 @@ build/
                 if (node.isDirectory) searchNodes(node.children, nodePath)
             }
         }
-        viewModelScope.launch {
+        fileSearchJob = viewModelScope.launch {
             val rootUri = _uiState.value.projectRootUri
+            var published = 0
+            suspend fun publishFilenameResults(force: Boolean = false) {
+                if (!force && results.size - published < searchBatchSize) return
+                if (_uiState.value.fileSearchQuery != query) return
+                published = results.size
+                _uiState.update { it.copy(fileSearchResults = results.toList()) }
+                yield()
+            }
             suspend fun scan(uri: String, path: String) {
                 safRepository.listChildren(uri).forEach { node ->
                     val nodePath = if (path.isEmpty()) node.displayName else "$path/${node.displayName}"
                     if (node.displayName == ".git" || node.displayName in setOf(ApplicationIdentity.TARGET_METADATA_DIRECTORY, ApplicationIdentity.LEGACY_METADATA_DIRECTORY)) return@forEach
-                    if (node.displayName.contains(query, ignoreCase = true)) results += FileSearchResult(node.documentUri, node.displayName, "/$nodePath", isDirectory = node.isDirectory)
+                    if (node.displayName.contains(query, ignoreCase = true)) {
+                        results += FileSearchResult(node.documentUri, node.displayName, "/$nodePath", isDirectory = node.isDirectory)
+                        publishFilenameResults()
+                    }
                     if (node.isDirectory) scan(node.documentUri, nodePath)
                 }
             }
             if (rootUri != null) scan(rootUri, "") else searchNodes(_uiState.value.fileTree, "")
+            publishFilenameResults(force = true)
             if (_uiState.value.fileSearchQuery == query) _uiState.update { it.copy(fileSearchResults = results.distinctBy { result -> result.documentUri }.sortedBy { it.relativePath.lowercase() }) }
         }
     }
@@ -2093,6 +2118,7 @@ build/
 
         projectSearchJob = viewModelScope.launch {
             val results = mutableListOf<FileSearchResult>()
+            var published = 0
             val visitedDirectories = mutableSetOf(rootUri)
             var unreadableDirectories = 0
             var skippedFiles = 0
@@ -2167,7 +2193,18 @@ build/
                             previousLine = line.takeLast(70)
                             lineIndex++
                         }
-                        if (streamed) results.addAll(fileResults) else skippedFiles++
+                        if (streamed) {
+                            results.addAll(fileResults)
+                            if (results.size - published >= searchBatchSize) {
+                                if (requestId != projectSearchGeneration) return@launch
+                                published = results.size
+                                _uiState.update { state ->
+                                    if (state.contentSearchQuery != query) state
+                                    else state.copy(contentSearchResults = results.toList())
+                                }
+                                yield()
+                            }
+                        } else skippedFiles++
                     }
                 }
             }
@@ -2175,6 +2212,13 @@ build/
             try {
                 searchDirectory(rootUri, "")
                 if (requestId != projectSearchGeneration) return@launch
+                if (published != results.size) {
+                    published = results.size
+                    _uiState.update { state ->
+                        if (state.contentSearchQuery != query) state
+                        else state.copy(contentSearchResults = results.toList())
+                    }
+                }
                 val warnings = buildList {
                     if (unreadableDirectories > 0) add("$unreadableDirectories folder(s) could not be inspected.")
                     if (skippedFiles > 0) add("$skippedFiles binary or unreadable file(s) were skipped; text extensions are not filtered.")

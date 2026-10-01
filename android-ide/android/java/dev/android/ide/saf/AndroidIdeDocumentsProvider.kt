@@ -25,6 +25,10 @@ class AndroidIdeDocumentsProvider : DocumentsProvider() {
 
     override fun onCreate(): Boolean {
         if (!rootDirectory.isDirectory && !rootDirectory.mkdirs()) return false
+        // DocumentsUI may cache provider roots. Notify it when the provider is
+        // first brought up so the Android IDE root is not omitted after install
+        // or after the app's private storage is initialized.
+        DocumentsContract.notifyRootsChanged(requireNotNull(context).contentResolver, AUTHORITY)
         return rootDirectory.isDirectory
     }
 
@@ -39,7 +43,11 @@ class AndroidIdeDocumentsProvider : DocumentsProvider() {
             DocumentsContract.Root.COLUMN_DOCUMENT_ID to ROOT_DOCUMENT_ID,
             DocumentsContract.Root.COLUMN_TITLE to "Android IDE",
             DocumentsContract.Root.COLUMN_SUMMARY to "Development files accessible through SAF",
-            DocumentsContract.Root.COLUMN_FLAGS to DocumentsContract.Root.FLAG_SUPPORTS_CREATE,
+            DocumentsContract.Root.COLUMN_FLAGS to (
+                DocumentsContract.Root.FLAG_SUPPORTS_CREATE or
+                    DocumentsContract.Root.FLAG_SUPPORTS_IS_CHILD or
+                    DocumentsContract.Root.FLAG_LOCAL_ONLY
+            ),
             DocumentsContract.Root.COLUMN_MIME_TYPES to "*/*\n${DocumentsContract.Document.MIME_TYPE_DIR}",
             DocumentsContract.Root.COLUMN_AVAILABLE_BYTES to rootDirectory.usableSpace,
             DocumentsContract.Root.COLUMN_ICON to android.R.drawable.ic_menu_save,

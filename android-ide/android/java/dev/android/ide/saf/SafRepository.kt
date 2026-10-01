@@ -1069,8 +1069,22 @@ class SafRepository(private val context: Context) {
             var totalBytes = 0L
             var latestModifiedMs: Long? = null
 
-            suspend fun walk(directoryUri: String, prefix: String): Boolean {
-                val children = when (val inspection = inspectChildren(directoryUri)) {
+            suspend fun walk(directoryUri: String, prefix: String, localDirectory: File? = null): Boolean {
+                val children = if (localDirectory != null) {
+                    val localChildren = localDirectory.listFiles()
+                        ?.filterNot { Files.isSymbolicLink(it.toPath()) }
+                        ?: return false
+                    localChildren.map { file ->
+                        FileNode(
+                            documentUri = Uri.fromFile(file).toString(),
+                            displayName = file.name,
+                            mimeType = if (file.isDirectory) MIME_DIR else "application/octet-stream",
+                            size = if (file.isFile) file.length() else 0L,
+                            lastModifiedMs = file.lastModified(),
+                            parentDocumentUri = directoryUri,
+                        )
+                    }
+                } else when (val inspection = inspectChildren(directoryUri)) {
                     is ChildrenInspectionResult.Success -> inspection.children
                     is ChildrenInspectionResult.Failed -> return false
                 }
@@ -1096,14 +1110,16 @@ class SafRepository(private val context: Context) {
                             gitEntries += MetadataEntry(relativePath, child.documentUri, false, size, child.lastModifiedMs)
                         }
                     }
-                    if (child.isDirectory && !walk(child.documentUri, relativePath)) {
+                    val childLocalDirectory = localDirectory?.resolve(child.displayName)?.takeIf { it.isDirectory }
+                    if (child.isDirectory && !walk(child.documentUri, relativePath, childLocalDirectory)) {
                         return false
                     }
                 }
                 return true
             }
 
-            if (!walk(rootUriString, "")) return@withContext null
+            val localRoot = localFilesystemPath(rootUriString)?.let(::File)?.takeIf { it.isDirectory }
+            if (!walk(rootUriString, "", localRoot)) return@withContext null
 
             val rootTimes = rootTimes(rootUriString)
             val projectJson = readProjectMetadataFile(rootUriString, "project.json")

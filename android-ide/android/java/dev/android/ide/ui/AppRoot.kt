@@ -254,7 +254,7 @@ fun AppRoot(viewModel: AppShellViewModel, ideViewModel: IdeViewModel, onExit: ()
             feedback = feedback,
             repository = gitRepository,
             onRepositoryChange = { gitRepository = it },
-            onClone = { feedback = "Coming soon: Git repository cloning is not wired yet." },
+            onClone = { feedback = "Git's user interface is not currently available. Use Terminal for git clone and other Git commands." },
             onDismiss = { gitCloneVisible = false; feedback = null },
         )
         pickerFeedback?.let { message ->

@@ -898,7 +898,15 @@ private fun DomainPlaceholderSurface(title: String, modifier: Modifier, onOpenNa
             title = { Text(title) },
             navigationIcon = { IconButton(onClick = onOpenNavigation) { Icon(Icons.Default.Menu, "Open sidebar") } },
         )
-        Text("$title not available. Coming soon (phase ${placeholderPhase(title)})", modifier = Modifier.padding(20.dp), style = MaterialTheme.typography.bodyMedium)
+        Text(
+            when (title) {
+                "Browser" -> "Browser is not currently available. Use Terminal to start and inspect local development servers."
+                "Extensions" -> "Extensions are not currently available in this build."
+                else -> "$title not available. Coming soon (phase ${placeholderPhase(title)})"
+            },
+            modifier = Modifier.padding(20.dp),
+            style = MaterialTheme.typography.bodyMedium,
+        )
     }
 }
 
