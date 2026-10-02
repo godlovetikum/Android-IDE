@@ -31,7 +31,6 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DeveloperMode
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
@@ -63,11 +62,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
+import kotlin.math.roundToInt
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -85,11 +87,13 @@ private const val MAX_VIEWPORT_WIDTH = 2400
 fun BrowserSurface(
     onOpenNavigation: () -> Unit,
     onOpenSettings: () -> Unit = {},
+    onApplicationBack: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val browser: BrowserViewModel = viewModel()
     val state by browser.uiState.collectAsState()
     var addressText by remember { mutableStateOf(state.address) }
+    var addressFocused by remember { mutableStateOf(false) }
     var menuOpen by remember { mutableStateOf(false) }
     var tabsOpen by remember { mutableStateOf(false) }
     var downloadsOpen by remember { mutableStateOf(false) }
@@ -100,11 +104,15 @@ fun BrowserSurface(
     var errorVisible by remember { mutableStateOf(false) }
     var previousScrollY by remember { mutableIntStateOf(0) }
     var tabSearchQuery by remember { mutableStateOf("") }
+    val density = LocalDensity.current
     val visibleGeckoView = remember { mutableStateOf<org.mozilla.geckoview.GeckoView?>(null) }
 
     LaunchedEffect(state.address) { addressText = state.address }
     LaunchedEffect(state.error) { if (state.error != null) errorVisible = true }
-    BackHandler(enabled = state.selectedTabId != null) { browser.goBack() }
+    BackHandler(enabled = state.selectedTabId != null) {
+        val selectedTab = state.tabs.firstOrNull { it.id == state.selectedTabId }
+        if (selectedTab?.canGoBack == true) browser.goBack() else onApplicationBack()
+    }
 
     val browserColorScheme = when (state.settings.theme) {
         "dark" -> darkColorScheme()
@@ -112,9 +120,9 @@ fun BrowserSurface(
         else -> null
     }
     if (browserColorScheme != null) MaterialTheme(colorScheme = browserColorScheme) {
-        BrowserSurfaceContent(modifier, state, browser, visibleGeckoView, addressText, { addressText = it }, { browser.createTab() }, { state.selectedTabId?.let { browser.captureTabPreview(it, visibleGeckoView.value) }; tabsOpen = true }, { onOpenNavigation() }, { onOpenSettings() }, tabSearchQuery, { tabSearchQuery = it }, { urlRowVisible = it }, urlRowVisible, menuOpen, { menuOpen = it }, tabsOpen, { tabsOpen = it }, downloadsOpen, { downloadsOpen = it }, viewportOpen, { viewportOpen = it }, viewportText, { viewportText = it }, viewportError, { viewportError = it }, errorVisible, { errorVisible = it }, previousScrollY, { previousScrollY = it })
+        BrowserSurfaceContent(modifier, state, browser, visibleGeckoView, addressText, { addressText = it }, addressFocused, { addressFocused = it }, state.history, browser::clearHistoryEntry, { browser.createTab() }, { state.selectedTabId?.let { browser.captureTabPreview(it, visibleGeckoView.value) }; tabsOpen = true }, { onOpenNavigation() }, { onOpenSettings() }, tabSearchQuery, { tabSearchQuery = it }, { urlRowVisible = it }, urlRowVisible, menuOpen, { menuOpen = it }, tabsOpen, { tabsOpen = it }, downloadsOpen, { downloadsOpen = it }, viewportOpen, { viewportOpen = it }, viewportText, { viewportText = it }, viewportError, { viewportError = it }, errorVisible, { errorVisible = it }, previousScrollY, { previousScrollY = it })
     } else {
-        BrowserSurfaceContent(modifier, state, browser, visibleGeckoView, addressText, { addressText = it }, { browser.createTab() }, { state.selectedTabId?.let { browser.captureTabPreview(it, visibleGeckoView.value) }; tabsOpen = true }, { onOpenNavigation() }, { onOpenSettings() }, tabSearchQuery, { tabSearchQuery = it }, { urlRowVisible = it }, urlRowVisible, menuOpen, { menuOpen = it }, tabsOpen, { tabsOpen = it }, downloadsOpen, { downloadsOpen = it }, viewportOpen, { viewportOpen = it }, viewportText, { viewportText = it }, viewportError, { viewportError = it }, errorVisible, { errorVisible = it }, previousScrollY, { previousScrollY = it })
+        BrowserSurfaceContent(modifier, state, browser, visibleGeckoView, addressText, { addressText = it }, addressFocused, { addressFocused = it }, state.history, browser::clearHistoryEntry, { browser.createTab() }, { state.selectedTabId?.let { browser.captureTabPreview(it, visibleGeckoView.value) }; tabsOpen = true }, { onOpenNavigation() }, { onOpenSettings() }, tabSearchQuery, { tabSearchQuery = it }, { urlRowVisible = it }, urlRowVisible, menuOpen, { menuOpen = it }, tabsOpen, { tabsOpen = it }, downloadsOpen, { downloadsOpen = it }, viewportOpen, { viewportOpen = it }, viewportText, { viewportText = it }, viewportError, { viewportError = it }, errorVisible, { errorVisible = it }, previousScrollY, { previousScrollY = it })
     }
 }
 
@@ -127,6 +135,10 @@ private fun BrowserSurfaceContent(
     visibleGeckoView: androidx.compose.runtime.MutableState<org.mozilla.geckoview.GeckoView?>,
     addressText: String,
     setAddressText: (String) -> Unit,
+    addressFocused: Boolean,
+    setAddressFocused: (Boolean) -> Unit,
+    history: List<String>,
+    clearHistoryEntry: (String) -> Unit,
     createTab: () -> Unit,
     openTabs: () -> Unit,
     onOpenNavigation: () -> Unit,
@@ -162,9 +174,11 @@ private fun BrowserSurfaceContent(
                 }
                 IconButton(onClick = { setMenuOpen(true) }) { Icon(Icons.Default.MoreVert, "Browser menu") }
                 IconButton(onClick = openTabs) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(Icons.Default.Language, "Switch tabs")
-                        Text(state.tabs.size.toString(), style = MaterialTheme.typography.labelSmall)
+                    Box(
+                        modifier = Modifier.clip(RoundedCornerShape(10.dp)).background(MaterialTheme.colorScheme.surfaceVariant).padding(horizontal = 10.dp, vertical = 6.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(state.tabs.size.toString(), style = MaterialTheme.typography.labelLarge)
                     }
                 }
                 IconButton(onClick = createTab) { Icon(Icons.Default.Add, "New tab") }
@@ -190,11 +204,6 @@ private fun BrowserSurfaceContent(
                         },
                     )
                     DropdownMenuItem(
-                        leadingIcon = { Icon(Icons.Default.Language, null) },
-                        text = { Text("Device viewport") },
-                        onClick = { setMenuOpen(false); browser.setViewportWidth(0) },
-                    )
-                    DropdownMenuItem(
                         leadingIcon = { Icon(Icons.Default.Settings, null) },
                         text = { Text("Browser settings") },
                         onClick = { setMenuOpen(false); onOpenSettings() },
@@ -207,27 +216,46 @@ private fun BrowserSurfaceContent(
             enter = slideInVertically(initialOffsetY = { -it }),
             exit = slideOutVertically(targetOffsetY = { -it }),
         ) {
-            Row(
+            Column(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                IconButton(onClick = browser::goHome) { Icon(Icons.Default.Home, "Home page") }
-                OutlinedTextField(
-                    value = addressText,
-                    onValueChange = setAddressText,
-                    modifier = Modifier.weight(1f),
-                    singleLine = true,
-                    label = { Text("Search or enter address") },
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
-                    keyboardActions = KeyboardActions(onGo = { browser.navigate(addressText) }),
-                    trailingIcon = { TextButton(onClick = { browser.navigate(addressText) }) { Text("Go") } },
-                )
-                IconButton(onClick = browser::goBack, enabled = state.tabs.firstOrNull { it.id == state.selectedTabId }?.canGoBack == true) { Icon(Icons.Default.ArrowBack, "Back") }
-                IconButton(onClick = browser::goForward, enabled = state.tabs.firstOrNull { it.id == state.selectedTabId }?.canGoForward == true) { Icon(Icons.Default.ArrowForward, "Forward") }
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    IconButton(onClick = browser::goHome) { Icon(Icons.Default.Home, "Home page") }
+                    OutlinedTextField(
+                        value = addressText,
+                        onValueChange = setAddressText,
+                        modifier = Modifier.weight(1f).onFocusChanged { setAddressFocused(it.isFocused) },
+                        singleLine = true,
+                        label = { Text("Search or enter address") },
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                        keyboardActions = KeyboardActions(onSearch = { browser.navigate(addressText); setAddressFocused(false) }),
+                        trailingIcon = if (addressFocused && addressText.isNotEmpty()) ({
+                            IconButton(onClick = { setAddressText("") }) { Icon(Icons.Default.Close, "Clear address") }
+                        }) else null,
+                    )
+                    IconButton(onClick = browser::goBack, enabled = state.tabs.firstOrNull { it.id == state.selectedTabId }?.canGoBack == true) { Icon(Icons.Default.ArrowBack, "Back") }
+                    IconButton(onClick = browser::goForward, enabled = state.tabs.firstOrNull { it.id == state.selectedTabId }?.canGoForward == true) { Icon(Icons.Default.ArrowForward, "Forward") }
+                }
+                if (addressFocused && history.isNotEmpty()) {
+                    Card(Modifier.fillMaxWidth()) {
+                        Column(Modifier.padding(vertical = 4.dp)) {
+                            history.take(8).forEach { entry ->
+                                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().clickable { setAddressText(entry) }.padding(start = 12.dp)) {
+                                    Text(entry, modifier = Modifier.weight(1f), maxLines = 1, style = MaterialTheme.typography.bodyMedium)
+                                    IconButton(onClick = { clearHistoryEntry(entry) }) { Icon(Icons.Default.Close, "Remove from history") }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
         if (state.loading) Text("Loading ${state.loadProgress}%", modifier = Modifier.padding(horizontal = 12.dp), style = MaterialTheme.typography.labelSmall)
+        state.downloadProgress?.let { progress ->
+            val label = if (progress.totalBytes > 0) "Downloading ${progress.name} · ${(progress.bytes * 100 / progress.totalBytes).toInt()}%" else "Downloading ${progress.name}…"
+            Text(label, modifier = Modifier.padding(horizontal = 12.dp), style = MaterialTheme.typography.labelSmall)
+        }
         Box(modifier = Modifier.fillMaxSize().clickable { setUrlRowVisible(true) }) {
             state.selectedTabId?.let { tabId ->
                 AndroidView(
@@ -236,8 +264,8 @@ private fun BrowserSurfaceContent(
                             val geckoView = org.mozilla.geckoview.GeckoView(browserContext)
                             visibleGeckoView.value = geckoView
                             addView(geckoView, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+                            setOnChildScrollUpCallback { _, _ -> geckoView.canScrollVertically(-1) }
                             setOnRefreshListener {
-                                isRefreshing = true
                                 browser.reload()
                             }
                         }
@@ -246,6 +274,15 @@ private fun BrowserSurfaceContent(
                         val view = refreshContainer.getChildAt(0) as? org.mozilla.geckoview.GeckoView
                         if (view != null) {
                             visibleGeckoView.value = view
+                            val desiredWidth = state.viewportWidth?.let { (it * density.density).roundToInt() }
+                            val params = view.layoutParams
+                            val targetWidth = desiredWidth ?: ViewGroup.LayoutParams.MATCH_PARENT
+                            if (params.width != targetWidth) {
+                                params.width = targetWidth
+                                view.layoutParams = params
+                                view.requestLayout()
+                                refreshContainer.requestLayout()
+                            }
                             browser.bind(view, tabId) { scrollY ->
                                 setUrlRowVisible(when {
                                     scrollY <= 0 -> true
@@ -299,6 +336,7 @@ private fun BrowserSurfaceContent(
             title = { Text("Custom viewport width") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Current: ${state.viewportWidth?.let { "$it px" } ?: "Device width"}", style = MaterialTheme.typography.bodySmall)
                     OutlinedTextField(value = viewportText, onValueChange = { setViewportText(it.filter(Char::isDigit).take(4)); setViewportError(null) }, label = { Text("320–$MAX_VIEWPORT_WIDTH px") }, singleLine = true)
                     viewportError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                 }
@@ -310,7 +348,12 @@ private fun BrowserSurfaceContent(
                     else { browser.setViewportWidth(width); setViewportOpen(false) }
                 }) { Text("Apply") }
             },
-            dismissButton = { TextButton(onClick = { setViewportOpen(false) }) { Text("Cancel") } },
+            dismissButton = {
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    TextButton(onClick = { browser.resetViewport(); setViewportOpen(false) }) { Text("Reset") }
+                    TextButton(onClick = { setViewportOpen(false) }) { Text("Cancel") }
+                }
+            },
         )
     }
     state.permissionPrompt?.let { prompt ->
@@ -365,36 +408,46 @@ private fun TabPreviewCard(tab: BrowserTabUi, selected: Boolean, onSelect: () ->
 @Composable
 private fun DownloadsDialog(downloads: List<BrowserDownload>, browser: BrowserViewModel, onDismiss: () -> Unit) {
     val context = LocalContext.current
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Downloads") },
-        text = {
-            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                if (downloads.isEmpty()) Text("No downloads have been recorded.")
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(
+            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Text("Downloads", style = MaterialTheme.typography.titleLarge)
+            if (downloads.isEmpty()) {
+                Text("No downloads have been recorded.", modifier = Modifier.padding(vertical = 24.dp))
+            } else {
                 downloads.asReversed().take(50).forEach { item ->
-                    Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                        Text(item.name, style = MaterialTheme.typography.bodyMedium)
-                        Text(
-                            if (item.available) "Available · ${item.uri}" else "Unavailable · ${item.uri}",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = if (item.available) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error,
-                        )
-                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            if (item.available) {
-                                TextButton(onClick = {
-                                    val intent = browser.openDownload(item.id)
-                                    if (intent == null) browser.reportError("The downloaded file is no longer available")
-                                    else runCatching { context.startActivity(intent) }.onFailure { browser.reportError("No application can open this file") }
-                                }) { Text("Open") }
-                                TextButton(onClick = { browser.deleteDownload(item.id) }) { Text("Delete") }
-                            } else {
-                                TextButton(onClick = { browser.removeUnavailableDownload(item.id) }) { Text("Remove") }
+                    Card(Modifier.fillMaxWidth()) {
+                        Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Box(
+                                Modifier.width(56.dp).height(56.dp).clip(RoundedCornerShape(10.dp)).background(MaterialTheme.colorScheme.surfaceVariant),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Icon(Icons.Default.Download, contentDescription = "Downloaded file")
+                            }
+                            Column(Modifier.weight(1f).padding(start = 12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                Text(item.name, maxLines = 2, style = MaterialTheme.typography.bodyMedium)
+                                Text(if (item.available) "Available" else "Unavailable", style = MaterialTheme.typography.labelMedium, color = if (item.available) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error)
+                                Text(item.mimeType, maxLines = 1, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    if (item.available) {
+                                        TextButton(onClick = {
+                                            val intent = browser.openDownload(item.id)
+                                            if (intent == null) browser.reportError("The downloaded file is no longer available")
+                                            else runCatching { context.startActivity(intent) }.onFailure { browser.reportError("No application can open this file") }
+                                        }) { Text("Open") }
+                                        TextButton(onClick = { browser.deleteDownload(item.id) }) { Text("Delete") }
+                                    } else {
+                                        TextButton(onClick = { browser.removeUnavailableDownload(item.id) }) { Text("Remove") }
+                                    }
+                                }
                             }
                         }
                     }
                 }
             }
-        },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("Done") } },
-    )
+            TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.End)) { Text("Done") }
+        }
+    }
 }

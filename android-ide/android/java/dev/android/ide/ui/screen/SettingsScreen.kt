@@ -8,6 +8,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -553,6 +554,9 @@ private fun BrowserSettingsContent() {
     val browser: BrowserViewModel = viewModel()
     val state by browser.uiState.collectAsState()
     val context = LocalContext.current
+    var searchSheetOpen by rememberSaveable { mutableStateOf(false) }
+    var homeSheetOpen by rememberSaveable { mutableStateOf(false) }
+    var themeSheetOpen by rememberSaveable { mutableStateOf(false) }
     var searchDraft by rememberSaveable(state.settings.customSearchUrl) { mutableStateOf(state.settings.customSearchUrl) }
     var homeDraft by rememberSaveable(state.settings.homePage) { mutableStateOf(state.settings.homePage) }
     var message by rememberSaveable { mutableStateOf<String?>(null) }
@@ -565,25 +569,26 @@ private fun BrowserSettingsContent() {
             message = "Download folder saved"
         }.onFailure { message = "Android did not grant access to that folder" }
     }
+    val searchLabels = mapOf("google" to "Google", "bing" to "Bing", "duckduckgo" to "DuckDuckGo", "brave" to "Brave Search", "startpage" to "Startpage", "custom" to "Custom")
     SettingsCard {
         Text("Search engine", style = MaterialTheme.typography.titleSmall)
-        Column(Modifier.selectableGroup()) {
-            listOf("google" to "Google", "bing" to "Bing", "duckduckgo" to "DuckDuckGo", "brave" to "Brave Search", "startpage" to "Startpage").forEach { (id, label) ->
-                Row(Modifier.fillMaxWidth().selectable(selected = state.settings.searchEngine == id, onClick = { browser.setSearchEngine(id) }), verticalAlignment = Alignment.CenterVertically) {
-                    RadioButton(selected = state.settings.searchEngine == id, onClick = { browser.setSearchEngine(id) })
-                    Text(label)
-                }
+        Row(Modifier.fillMaxWidth().clickable { searchSheetOpen = true }, verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(searchLabels[state.settings.searchEngine] ?: "Custom")
+                Text("Tap to choose or configure", style = MaterialTheme.typography.bodySmall, color = LocalIdeColors.current.textSecondary)
             }
+            Text("Change", color = LocalIdeColors.current.textSecondary)
         }
-        Text("Custom search URL template", style = MaterialTheme.typography.bodyMedium)
-        OutlinedTextField(value = searchDraft, onValueChange = { searchDraft = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, label = { Text("Use %s for the encoded query") })
-        TextButton(onClick = { browser.setSearchEngine("custom"); browser.setCustomSearchUrl(searchDraft); message = "Custom search provider saved" }) { Text("Save custom search") }
     }
     SettingsCard {
         Text("Home page", style = MaterialTheme.typography.titleSmall)
-        Text("The Home button opens this address. A blank value opens a blank tab.", style = MaterialTheme.typography.bodySmall, color = LocalIdeColors.current.textSecondary)
-        OutlinedTextField(value = homeDraft, onValueChange = { homeDraft = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, label = { Text("URL") })
-        TextButton(onClick = { browser.setHomePage(homeDraft); message = "Home page saved" }) { Text("Save home page") }
+        Row(Modifier.fillMaxWidth().clickable { homeSheetOpen = true }, verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(state.settings.homePage.ifBlank { "Blank tab" }, maxLines = 1)
+                Text("Tap to edit", style = MaterialTheme.typography.bodySmall, color = LocalIdeColors.current.textSecondary)
+            }
+            Text("Change", color = LocalIdeColors.current.textSecondary)
+        }
     }
     SettingsCard {
         Text("Downloads", style = MaterialTheme.typography.titleSmall)
@@ -592,19 +597,18 @@ private fun BrowserSettingsContent() {
             OutlinedButton(onClick = { folderPicker.launch(null) }) { Text("Choose folder") }
             TextButton(onClick = { browser.setDownloadFolder(null); message = "Default Downloads folder restored" }) { Text("Reset") }
         }
-        Text("Existing download records remain visible when their files still exist. Duplicate names require a confirmation.", style = MaterialTheme.typography.bodySmall, color = LocalIdeColors.current.textSecondary)
+        Text("Existing records are checked when Downloads opens. Duplicate names require confirmation.", style = MaterialTheme.typography.bodySmall, color = LocalIdeColors.current.textSecondary)
     }
     SettingsCard {
         Text("Appearance and browsing", style = MaterialTheme.typography.titleSmall)
-        Column(Modifier.selectableGroup()) {
-            listOf("system" to "Follow Android IDE theme", "light" to "Light", "dark" to "Dark").forEach { (id, label) ->
-                Row(Modifier.fillMaxWidth().selectable(selected = state.settings.theme == id, onClick = { browser.setTheme(id) }), verticalAlignment = Alignment.CenterVertically) {
-                    RadioButton(selected = state.settings.theme == id, onClick = { browser.setTheme(id) })
-                    Text(label)
-                }
+        Row(Modifier.fillMaxWidth().clickable { themeSheetOpen = true }, verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(mapOf("system" to "Follow Android IDE theme", "light" to "Light", "dark" to "Dark")[state.settings.theme] ?: "Follow Android IDE theme")
+                Text("Browser theme", style = MaterialTheme.typography.bodySmall, color = LocalIdeColors.current.textSecondary)
             }
+            Text("Change", color = LocalIdeColors.current.textSecondary)
         }
-        VisibilitySettingRow("Desktop site by default", "Request desktop layouts for new browser sessions.", state.settings.desktopSiteDefault, browser::setDesktopSiteDefault)
+        VisibilitySettingRow("Desktop site", "Reload the current tab using the desktop user-agent.", state.settings.desktopSiteDefault, browser::setDesktopSiteDefault)
     }
     SettingsCard {
         Text("Developer tools", style = MaterialTheme.typography.titleSmall)
@@ -616,6 +620,42 @@ private fun BrowserSettingsContent() {
         OutlinedButton(onClick = { browser.clearBrowserData(); message = "Browser data cleared" }) { Text("Clear browser data") }
     }
     message?.let { Text(it, color = LocalIdeColors.current.textSecondary, style = MaterialTheme.typography.bodySmall) }
+
+    if (searchSheetOpen) ModalBottomSheet(onDismissRequest = { searchSheetOpen = false }) {
+        Column(Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("Search engine", style = MaterialTheme.typography.titleLarge)
+            searchLabels.filterKeys { it != "custom" }.forEach { (id, label) ->
+                Row(Modifier.fillMaxWidth().clickable { browser.setSearchEngine(id); searchSheetOpen = false }, verticalAlignment = Alignment.CenterVertically) {
+                    RadioButton(selected = state.settings.searchEngine == id, onClick = null)
+                    Text(label)
+                }
+            }
+            OutlinedTextField(value = searchDraft, onValueChange = { searchDraft = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, label = { Text("Custom URL template; use %s") })
+            Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
+                TextButton(onClick = { browser.setSearchEngine("custom"); browser.setCustomSearchUrl(searchDraft); searchSheetOpen = false; message = "Custom search provider saved" }) { Text("Save custom") }
+            }
+        }
+    }
+    if (homeSheetOpen) ModalBottomSheet(onDismissRequest = { homeSheetOpen = false }) {
+        Column(Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("Home page", style = MaterialTheme.typography.titleLarge)
+            OutlinedTextField(value = homeDraft, onValueChange = { homeDraft = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, label = { Text("URL; blank opens a blank tab") })
+            Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
+                TextButton(onClick = { browser.setHomePage(homeDraft); homeSheetOpen = false; message = "Home page saved" }) { Text("Save") }
+            }
+        }
+    }
+    if (themeSheetOpen) ModalBottomSheet(onDismissRequest = { themeSheetOpen = false }) {
+        Column(Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Browser theme", style = MaterialTheme.typography.titleLarge)
+            listOf("system" to "Follow Android IDE theme", "light" to "Light", "dark" to "Dark").forEach { (id, label) ->
+                Row(Modifier.fillMaxWidth().clickable { browser.setTheme(id); themeSheetOpen = false }, verticalAlignment = Alignment.CenterVertically) {
+                    RadioButton(selected = state.settings.theme == id, onClick = null)
+                    Text(label)
+                }
+            }
+        }
+    }
 }
 
 @Composable

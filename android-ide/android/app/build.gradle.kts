@@ -73,9 +73,9 @@ android {
             // Path: app/ -> ../java = android/java/
             // The Kotlin compiler picks up .kt files in java.srcDirs() by convention.
             java.srcDirs("../java")
-            // Monaco editor assets at android/assets/.
-            // Path: app/ -> ../assets = android/assets/
-            assets.srcDirs("../assets")
+            // Editor assets at android/assets/ plus browser devtools at assets/devtools/.
+            // The browser assets live one additional level above the Android project.
+            assets.srcDirs("../assets", "../../assets")
         }
     }
 
@@ -227,6 +227,7 @@ dependencies {
     // ── Lifecycle / ViewModel ──────────────────────────────────────────────
     // viewModel() Compose integration + StateFlow.collectAsState()
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.7.0")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.7.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.7.0")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.7.0")
 

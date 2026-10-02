@@ -881,6 +881,7 @@ private fun SurfaceHost(
         Surface.BROWSER -> BrowserSurface(
             onOpenNavigation = onOpenNavigation,
             onOpenSettings = { onSettingsSection("Browser"); onNavigate(Surface.SETTINGS) },
+            onApplicationBack = { if (!viewModel.back()) viewModel.requestExitConfirmation() },
             modifier = modifier,
         )
         Surface.GIT -> GitSurface(state, viewModel, onOpenNavigation, modifier)

@@ -13,9 +13,13 @@ import android.provider.DocumentsContract
 import android.provider.MediaStore
 import android.view.View
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import org.mozilla.geckoview.GeckoResult
@@ -25,6 +29,7 @@ import org.mozilla.geckoview.GeckoSessionSettings
 import org.mozilla.geckoview.GeckoSession.PermissionDelegate
 import org.mozilla.geckoview.GeckoView
 import org.mozilla.geckoview.WebResponse
+import org.mozilla.geckoview.WebExtension
 import java.io.File
 import java.util.UUID
 
@@ -39,6 +44,7 @@ private const val DOWNLOAD_FOLDER_KEY = "download_folder"
 private const val THEME_KEY = "theme"
 private const val DEVTOOLS_KEY = "developer_tools_enabled"
 private const val DESKTOP_SITE_KEY = "desktop_site_default"
+private const val HISTORY_KEY = "navigation_history"
 private const val DEFAULT_HOME = "about:blank"
 private const val DEFAULT_SEARCH = "duckduckgo"
 
@@ -47,6 +53,7 @@ private data class PendingDuplicateDownload(
     val sourceUrl: String,
     val mimeType: String,
     val body: java.io.InputStream,
+    val totalBytes: Long,
 )
 
 private val SEARCH_ENGINES = mapOf(
@@ -98,14 +105,17 @@ data class BrowserUiState(
     val viewportWidth: Int? = null,
     val downloads: List<BrowserDownload> = emptyList(),
     val settings: BrowserSettings = BrowserSettings(),
+    val history: List<String> = emptyList(),
     val developerToolsOpen: Boolean = false,
     val permissionPrompt: BrowserPermissionPrompt? = null,
     val duplicateDownload: DuplicateDownloadPrompt? = null,
+    val downloadProgress: BrowserDownloadProgress? = null,
     val error: String? = null,
 )
 
 data class BrowserPermissionPrompt(val origin: String, val permission: String)
 data class DuplicateDownloadPrompt(val name: String, val sourceUrl: String, val existingUri: String)
+data class BrowserDownloadProgress(val name: String, val bytes: Long, val totalBytes: Long)
 
 internal data class BrowserTabRuntime(
     val id: String,
@@ -127,7 +137,8 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     private val sessions = linkedMapOf<String, BrowserTabRuntime>()
     private var pendingDuplicateBody: PendingDuplicateDownload? = null
     private var pendingPermissionResult: GeckoResult<Int>? = null
-    private val _uiState = MutableStateFlow(BrowserUiState(settings = readSettings()))
+    private val devtoolsPorts = linkedSetOf<WebExtension.Port>()
+    private val _uiState = MutableStateFlow(BrowserUiState(settings = readSettings(), history = readHistory()))
     val uiState: StateFlow<BrowserUiState> = _uiState.asStateFlow()
 
     init {
@@ -140,7 +151,18 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         runtime.webExtensionController.ensureBuiltIn(
             "resource://android/assets/devtools/",
             "android-ide-devtools@android-ide",
-        ).accept({}, { error -> setError("Developer tools could not be installed: ${error?.message ?: error}") })
+        ).accept({ extension ->
+            extension.setMessageDelegate(object : WebExtension.MessageDelegate {
+                override fun onConnect(port: WebExtension.Port) {
+                    if (port.name != "android-ide") return
+                    devtoolsPorts += port
+                    port.setDelegate(object : WebExtension.PortDelegate {
+                        override fun onDisconnect(port: WebExtension.Port) { devtoolsPorts -= port }
+                    })
+                    runCatching { port.postMessage(JSONObject().put("type", "developer-tools").put("open", _uiState.value.developerToolsOpen)) }
+                }
+            }, "android-ide")
+        }, { error -> setError("Developer tools could not be installed: ${error?.message ?: error}") })
     }
 
     private fun restoreTabs() {
@@ -185,8 +207,8 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         val tab = BrowserTabRuntime(id, session, url, title, sessionState = savedState, viewportWidth = viewportWidth, previewPath = previewPath)
         sessions[id] = tab
         attachDelegates(tab)
-        session.open(runtime)
         savedState?.let { GeckoSession.SessionState.fromString(it)?.let(session::restoreState) }
+        session.open(runtime)
         if (savedState == null || url == DEFAULT_HOME) session.loadUri(url)
         if (select || _uiState.value.selectedTabId == null) selectTab(id) else publish()
     }
@@ -259,11 +281,11 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         val name = response.uri.substringAfterLast('/').substringBefore('?').ifBlank { "download-${System.currentTimeMillis()}" }
         val existing = _uiState.value.downloads.firstOrNull { it.name == name && it.available }
         if (existing != null) {
-            pendingDuplicateBody = PendingDuplicateDownload(name, response.uri, response.headers["Content-Type"] ?: "application/octet-stream", body)
+            pendingDuplicateBody = PendingDuplicateDownload(name, response.uri, response.headers["Content-Type"] ?: "application/octet-stream", body, response.headers["Content-Length"]?.toLongOrNull() ?: -1L)
             _uiState.value = _uiState.value.copy(duplicateDownload = DuplicateDownloadPrompt(name, response.uri, existing.uri))
             return
         }
-        writeDownload(name, response.uri, response.headers["Content-Type"] ?: "application/octet-stream", body)
+        writeDownload(name, response.uri, response.headers["Content-Type"] ?: "application/octet-stream", body, response.headers["Content-Length"]?.toLongOrNull() ?: -1L)
     }
 
     fun confirmDuplicateDownload(replace: Boolean) {
@@ -278,15 +300,15 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
                 setError("The existing downloaded file could not be replaced")
                 return
             }
-            writeDownload(pending.name, pending.sourceUrl, pending.mimeType, pending.body)
+            writeDownload(pending.name, pending.sourceUrl, pending.mimeType, pending.body, pending.totalBytes)
         } else {
             val suffix = prompt.name.substringAfterLast('.', "").let { if (it.isBlank()) "" else ".${it}" }
             val stem = prompt.name.removeSuffix(suffix)
-            writeDownload("$stem (${System.currentTimeMillis()})$suffix", pending.sourceUrl, pending.mimeType, pending.body)
+            writeDownload("$stem (${System.currentTimeMillis()})$suffix", pending.sourceUrl, pending.mimeType, pending.body, pending.totalBytes)
         }
     }
 
-    private fun writeDownload(name: String, sourceUrl: String, mimeType: String, body: java.io.InputStream) {
+    private fun writeDownload(name: String, sourceUrl: String, mimeType: String, body: java.io.InputStream, totalBytes: Long) {
         val resolver = context.contentResolver
         val configuredFolder = _uiState.value.settings.downloadFolder
         val destination = runCatching {
@@ -314,17 +336,39 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
             }
         }.getOrNull()
         if (destination == null) { body.close(); setError("Choose an available download folder in Browser settings"); return }
-        runCatching {
-            resolver.openOutputStream(destination)?.use { output -> body.use { input -> input.copyTo(output) } } ?: error("Destination is not writable")
-            if (configuredFolder == null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) resolver.update(destination, ContentValues().apply { put(MediaStore.Downloads.IS_PENDING, 0) }, null, null)
-            val download = BrowserDownload(UUID.randomUUID().toString(), name, destination.toString(), sourceUrl, mimeType, querySize(destination), System.currentTimeMillis())
-            val updated = _uiState.value.downloads + download
-            _uiState.value = _uiState.value.copy(downloads = updated)
-            persistDownloads(updated)
-        }.onFailure {
-            body.close()
-            resolver.delete(destination, null, null)
-            setError("Download failed: ${it.message}")
+        _uiState.value = _uiState.value.copy(downloadProgress = BrowserDownloadProgress(name, 0L, totalBytes))
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                var copied = 0L
+                resolver.openOutputStream(destination)?.use { output ->
+                    body.use { input ->
+                        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                        while (true) {
+                            val read = input.read(buffer)
+                            if (read < 0) break
+                            if (read == 0) continue
+                            output.write(buffer, 0, read)
+                            copied += read
+                            if (copied == read.toLong() || copied % (256 * 1024) < read) {
+                                withContext(Dispatchers.Main) { _uiState.value = _uiState.value.copy(downloadProgress = BrowserDownloadProgress(name, copied, totalBytes)) }
+                            }
+                        }
+                    }
+                } ?: error("Destination is not writable")
+                if (configuredFolder == null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) resolver.update(destination, ContentValues().apply { put(MediaStore.Downloads.IS_PENDING, 0) }, null, null)
+                val download = BrowserDownload(UUID.randomUUID().toString(), name, destination.toString(), sourceUrl, mimeType, querySize(destination), System.currentTimeMillis())
+                withContext(Dispatchers.Main) {
+                    val updated = _uiState.value.downloads + download
+                    _uiState.value = _uiState.value.copy(downloads = updated, downloadProgress = null)
+                    persistDownloads(updated)
+                }
+            } catch (error: Throwable) {
+                runCatching { resolver.delete(destination, null, null) }
+                withContext(Dispatchers.Main) {
+                    _uiState.value = _uiState.value.copy(downloadProgress = null)
+                    setError("Download failed: ${error.message ?: "unknown error"}")
+                }
+            }
         }
     }
 
@@ -409,6 +453,8 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         val entered = address.trim()
         if (entered.isEmpty()) return
         val target = resolveAddress(entered)
+        val history = (listOf(entered) + _uiState.value.history.filterNot { it == entered }).take(30)
+        preferences.edit().putString(HISTORY_KEY, JSONArray(history).toString()).apply()
         tab.url = target
         tab.session.loadUri(target)
         _uiState.value = _uiState.value.copy(address = target, error = null)
@@ -426,29 +472,49 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
             tab.viewportWidth = width.takeIf { it in 320..2400 }
             persistTabs()
             publish()
+            tab.session.reload()
         }
     }
+
+    fun resetViewport() = setViewportWidth(0)
 
     fun toggleDeveloperTools() {
         val open = !_uiState.value.developerToolsOpen
         _uiState.value = _uiState.value.copy(developerToolsOpen = open)
+        devtoolsPorts.toList().forEach { port ->
+            runCatching { port.postMessage(JSONObject().put("type", "developer-tools").put("open", open)) }
+        }
     }
 
     fun setDeveloperToolsEnabled(enabled: Boolean) {
         updateSettings { it.copy(developerToolsEnabled = enabled) }
         if (!enabled) _uiState.value = _uiState.value.copy(developerToolsOpen = false)
+        if (!enabled) devtoolsPorts.toList().forEach { port -> runCatching { port.postMessage(JSONObject().put("type", "developer-tools").put("open", false)) } }
     }
 
     fun setSearchEngine(engine: String) { updateSettings { it.copy(searchEngine = engine) } }
     fun setCustomSearchUrl(url: String) { updateSettings { it.copy(customSearchUrl = url) } }
     fun setHomePage(url: String) { updateSettings { it.copy(homePage = url.ifBlank { DEFAULT_HOME }) } }
     fun setTheme(theme: String) { updateSettings { it.copy(theme = theme) } }
-    fun setDesktopSiteDefault(enabled: Boolean) { updateSettings { it.copy(desktopSiteDefault = enabled) } }
+    fun setDesktopSiteDefault(enabled: Boolean) {
+        updateSettings { it.copy(desktopSiteDefault = enabled) }
+        sessions[_uiState.value.selectedTabId]?.let { tab ->
+            tab.session.settings.setUserAgentMode(
+                if (enabled) GeckoSessionSettings.USER_AGENT_MODE_DESKTOP else GeckoSessionSettings.USER_AGENT_MODE_MOBILE,
+            )
+            tab.session.reload()
+        }
+    }
+    fun clearHistoryEntry(value: String) {
+        val next = _uiState.value.history.filterNot { it == value }
+        preferences.edit().putString(HISTORY_KEY, JSONArray(next).toString()).apply()
+        _uiState.value = _uiState.value.copy(history = next)
+    }
     fun setDownloadFolder(uri: String?) { updateSettings { it.copy(downloadFolder = uri) } }
     fun clearBrowserData() {
         sessions.values.forEach { it.session.purgeHistory() }
-        preferences.edit().remove(TABS_KEY).remove(DOWNLOADS_KEY).apply()
-        _uiState.value = _uiState.value.copy(downloads = emptyList())
+        preferences.edit().remove(TABS_KEY).remove(DOWNLOADS_KEY).remove(HISTORY_KEY).apply()
+        _uiState.value = _uiState.value.copy(downloads = emptyList(), history = emptyList())
     }
     fun clearError() { _uiState.value = _uiState.value.copy(error = null) }
     fun session(tabId: String): GeckoSession? = sessions[tabId]?.session
@@ -500,6 +566,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
             selectedTabId = selectedId,
             address = selected?.url?.takeUnless { it == DEFAULT_HOME }.orEmpty(),
             viewportWidth = selected?.viewportWidth,
+            history = _uiState.value.history,
         )
     }
 
@@ -520,6 +587,11 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         developerToolsEnabled = preferences.getBoolean(DEVTOOLS_KEY, true),
         desktopSiteDefault = preferences.getBoolean(DESKTOP_SITE_KEY, false),
     )
+
+    private fun readHistory(): List<String> = runCatching {
+        val array = JSONArray(preferences.getString(HISTORY_KEY, "[]"))
+        List(array.length()) { array.getString(it) }.filter(String::isNotBlank)
+    }.getOrDefault(emptyList())
 
     private fun updateSettings(transform: (BrowserSettings) -> BrowserSettings) {
         val next = transform(_uiState.value.settings)

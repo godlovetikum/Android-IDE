@@ -3,7 +3,12 @@
   "name": "Android IDE Developer Tools",
   "version": "1.0.0",
   "description": "Built-in page developer tools for Android IDE browser tabs.",
-  "permissions": ["<all_urls>"],
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "android-ide-devtools@android-ide"
+    }
+  },
+  "permissions": ["<all_urls>", "nativeMessaging"],
   "content_scripts": [{
     "matches": ["<all_urls>"],
     "js": ["eruda.js", "devtools.js"],

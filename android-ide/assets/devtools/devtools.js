@@ -7,5 +7,13 @@
       useShadowDom: true,
       defaults: { displaySize: 50, transparency: 0.9 }
     });
+    window.eruda.hide();
+    const nativePort = browser.runtime.connectNative('android-ide');
+    nativePort.onMessage.addListener(message => {
+      if (message && message.type === 'developer-tools') {
+        if (message.open) window.eruda.show();
+        else window.eruda.hide();
+      }
+    });
   }
 })();

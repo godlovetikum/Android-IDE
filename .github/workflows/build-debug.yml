@@ -99,4 +99,5 @@ jobs:
         with:
           name: android-ide-debug
           path: android-ide/android/app/build/outputs/apk/debug/*.apk
+          compression-level: 9
           retention-days: 7
