@@ -1226,11 +1226,7 @@ private fun FileTypeBadge(displayName: String, muted: Boolean, accent: Boolean) 
         modifier = Modifier.size(24.dp),
     ) {
         Box(contentAlignment = Alignment.Center) {
-            if (kind == FileIconKind.IMAGE || kind == FileIconKind.TEXT || kind == FileIconKind.GENERIC) {
-                Icon(icon, contentDescription = "$label file", tint = badgeForeground, modifier = Modifier.size(15.dp))
-            } else {
-                Text(label, color = badgeForeground, fontSize = 7.sp, fontWeight = FontWeight.Bold, maxLines = 1)
-            }
+            Icon(icon, contentDescription = "$label file", tint = badgeForeground, modifier = Modifier.size(15.dp))
         }
     }
 }

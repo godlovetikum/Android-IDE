@@ -15,13 +15,6 @@
 //   Removed: NDK ABI filters, jniLibs source set, no-op dependencies block.
 //   Added: Kotlin plugin, Compose build feature, Material3 + ViewModel deps.
 //
-// APK signing:
-//   Debug:   auto-generated Android SDK debug keystore — always available.
-//   Release: reads four GitHub Secrets (KEYSTORE_BASE64, KEYSTORE_PASSWORD,
-//            KEY_ALIAS, KEY_PASSWORD). When any secret is absent (local dev,
-//            fork PRs), falls back to the debug keystore automatically.
-//   See the signingConfigs block below for setup instructions.
-
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -41,12 +34,12 @@ val prepareTermuxBootstrap = tasks.register<Exec>("prepareTermuxBootstrap") {
 tasks.named("preBuild").configure { dependsOn(prepareTermuxBootstrap) }
 
 android {
-    namespace = "dev.android.ide"
+    namespace = "com.termux"
     compileSdk = 34
     ndkVersion = "22.1.7171670"
 
     defaultConfig {
-        applicationId = "dev.android.ide"
+        applicationId = "com.termux"
         minSdk = 26
         // Termux's writable private runtime requires the Android 10 compatibility
         // behavior: target API 29+ denies execve() from the app home directory.
@@ -79,32 +72,6 @@ android {
         }
     }
 
-    // ── APK Signing ─────────────────────────────────────────────────────────
-    //
-    // Release signing setup (one-time, per project):
-    //
-    //   1. Generate a release keystore:
-    //        keytool -genkeypair -v \
-    //          -keystore release.keystore \
-    //          -alias android-ide-release \
-    //          -keyalg RSA -keysize 4096 -validity 10000 \
-    //          -storepass <storePassword> -keypass <keyPassword> \
-    //          -dname "CN=Android IDE, O=YourOrg, C=US"
-    //
-    //   2. Base64-encode the keystore file (no line wrapping):
-    //        base64 -w 0 release.keystore > release.keystore.b64
-    //        # macOS: base64 -i release.keystore -o release.keystore.b64
-    //
-    //   3. Add four GitHub repository secrets (Settings → Secrets → Actions):
-    //        KEYSTORE_BASE64     — contents of release.keystore.b64
-    //        KEYSTORE_PASSWORD   — storePassword used in step 1
-    //        KEY_ALIAS           — android-ide-release (or whatever alias you used)
-    //        KEY_PASSWORD        — keyPassword used in step 1
-    //
-    // When the four secrets are present, assembleRelease produces a
-    // production-signed APK. When they are absent (fork CI, local dev),
-    // the release build automatically falls back to the debug keystore so
-    // the pipeline does not fail.
     signingConfigs {
         getByName("debug") {
             // Standard Android SDK debug keystore — created automatically on
@@ -115,36 +82,6 @@ android {
             keyPassword   = "android"
         }
 
-        create("release") {
-            // Use takeIf { isNotBlank() } on every env var so that an unset
-            // GitHub Actions secret (which expands to "", not null) is treated
-            // as absent and the build falls back to the debug keystore.
-            // Without this guard, an empty KEY_PASSWORD causes Gradle to call
-            // KeyStore.getKey(alias, charArrayOf()) which throws
-            // KeytoolException("Failed to read key … : null") at packageRelease.
-            val spwd  = System.getenv("KEYSTORE_PASSWORD")?.takeIf { it.isNotBlank() }
-            val alias = System.getenv("KEY_ALIAS")?.takeIf { it.isNotBlank() }
-            val kpwd  = System.getenv("KEY_PASSWORD")?.takeIf { it.isNotBlank() }
-
-            val releaseKeystore = file("${rootDir}/release.keystore")
-
-            if (
-                releaseKeystore.exists() &&
-                spwd != null &&
-                alias != null &&
-                kpwd != null
-            ) {
-                storeFile = releaseKeystore
-                storePassword = spwd
-                keyAlias = alias
-                keyPassword = kpwd
-            } else {
-                storeFile = file("${System.getProperty("user.home")}/.android/debug.keystore")
-                storePassword = "android"
-                keyAlias = "androiddebugkey"
-                keyPassword = "android"
-            }
-        }
     }
 
     compileOptions {
@@ -176,20 +113,12 @@ android {
             isDebuggable   = true
             isMinifyEnabled = false
         }
-        release {
-            signingConfig  = signingConfigs.getByName("release")
-            isMinifyEnabled = false
-        }
     }
 
     lint {
-        // SigningRelease warns when a release build uses the debug keystore.
-        // Suppressed here because the debug-keystore fallback in signingConfigs
-        // is intentional (fires on fork PRs and local dev without secrets).
-        disable += "SigningRelease"
-        // This project distributes direct APKs rather than through Google Play.
-        // Target API 28 is intentional: the bundled writable Termux runtime
-        // depends on Android's pre-29 app-home execution compatibility behavior.
+        // Target API 28 is intentional for this experiment: the bundled
+        // writable Termux runtime depends on Android's pre-29 app-home
+        // execution compatibility behavior.
         disable += "ExpiredTargetSdkVersion"
     }
 }

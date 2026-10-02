@@ -1,6 +1,6 @@
 package com.termux.view.textselection;
 
-import dev.android.ide.R;
+import com.termux.R;
 
 import android.annotation.SuppressLint;
 import android.graphics.Canvas;

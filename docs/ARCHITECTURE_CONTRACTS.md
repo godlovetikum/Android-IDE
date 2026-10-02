@@ -6,7 +6,7 @@
 
 ## 1. Goal and active references
 
-The goal of this contract set is to remove ownership, storage, navigation, lifecycle, provider, and identity ambiguity before expanding feature code. The active references are the approved product definition, approved provider research, approved implementation roadmap, and implementation guidance. Documents under `docs/archive/` are historical and do not override these references.
+The goal of this contract set is to remove ownership, storage, navigation, lifecycle, provider, and identity ambiguity before expanding feature code. The active references are the approved product definition, approved provider research, approved implementation roadmap, status tracker, and Termux filesystem concept report.
 
 ## 2. State ownership matrix
 

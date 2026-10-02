@@ -84,7 +84,7 @@
         -->
         <provider
             android:name="dev.android.ide.saf.AndroidIdeDocumentsProvider"
-            android:authorities="dev.android.ide.documents"
+            android:authorities="com.termux.documents"
             android:exported="true"
             android:grantUriPermissions="true"
             android:permission="android.permission.MANAGE_DOCUMENTS">

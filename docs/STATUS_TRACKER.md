@@ -9,10 +9,10 @@ The active canonical documents are:
 - `docs/ANDROID_IDE_PRODUCT_DEFINITION_APPROVED.md`
 - `docs/ANDROID_IDE_PROVIDER_RESEARCH_APPROVED.md`
 - `docs/ANDROID_IDE_IMPLEMENTATION_ROADMAP_APPROVED.md`
-- `docs/PHASE_0_IMPLEMENTATION_GUIDANCE.md`
 - `docs/ARCHITECTURE_CONTRACTS.md`
+- `docs/TERMUX_PROJECT_FILESYSTEM_CONCEPT_REPORT.md`
 
-Superseded planning notes, earlier research reports, and working versions are retained under `docs/archive/` for traceability. They are not active implementation guidance.
+Superseded planning notes, earlier research reports, and working versions are intentionally absent from this experiment branch. The retained documents above are the only product and architecture references for this source tree.
 
 ## Completed discovery gate
 
@@ -24,15 +24,15 @@ The approved roadmap establishes the implementation order and acceptance gates. 
 
 ## Architecture contract status
 
-Phase 0 contract/bootstrap work is complete on the `dev` branch. The accepted contract set records state ownership, storage authority, project-location capability rules, navigation and restoration behavior, lifecycle and session semantics, provider adapter boundaries, shared events, operation outcomes, error categories, and the identity migration decision. This is not a claim that later runtime, editor, browser, Git, or project-management gates are complete.
+Phase 0 contract/bootstrap work is complete on the `dev` branch. The accepted contract set records state ownership, storage authority, project-location capability rules, navigation and restoration behavior, lifecycle and session semantics, provider adapter boundaries, shared events, operation outcomes, error categories, and the identity decision. This is not a claim that later runtime, editor, browser, Git, or project-management gates are complete.
 
 The Kotlin contract types are in `android-ide/android/java/dev/android/ide/contracts/ApplicationContracts.kt`. They are provider-neutral and do not claim that any runtime, editor, browser, Git, language-intelligence, credentials, or extension feature is implemented.
 
-The identity migration from `dev.androidide` / `.androidide` to `dev.android.ide` / `.dev-android-ide` is implemented as a one-way acquisition/opening migration. The target directory is checked first; if absent, legacy files are copied into it and the legacy directory is deleted only after successful migration. All later reads and writes use only `.dev-android-ide`.
+The `test` branch experiment uses the upstream `com.termux` application identity and private `files/usr` / `files/home` layout. Runtime installation intentionally has no legacy directory migration or fallback. Any remaining project-metadata compatibility code must be removed before this branch is treated as an exact no-migration experiment.
 
 ## Application foundation entry status
 
-The architecture contracts and identity prerequisite are complete. The application-foundation implementation is complete at source level; its behavioral gate remains unverified until the repository workflow runs on Android tooling.
+The architecture contracts and identity prerequisite are complete. The application-foundation implementation is complete at source level; its behavioral gate remains unverified until the repository workflow runs on Android tooling. On this experiment branch, the identity prerequisite means the upstream `com.termux` application identity and private `files/usr` / `files/home` layout, with no legacy migration or fallback.
 
 Phase 0 must finalize or record the following contracts:
 

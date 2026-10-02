@@ -8,7 +8,8 @@ import android.os.CancellationSignal
 import android.os.ParcelFileDescriptor
 import android.provider.DocumentsContract
 import android.provider.DocumentsProvider
-import dev.android.ide.R
+import android.text.format.Formatter
+import com.termux.R
 import java.io.File
 import java.io.FileNotFoundException
 import java.io.IOException
@@ -46,7 +47,7 @@ class AndroidIdeDocumentsProvider : DocumentsProvider() {
             DocumentsContract.Root.COLUMN_ROOT_ID to ROOT_ID,
             DocumentsContract.Root.COLUMN_DOCUMENT_ID to ROOT_DOCUMENT_ID,
             DocumentsContract.Root.COLUMN_TITLE to "Android IDE",
-            DocumentsContract.Root.COLUMN_SUMMARY to "Development files accessible through SAF",
+            DocumentsContract.Root.COLUMN_SUMMARY to availableSpaceSummary(),
             DocumentsContract.Root.COLUMN_FLAGS to (
                 DocumentsContract.Root.FLAG_SUPPORTS_CREATE or
                     DocumentsContract.Root.FLAG_SUPPORTS_IS_CHILD or
@@ -204,16 +205,19 @@ class AndroidIdeDocumentsProvider : DocumentsProvider() {
     private fun resolveProjection(projection: Array<out String>?, defaults: Array<String>): Array<String> =
         projection?.toList()?.toTypedArray() ?: defaults
 
+    private fun availableSpaceSummary(): String =
+        "${Formatter.formatFileSize(requireNotNull(context), rootDirectory.usableSpace)} available"
+
     private fun MatrixCursor.addProjectedRow(columns: Array<String>, values: Map<String, Any?>) {
         addRow(columns.map { column -> values[column] }.toTypedArray())
     }
 
     companion object {
-        const val AUTHORITY = "dev.android.ide.documents"
-        const val ROOT_ID = "android-ide-files"
+        const val AUTHORITY = "com.termux.documents"
+        const val ROOT_ID = "home"
         const val ROOT_DOCUMENT_ID = "root"
         private const val FILE_DOCUMENT_ID_PREFIX = "file:"
-        const val USER_FILES_DIRECTORY = "android-ide-files"
+        const val USER_FILES_DIRECTORY = "home"
 
         fun isProviderUri(uriString: String): Boolean =
             Uri.parse(uriString).authority == AUTHORITY

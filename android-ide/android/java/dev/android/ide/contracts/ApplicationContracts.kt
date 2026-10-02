@@ -396,8 +396,8 @@ sealed interface ApplicationEvent {
 }
 
 object ApplicationIdentity {
-    const val TARGET_APPLICATION_ID = "dev.android.ide"
+    const val TARGET_APPLICATION_ID = "com.termux"
     const val TARGET_METADATA_DIRECTORY = ".dev-android-ide"
-    const val LEGACY_APPLICATION_ID = "dev.androidide"
+    const val LEGACY_APPLICATION_ID = "dev.android.ide"
     const val LEGACY_METADATA_DIRECTORY = ".androidide"
 }

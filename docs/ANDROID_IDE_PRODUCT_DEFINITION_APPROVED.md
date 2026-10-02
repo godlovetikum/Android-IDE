@@ -535,5 +535,3 @@ Cloud-backed or remote document locations are not supported as live editable pro
 This document defines the intended product behavior and ownership rules. It does not define final source architecture, data schemas, provider libraries, runtime implementation, or test code.
 
 Before implementation begins for a domain, its behavior must be converted into a focused plan. Development must target one subsystem at a time, avoid broad rewrites, document risks, and test each domain independently before cross-domain integration.
-
-The working draft remains open for clarification. Once the product definition is agreed, a finalized product-definition document should be created and implementation planning should reference that document rather than this working draft.
