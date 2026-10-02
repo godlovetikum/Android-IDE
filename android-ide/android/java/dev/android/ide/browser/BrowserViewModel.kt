@@ -9,6 +9,8 @@ import android.graphics.Canvas
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
+import android.os.Handler
+import android.os.Looper
 import android.provider.DocumentsContract
 import android.provider.MediaStore
 import android.view.View
@@ -152,16 +154,18 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
             "resource://android/assets/devtools/",
             "android-ide-devtools@android-ide",
         ).accept({ extension ->
-            extension.setMessageDelegate(object : WebExtension.MessageDelegate {
-                override fun onConnect(port: WebExtension.Port) {
-                    if (port.name != "android-ide") return
-                    devtoolsPorts += port
-                    port.setDelegate(object : WebExtension.PortDelegate {
-                        override fun onDisconnect(port: WebExtension.Port) { devtoolsPorts -= port }
-                    })
-                    runCatching { port.postMessage(JSONObject().put("type", "developer-tools").put("open", _uiState.value.developerToolsOpen)) }
-                }
-            }, "android-ide")
+            Handler(Looper.getMainLooper()).post {
+                extension?.setMessageDelegate(object : WebExtension.MessageDelegate {
+                    override fun onConnect(port: WebExtension.Port) {
+                        if (port.name != "android-ide") return
+                        devtoolsPorts += port
+                        port.setDelegate(object : WebExtension.PortDelegate {
+                            override fun onDisconnect(port: WebExtension.Port) { devtoolsPorts -= port }
+                        })
+                        runCatching { port.postMessage(JSONObject().put("type", "developer-tools").put("open", _uiState.value.developerToolsOpen)) }
+                    }
+                }, "android-ide")
+            }
         }, { error -> setError("Developer tools could not be installed: ${error?.message ?: error}") })
     }
 

@@ -31,6 +31,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DeveloperMode
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
@@ -104,7 +105,6 @@ fun BrowserSurface(
     var errorVisible by remember { mutableStateOf(false) }
     var previousScrollY by remember { mutableIntStateOf(0) }
     var tabSearchQuery by remember { mutableStateOf("") }
-    val density = LocalDensity.current
     val visibleGeckoView = remember { mutableStateOf<org.mozilla.geckoview.GeckoView?>(null) }
 
     LaunchedEffect(state.address) { addressText = state.address }
@@ -164,6 +164,7 @@ private fun BrowserSurfaceContent(
     previousScrollY: Int,
     setPreviousScrollY: (Int) -> Unit,
 ) {
+    val density = LocalDensity.current
     Column(modifier.fillMaxSize()) {
         TopAppBar(
             title = { Text("Android IDE Browser") },
