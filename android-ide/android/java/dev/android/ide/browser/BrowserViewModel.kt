@@ -22,8 +22,8 @@ import org.mozilla.geckoview.GeckoResult
 import org.mozilla.geckoview.GeckoRuntime
 import org.mozilla.geckoview.GeckoSession
 import org.mozilla.geckoview.GeckoSessionSettings
+import org.mozilla.geckoview.GeckoSession.PermissionDelegate
 import org.mozilla.geckoview.GeckoView
-import org.mozilla.geckoview.PermissionDelegate
 import org.mozilla.geckoview.WebResponse
 import java.io.File
 import java.util.UUID
@@ -140,7 +140,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         runtime.webExtensionController.ensureBuiltIn(
             "resource://android/assets/devtools/",
             "android-ide-devtools@android-ide",
-        ).accept({}, { error -> setError("Developer tools could not be installed: ${error.message}") })
+        ).accept({}, { error -> setError("Developer tools could not be installed: ${error?.message ?: error}") })
     }
 
     private fun restoreTabs() {
@@ -259,11 +259,11 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         val name = response.uri.substringAfterLast('/').substringBefore('?').ifBlank { "download-${System.currentTimeMillis()}" }
         val existing = _uiState.value.downloads.firstOrNull { it.name == name && it.available }
         if (existing != null) {
-            pendingDuplicateBody = PendingDuplicateDownload(name, response.uri, response.contentType ?: "application/octet-stream", body)
+            pendingDuplicateBody = PendingDuplicateDownload(name, response.uri, response.headers["Content-Type"] ?: "application/octet-stream", body)
             _uiState.value = _uiState.value.copy(duplicateDownload = DuplicateDownloadPrompt(name, response.uri, existing.uri))
             return
         }
-        writeDownload(name, response.uri, response.contentType ?: "application/octet-stream", body)
+        writeDownload(name, response.uri, response.headers["Content-Type"] ?: "application/octet-stream", body)
     }
 
     fun confirmDuplicateDownload(replace: Boolean) {
@@ -547,8 +547,6 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         PermissionDelegate.PERMISSION_DESKTOP_NOTIFICATION -> "notifications"
         PermissionDelegate.PERMISSION_PERSISTENT_STORAGE -> "persistent storage"
         PermissionDelegate.PERMISSION_AUTOPLAY_AUDIBLE, PermissionDelegate.PERMISSION_AUTOPLAY_INAUDIBLE -> "autoplay"
-        PermissionDelegate.PERMISSION_LOCAL_DEVICE_ACCESS -> "local device access"
-        PermissionDelegate.PERMISSION_LOCAL_NETWORK_ACCESS -> "local network access"
         else -> "additional site access"
     }
 

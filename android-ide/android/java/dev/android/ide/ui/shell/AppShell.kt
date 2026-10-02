@@ -261,6 +261,7 @@ fun AppShell(
             },
             onFeedback = { phaseFeedback = it },
             settingsSection = settingsSection,
+            onSettingsSection = { section -> settingsSection = section },
             onSettingsSectionConsumed = { settingsSection = null },
             editorPanelRequest = editorPanelRequest,
             crashReports = crashReports,
@@ -834,6 +835,7 @@ private fun SurfaceHost(
     onOpenNavigation: () -> Unit,
     onFeedback: (String) -> Unit,
     settingsSection: String?,
+    onSettingsSection: (String) -> Unit,
     onSettingsSectionConsumed: () -> Unit,
     editorPanelRequest: Long,
     crashReports: List<CrashReportSummary>,
@@ -878,7 +880,7 @@ private fun SurfaceHost(
         Surface.TERMINAL -> TerminalSurface(state, viewModel, onOpenNavigation, modifier)
         Surface.BROWSER -> BrowserSurface(
             onOpenNavigation = onOpenNavigation,
-            onOpenSettings = { settingsSection = "Browser"; onNavigate(Surface.SETTINGS) },
+            onOpenSettings = { onSettingsSection("Browser"); onNavigate(Surface.SETTINGS) },
             modifier = modifier,
         )
         Surface.GIT -> GitSurface(state, viewModel, onOpenNavigation, modifier)

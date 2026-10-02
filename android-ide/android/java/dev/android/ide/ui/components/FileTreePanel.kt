@@ -84,6 +84,7 @@ import dev.android.ide.viewmodel.model.FileNode
 import dev.android.ide.viewmodel.model.FileSearchResult
 import dev.android.ide.viewmodel.model.ancestorsOf
 import compose.icons.SimpleIcons
+import compose.icons.simpleicons.*
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -809,6 +810,7 @@ private fun FilenameSearchPanel(
 }
 
 @Composable
+@OptIn(ExperimentalFoundationApi::class)
 private fun ProjectContentSearchPanel(
     query: String,
     results: List<FileSearchResult>,
@@ -1054,7 +1056,7 @@ private fun FileTypeBadge(displayName: String, muted: Boolean, accent: Boolean) 
         fileName == "supabase.json" -> SimpleIcons.Supabase
         fileName == "dockerfile" || fileName == "containerfile" || fileName.startsWith("docker-compose") -> SimpleIcons.Docker
         fileName == "webpack.config.js" || fileName == "webpack.config.ts" || fileName == "webpack.config.cjs" -> SimpleIcons.Webpack
-        fileName == "rollup.config.js" || fileName == "rollup.config.ts" -> SimpleIcons.Rollup
+        fileName == "rollup.config.js" || fileName == "rollup.config.ts" -> SimpleIcons.RollupDotJs
         fileName == "babel.config.js" || fileName == "babel.config.cjs" || fileName == ".babelrc" -> SimpleIcons.Babel
         fileName == "tailwind.config.js" || fileName == "tailwind.config.ts" || fileName == "tailwind.config.cjs" -> SimpleIcons.Tailwindcss
         fileName == "build.gradle" || fileName == "build.gradle.kts" || fileName == "settings.gradle" || fileName == "settings.gradle.kts" || fileName == "gradle.properties" || fileName == "gradlew" || fileName == "gradlew.bat" -> SimpleIcons.Gradle
@@ -1090,7 +1092,7 @@ private fun FileTypeBadge(displayName: String, muted: Boolean, accent: Boolean) 
         FileIconKind.PYTHON -> SimpleIcons.Python
         FileIconKind.GRADLE -> SimpleIcons.Gradle
         FileIconKind.GRAPHQL -> SimpleIcons.Graphql
-        FileIconKind.MAKE -> SimpleIcons.Make
+        FileIconKind.MAKE -> SimpleIcons.Gnu
         FileIconKind.CMAKE -> SimpleIcons.Cmake
         FileIconKind.DART -> SimpleIcons.Dart
         FileIconKind.LUA -> SimpleIcons.Lua

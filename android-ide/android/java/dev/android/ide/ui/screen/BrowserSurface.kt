@@ -100,7 +100,7 @@ fun BrowserSurface(
     var errorVisible by remember { mutableStateOf(false) }
     var previousScrollY by remember { mutableIntStateOf(0) }
     var tabSearchQuery by remember { mutableStateOf("") }
-    var visibleGeckoView by remember { mutableStateOf<org.mozilla.geckoview.GeckoView?>(null) }
+    val visibleGeckoView = remember { mutableStateOf<org.mozilla.geckoview.GeckoView?>(null) }
 
     LaunchedEffect(state.address) { addressText = state.address }
     LaunchedEffect(state.error) { if (state.error != null) errorVisible = true }
@@ -112,9 +112,9 @@ fun BrowserSurface(
         else -> null
     }
     if (browserColorScheme != null) MaterialTheme(colorScheme = browserColorScheme) {
-        BrowserSurfaceContent(modifier, state, browser, addressText, { addressText = it }, { browser.createTab() }, { state.selectedTabId?.let { browser.captureTabPreview(it, visibleGeckoView) }; tabsOpen = true }, { onOpenNavigation() }, { onOpenSettings() }, tabSearchQuery, { tabSearchQuery = it }, { urlRowVisible = it }, urlRowVisible, menuOpen, { menuOpen = it }, tabsOpen, { tabsOpen = it }, downloadsOpen, { downloadsOpen = it }, viewportOpen, { viewportOpen = it }, viewportText, { viewportText = it }, viewportError, { viewportError = it }, errorVisible, { errorVisible = it }, previousScrollY, { previousScrollY = it })
+        BrowserSurfaceContent(modifier, state, browser, visibleGeckoView, addressText, { addressText = it }, { browser.createTab() }, { state.selectedTabId?.let { browser.captureTabPreview(it, visibleGeckoView.value) }; tabsOpen = true }, { onOpenNavigation() }, { onOpenSettings() }, tabSearchQuery, { tabSearchQuery = it }, { urlRowVisible = it }, urlRowVisible, menuOpen, { menuOpen = it }, tabsOpen, { tabsOpen = it }, downloadsOpen, { downloadsOpen = it }, viewportOpen, { viewportOpen = it }, viewportText, { viewportText = it }, viewportError, { viewportError = it }, errorVisible, { errorVisible = it }, previousScrollY, { previousScrollY = it })
     } else {
-        BrowserSurfaceContent(modifier, state, browser, addressText, { addressText = it }, { browser.createTab() }, { state.selectedTabId?.let { browser.captureTabPreview(it, visibleGeckoView) }; tabsOpen = true }, { onOpenNavigation() }, { onOpenSettings() }, tabSearchQuery, { tabSearchQuery = it }, { urlRowVisible = it }, urlRowVisible, menuOpen, { menuOpen = it }, tabsOpen, { tabsOpen = it }, downloadsOpen, { downloadsOpen = it }, viewportOpen, { viewportOpen = it }, viewportText, { viewportText = it }, viewportError, { viewportError = it }, errorVisible, { errorVisible = it }, previousScrollY, { previousScrollY = it })
+        BrowserSurfaceContent(modifier, state, browser, visibleGeckoView, addressText, { addressText = it }, { browser.createTab() }, { state.selectedTabId?.let { browser.captureTabPreview(it, visibleGeckoView.value) }; tabsOpen = true }, { onOpenNavigation() }, { onOpenSettings() }, tabSearchQuery, { tabSearchQuery = it }, { urlRowVisible = it }, urlRowVisible, menuOpen, { menuOpen = it }, tabsOpen, { tabsOpen = it }, downloadsOpen, { downloadsOpen = it }, viewportOpen, { viewportOpen = it }, viewportText, { viewportText = it }, viewportError, { viewportError = it }, errorVisible, { errorVisible = it }, previousScrollY, { previousScrollY = it })
     }
 }
 
@@ -124,6 +124,7 @@ private fun BrowserSurfaceContent(
     modifier: Modifier,
     state: dev.android.ide.browser.BrowserUiState,
     browser: BrowserViewModel,
+    visibleGeckoView: androidx.compose.runtime.MutableState<org.mozilla.geckoview.GeckoView?>,
     addressText: String,
     setAddressText: (String) -> Unit,
     createTab: () -> Unit,
@@ -233,8 +234,8 @@ private fun BrowserSurfaceContent(
                     factory = { browserContext ->
                         SwipeRefreshLayout(browserContext).apply {
                             val geckoView = org.mozilla.geckoview.GeckoView(browserContext)
-                            visibleGeckoView = geckoView
-                            addView(geckoView, SwipeRefreshLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+                            visibleGeckoView.value = geckoView
+                            addView(geckoView, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
                             setOnRefreshListener {
                                 isRefreshing = true
                                 browser.reload()
@@ -244,7 +245,7 @@ private fun BrowserSurfaceContent(
                     update = { refreshContainer ->
                         val view = refreshContainer.getChildAt(0) as? org.mozilla.geckoview.GeckoView
                         if (view != null) {
-                            visibleGeckoView = view
+                            visibleGeckoView.value = view
                             browser.bind(view, tabId) { scrollY ->
                                 setUrlRowVisible(when {
                                     scrollY <= 0 -> true
