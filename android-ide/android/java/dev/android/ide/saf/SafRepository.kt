@@ -1052,6 +1052,73 @@ class SafRepository(private val context: Context) {
         }
 
     /**
+     * Returns true when [candidateUriString] is the same directory as, or
+     * appears below, [rootUriString]. Null means the provider could not be
+     * inspected safely.
+     *
+     * This is a storage primitive: project services use it for containment
+     * policy, while SAF remains responsible for resolving provider identity
+     * and inspecting descendants.
+     */
+    suspend fun isSameOrDescendant(
+        rootUriString: String,
+        candidateUriString: String,
+    ): Boolean? = withContext(Dispatchers.IO) {
+        val rootPath = localFilesystemPath(rootUriString)
+        val candidatePath = localFilesystemPath(candidateUriString)
+        if (rootPath != null && candidatePath != null) {
+            val root = runCatching { File(rootPath).canonicalFile }.getOrNull()
+                ?: return@withContext null
+            val candidate = runCatching { File(candidatePath).canonicalFile }.getOrNull()
+                ?: return@withContext null
+            return@withContext candidate == root || candidate.toPath().startsWith(root.toPath())
+        }
+
+        val rootUri = Uri.parse(rootUriString)
+        val candidateUri = Uri.parse(candidateUriString)
+        if (rootUri.scheme != candidateUri.scheme || rootUri.authority != candidateUri.authority) {
+            return@withContext false
+        }
+
+        fun identity(uriString: String): String? = runCatching {
+            val uri = Uri.parse(uriString)
+            val authority = uri.authority ?: return@runCatching null
+            val documentId = when {
+                DocumentsContract.isDocumentUri(context, uri) -> DocumentsContract.getDocumentId(uri)
+                DocumentsContract.isTreeUri(uri) -> DocumentsContract.getTreeDocumentId(uri)
+                else -> DocumentsContract.getDocumentId(uri)
+            }
+            "$authority:$documentId"
+        }.getOrNull()
+
+        val candidateIdentity = identity(candidateUriString) ?: return@withContext null
+        val visited = mutableSetOf<String>()
+
+        suspend fun contains(directoryUri: String): Boolean? {
+            val directoryIdentity = identity(directoryUri) ?: return null
+            if (!visited.add(directoryIdentity)) return false
+            if (directoryIdentity == candidateIdentity) return true
+            val children = when (val inspection = inspectChildren(directoryUri)) {
+                is ChildrenInspectionResult.Success -> inspection.children
+                is ChildrenInspectionResult.Failed -> return null
+            }
+            for (child in children) {
+                if (identity(child.documentUri) == candidateIdentity) return true
+                if (child.isDirectory) {
+                    when (val found = contains(child.documentUri)) {
+                        true -> return true
+                        null -> return null
+                        false -> Unit
+                    }
+                }
+            }
+            return false
+        }
+
+        contains(rootUriString)
+    }
+
+    /**
      * Calculate recursive statistics for a directory. A failed provider
      * inspection returns null instead of reporting a misleading partial total.
      */
