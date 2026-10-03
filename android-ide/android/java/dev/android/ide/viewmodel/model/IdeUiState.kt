@@ -171,18 +171,6 @@ data class IdeUiState(
      */
     val showExitConfirmation: Boolean = false,
 
-    // ── Remove project confirmation ─────────────────────────────────────────
-    /**
-     * Non-null when the user has requested to remove a project from the registry.
-     * The value is the project URI pending removal.
-     * Triggers the remove confirmation dialog.
-     */
-    val confirmRemoveProjectUri: String? = null,
-
-    /** URI and one-time code for permanent project deletion. */
-    val confirmDeleteProjectUri: String? = null,
-    val confirmDeleteProjectCode: String? = null,
-
     /** Non-null when switching projects requires a dirty-tab decision. */
     val projectSwitchRequest: ProjectSwitchRequest? = null,
 

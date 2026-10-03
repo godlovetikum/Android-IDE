@@ -11,7 +11,7 @@
 //   Document URI: content://com.android.externalstorage.documents/document/primary%3AMyProject%2FMain.kt
 //
 // Usage:
-//   Instantiate once in IdeViewModel (which holds Application context).
+//   SafRepository owns provider access; FileManagementService is the shared mutation boundary.
 //   All methods are safe to call concurrently from Dispatchers.IO.
 
 package dev.android.ide.saf
@@ -23,12 +23,10 @@ import android.os.Environment
 import android.os.FileObserver
 import android.provider.DocumentsContract
 import android.util.Log
-import org.json.JSONObject
 import dev.android.ide.data.model.GitDetails
 import dev.android.ide.data.model.GitRemote
 import dev.android.ide.editor.EditorLanguageRegistry
 import dev.android.ide.editor.FileIconKind
-import dev.android.ide.contracts.ApplicationIdentity
 import dev.android.ide.contracts.CapabilityState
 import dev.android.ide.contracts.ProjectStorageCapabilities
 import dev.android.ide.contracts.ProjectLocation
@@ -63,19 +61,9 @@ sealed class ExactCreateResult {
     data object Failed : ExactCreateResult()
 }
 
-data class ProjectMetadataDirectoryResult(
-    val documentUri: String,
-    val migratedLegacyMetadata: Boolean,
-    val migrationComplete: Boolean,
-)
 
-data class DirectoryStats(
-    val fileCount: Int,
-    val folderCount: Int,
-    val totalBytes: Long,
-)
 
-data class ZipExportResult(
+data class ArchiveWriteResult(
     val fileCount: Int,
     val totalBytes: Long,
 )
@@ -92,7 +80,7 @@ enum class DocumentPresence {
     INACCESSIBLE,
 }
 
-data class ProjectStorageMetadata(
+data class StorageTreeInspection(
     val description: String,
     val creationTimeMs: Long?,
     val lastModifiedTimeMs: Long?,
@@ -125,6 +113,13 @@ class SafRepository(private val context: Context) {
     // ── URI type helpers ───────────────────────────────────────────────────
 
     private fun isFileUri(uriString: String) = uriString.startsWith("file://")
+
+    /** Resolve document identity from the provider contract, never from a path keyword. */
+    private fun documentIdForUri(uri: Uri): String = when {
+        DocumentsContract.isDocumentUri(context, uri) -> DocumentsContract.getDocumentId(uri)
+        DocumentsContract.isTreeUri(uri) -> DocumentsContract.getTreeDocumentId(uri)
+        else -> DocumentsContract.getDocumentId(uri)
+    }
 
     private fun fileFromUri(uriString: String): File? =
         Uri.parse(uriString).path?.let { File(it) }
@@ -296,11 +291,7 @@ class SafRepository(private val context: Context) {
     }
 
     private fun localFileForExternalDocument(uriString: String): File? = runCatching {
-        val documentId = if (DocumentsContract.isTreeUri(Uri.parse(uriString))) {
-            DocumentsContract.getTreeDocumentId(Uri.parse(uriString))
-        } else {
-            DocumentsContract.getDocumentId(Uri.parse(uriString))
-        }
+        val documentId = documentIdForUri(Uri.parse(uriString))
         val volumeId = documentId.substringBefore(':')
         val relative = Uri.decode(documentId.substringAfter(':', ""))
         val volumeRoot = if (volumeId.equals("primary", ignoreCase = true)) {
@@ -383,15 +374,13 @@ class SafRepository(private val context: Context) {
             val treeUri: Uri
             val docId: String
             if (DocumentsContract.isTreeUri(parentUri)) {
-                treeUri = parentUri
-                docId = if (parentUri.pathSegments.contains("document")) {
-                    DocumentsContract.getDocumentId(parentUri)
-                } else {
-                    DocumentsContract.getTreeDocumentId(parentUri)
-                }
+                treeUri = if (DocumentsContract.isDocumentUri(context, parentUri)) {
+                    DocumentsContract.buildTreeDocumentUri(parentUri.authority!!, documentIdForUri(parentUri))
+                } else parentUri
+                docId = documentIdForUri(parentUri)
             } else {
-                treeUri = parentUri
-                docId = DocumentsContract.getDocumentId(parentUri)
+                docId = documentIdForUri(parentUri)
+                treeUri = DocumentsContract.buildTreeDocumentUri(parentUri.authority!!, docId)
             }
 
             val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, docId)
@@ -714,7 +703,7 @@ class SafRepository(private val context: Context) {
             } else {
                 val parentUri = Uri.parse(parentUriString)
                 val docUri = if (DocumentsContract.isTreeUri(parentUri) &&
-                    !parentUri.pathSegments.contains("document")) {
+                    !DocumentsContract.isDocumentUri(context, parentUri)) {
                     DocumentsContract.buildDocumentUriUsingTree(
                         parentUri, DocumentsContract.getTreeDocumentId(parentUri)
                     )
@@ -871,104 +860,6 @@ class SafRepository(private val context: Context) {
         }
     }
 
-    /**
-     * Ensure the target metadata directory exists. Existing legacy metadata is
-     * copied into the target directory and deleted only after migration succeeds.
-     */
-    suspend fun ensureProjectMetadataDirectory(
-        projectRootUriString: String,
-    ): ProjectMetadataDirectoryResult? = withContext(Dispatchers.IO) {
-        val children = (inspectChildren(projectRootUriString) as? ChildrenInspectionResult.Success)
-            ?.children ?: return@withContext null
-        val target = children.firstOrNull {
-            it.isDirectory && it.displayName == ApplicationIdentity.TARGET_METADATA_DIRECTORY
-        }
-        val legacy = children.firstOrNull {
-            it.isDirectory && it.displayName == ApplicationIdentity.LEGACY_METADATA_DIRECTORY
-        }
-        val targetUri = target?.documentUri ?: (createFileWithExactName(
-            projectRootUriString,
-            ApplicationIdentity.TARGET_METADATA_DIRECTORY,
-            "vnd.android.document/directory",
-        ) as? ExactCreateResult.Created)?.documentUri ?: return@withContext null
-        if (legacy == null) {
-            return@withContext ProjectMetadataDirectoryResult(targetUri, false, true)
-        }
-
-        val legacyChildren = (inspectChildren(legacy.documentUri) as? ChildrenInspectionResult.Success)
-            ?.children ?: return@withContext ProjectMetadataDirectoryResult(targetUri, true, false)
-        var complete = true
-        legacyChildren.filterNot { it.isDirectory }.forEach { source ->
-            val bytes = readFile(source.documentUri)
-            val copied = bytes != null && when (
-                val destination = createFileWithExactName(
-                    targetUri,
-                    source.displayName,
-                    source.mimeType,
-                )
-            ) {
-                is ExactCreateResult.Created ->
-                    writeFile(destination.documentUri, bytes) &&
-                        readFile(destination.documentUri)?.contentEquals(bytes) == true
-                ExactCreateResult.Duplicate -> {
-                    val existing = (inspectChildren(targetUri) as? ChildrenInspectionResult.Success)
-                        ?.children
-                        ?.firstOrNull { !it.isDirectory && it.displayName == source.displayName }
-                    existing != null && readFile(existing.documentUri)?.contentEquals(bytes) == true
-                }
-                else -> false
-            }
-            if (!copied) complete = false
-        }
-        if (legacyChildren.any { it.isDirectory }) complete = false
-        val legacyDeleted = complete && deleteChildIfPresent(
-            projectRootUriString,
-            ApplicationIdentity.LEGACY_METADATA_DIRECTORY,
-        )
-        ProjectMetadataDirectoryResult(targetUri, true, complete && legacyDeleted)
-    }
-
-    /** Write a JSON/configuration file under the target metadata directory. */
-    suspend fun writeProjectMetadataFile(
-        projectRootUriString: String,
-        fileName: String,
-        content: String,
-    ): Boolean = withContext(Dispatchers.IO) {
-        val metadata = (inspectChildren(projectRootUriString) as? ChildrenInspectionResult.Success)
-            ?.children?.firstOrNull { it.isDirectory && it.displayName == ApplicationIdentity.TARGET_METADATA_DIRECTORY }
-            ?: return@withContext false
-        val existing = (inspectChildren(metadata.documentUri) as? ChildrenInspectionResult.Success)
-            ?.children?.firstOrNull { !it.isDirectory && it.displayName == fileName }
-        val target = existing?.documentUri ?: (createFileWithExactName(
-            metadata.documentUri,
-            fileName,
-            "application/json",
-        ) as? ExactCreateResult.Created)?.documentUri
-        target != null && writeFile(target, content.toByteArray(Charsets.UTF_8))
-    }
-
-    /** Ensure one-way migration, then read only from the target metadata directory. */
-    suspend fun readProjectMetadataFile(
-        projectRootUriString: String,
-        fileName: String,
-    ): JSONObject? = withContext(Dispatchers.IO) {
-        val migration = ensureProjectMetadataDirectory(projectRootUriString)
-            ?: return@withContext null
-        if (!migration.migrationComplete) return@withContext null
-        val metadataDirectories = (inspectChildren(projectRootUriString) as? ChildrenInspectionResult.Success)
-            ?.children
-            ?.filter { it.isDirectory && it.displayName == ApplicationIdentity.TARGET_METADATA_DIRECTORY }
-            ?: return@withContext null
-        metadataDirectories.forEach { metadata ->
-            val file = (inspectChildren(metadata.documentUri) as? ChildrenInspectionResult.Success)
-                ?.children?.firstOrNull { !it.isDirectory && it.displayName == fileName }
-            val json = file?.let { readFile(it.documentUri)?.toString(Charsets.UTF_8) }
-                ?.let { runCatching { JSONObject(it) }.getOrNull() }
-            if (json != null) return@withContext json
-        }
-        null
-    }
-
     private fun openInputStream(documentUriString: String): InputStream? {
         val localFile = appOwnedLocalFile(documentUriString)
             ?: if (isFileUri(documentUriString)) fileFromUri(documentUriString) else null
@@ -1078,7 +969,7 @@ class SafRepository(private val context: Context) {
      * The traversal is provider-backed and fails closed if any directory cannot
      * be inspected, so a partial scan is never presented as authoritative.
      */
-    suspend fun projectMetadata(rootUriString: String): ProjectStorageMetadata? =
+    suspend fun inspectTree(rootUriString: String): StorageTreeInspection? =
         withContext(Dispatchers.IO) {
             // Keep only the small subset needed by Git inspection. Project size and
             // language totals are accumulated as the provider is walked; source and
@@ -1143,11 +1034,8 @@ class SafRepository(private val context: Context) {
             if (!walk(rootUriString, "", localRoot)) return@withContext null
 
             val rootTimes = rootTimes(rootUriString)
-            val projectJson = readProjectMetadataFile(rootUriString, "project.json")
-            val project = projectJson?.optJSONObject("project")
-
-            ProjectStorageMetadata(
-                description = project?.optString("description", "").orEmpty(),
+            StorageTreeInspection(
+                description = "",
                 creationTimeMs = rootTimes.first,
                 lastModifiedTimeMs = listOfNotNull(
                     rootTimes.second,
@@ -1167,102 +1055,10 @@ class SafRepository(private val context: Context) {
      * Calculate recursive statistics for a directory. A failed provider
      * inspection returns null instead of reporting a misleading partial total.
      */
-    suspend fun directoryStats(rootUriString: String): DirectoryStats? = withContext(Dispatchers.IO) {
-        var fileCount = 0
-        var folderCount = 0
-        var totalBytes = 0L
-
-        suspend fun walk(directoryUri: String): Boolean {
-            val children = when (val inspection = inspectChildren(directoryUri)) {
-                is ChildrenInspectionResult.Success -> inspection.children
-                is ChildrenInspectionResult.Failed -> return false
-            }
-            folderCount += children.count { it.isDirectory }
-            children.forEach { child ->
-                if (child.isDirectory) {
-                    if (!walk(child.documentUri)) return false
-                } else {
-                    fileCount++
-                    totalBytes += child.size.coerceAtLeast(0L)
-                }
-            }
-            return true
-        }
-
-        if (!walk(rootUriString)) return@withContext null
-        DirectoryStats(fileCount, folderCount, totalBytes)
-    }
-
-    /**
-     * Returns true when [candidateUriString] is the same directory as, or
-     * appears below, [rootUriString]. Null means the provider could not be
-     * inspected safely.
-     */
-    suspend fun isSameOrDescendant(
-        rootUriString: String,
-        candidateUriString: String,
-    ): Boolean? = withContext(Dispatchers.IO) {
-        val rootPath = localFilesystemPath(rootUriString)
-        val candidatePath = localFilesystemPath(candidateUriString)
-        if (rootPath != null && candidatePath != null) {
-            val root = runCatching { File(rootPath).canonicalFile }.getOrNull() ?: return@withContext null
-            val candidate = runCatching { File(candidatePath).canonicalFile }.getOrNull() ?: return@withContext null
-            return@withContext candidate == root || candidate.toPath().startsWith(root.toPath())
-        }
-        val rootUri = Uri.parse(rootUriString)
-        val candidateUri = Uri.parse(candidateUriString)
-        if (rootUri.scheme != candidateUri.scheme || rootUri.authority != candidateUri.authority) {
-            return@withContext false
-        }
-
-        fun identity(uriString: String): String? = runCatching {
-            val uri = Uri.parse(uriString)
-            val authority = uri.authority ?: return@runCatching null
-            val documentId = if (DocumentsContract.isTreeUri(uri)) {
-                if (uri.pathSegments.contains("document")) {
-                    DocumentsContract.getDocumentId(uri)
-                } else {
-                    DocumentsContract.getTreeDocumentId(uri)
-                }
-            } else {
-                DocumentsContract.getDocumentId(uri)
-            }
-            "$authority:$documentId"
-        }.getOrNull()
-
-        val candidateIdentity = identity(candidateUriString) ?: return@withContext null
-        val visited = mutableSetOf<String>()
-        suspend fun contains(directoryUri: String): Boolean? {
-            val directoryIdentity = identity(directoryUri) ?: return null
-            if (!visited.add(directoryIdentity)) return false
-            if (directoryIdentity == candidateIdentity) return true
-            val children = when (val inspection = inspectChildren(directoryUri)) {
-                is ChildrenInspectionResult.Success -> inspection.children
-                is ChildrenInspectionResult.Failed -> return null
-            }
-            for (child in children) {
-                if (identity(child.documentUri) == candidateIdentity) return true
-                if (child.isDirectory) {
-                    when (val found = contains(child.documentUri)) {
-                        true -> return true
-                        null -> return null
-                        false -> Unit
-                    }
-                }
-            }
-            return false
-        }
-        contains(rootUriString)
-    }
-
-    /**
-     * Write a directory tree as a ZIP archive to a user-selected destination.
-     * The archive contains the selected directory's contents relative to its root.
-     */
-    suspend fun exportZip(
+    suspend fun writeDirectoryArchive(
         sourceUriString: String,
         destinationUriString: String,
-    ): ZipExportResult? = withContext(Dispatchers.IO) {
+    ): ArchiveWriteResult? = withContext(Dispatchers.IO) {
         val temporaryArchive = try {
             File.createTempFile("android-ide-export-", ".zip", context.cacheDir)
         } catch (e: IOException) {
@@ -1317,7 +1113,7 @@ class SafRepository(private val context: Context) {
             destination.use { output ->
                 temporaryArchive.inputStream().use { input -> input.copyTo(output) }
             }
-            ZipExportResult(fileCount, totalBytes)
+            ArchiveWriteResult(fileCount, totalBytes)
         } catch (e: Exception) {
             Log.e(TAG, "exportZip failed: $sourceUriString → $destinationUriString", e)
             null
@@ -1373,11 +1169,7 @@ class SafRepository(private val context: Context) {
         if (isFileUri(uriString)) return fileFromUri(uriString)?.absolutePath ?: uriString
         return runCatching {
             val uri = Uri.parse(uriString)
-            val documentId = if (DocumentsContract.isTreeUri(uri)) {
-                DocumentsContract.getTreeDocumentId(uri)
-            } else {
-                DocumentsContract.getDocumentId(uri)
-            }
+            val documentId = documentIdForUri(uri)
             Uri.decode(documentId)
         }.getOrElse { uriString }
     }
@@ -1850,25 +1642,6 @@ class SafRepository(private val context: Context) {
             documentPresence(child.documentUri) != DocumentPresence.EXISTS
     }
 
-    /**
-     * Remove only Android IDE-owned portable metadata directories from a project
-     * root. User files and directories are never considered by this operation.
-     */
-    suspend fun deleteProjectMetadataDirectory(projectRootUriString: String): Boolean = withContext(Dispatchers.IO) {
-        val children = (inspectChildren(projectRootUriString) as? ChildrenInspectionResult.Success)
-            ?.children ?: return@withContext false
-        val metadataDirectories = children.filter {
-            it.isDirectory && (
-                it.displayName == ApplicationIdentity.TARGET_METADATA_DIRECTORY ||
-                    it.displayName == ApplicationIdentity.LEGACY_METADATA_DIRECTORY
-                )
-        }
-        metadataDirectories.all { directory ->
-            deleteDocument(directory.documentUri) &&
-                documentPresence(directory.documentUri) != DocumentPresence.EXISTS
-        }
-    }
-
     // ── Rename ─────────────────────────────────────────────────────────────
 
     /**
@@ -1987,11 +1760,7 @@ class SafRepository(private val context: Context) {
     private fun mutationDocumentUri(documentUriString: String): Uri {
         val uri = Uri.parse(documentUriString)
         if (!DocumentsContract.isTreeUri(uri)) return uri
-        val documentId = if (uri.pathSegments.contains("document")) {
-            DocumentsContract.getDocumentId(uri)
-        } else {
-            DocumentsContract.getTreeDocumentId(uri)
-        }
+        val documentId = documentIdForUri(uri)
         return DocumentsContract.buildDocumentUriUsingTree(uri, documentId)
     }
 
@@ -2010,124 +1779,7 @@ class SafRepository(private val context: Context) {
         }
     }
 
-    // ── Project-path resolution ───────────────────────────────────────────────
 
-    /**
-     * Walk [segments] from [treeUriString], creating intermediate directories as
-     * needed. Returns [Pair(parentDirUri, leafName)] so the caller can create or
-     * check for the final path component without creating it here.
-     * Returns null on any SAF failure.
-     *
-     * Example: resolveOrCreatePath(rootUri, ["src","utils","Foo.kt"])
-     *   → ensures src/ and src/utils/ exist, returns (src/utils URI, "Foo.kt")
-     */
-    suspend fun resolveOrCreatePath(
-        treeUriString: String,
-        segments: List<String>,
-    ): Pair<String, String>? = withContext(Dispatchers.IO) {
-        when (val result = resolveOrCreatePathSafely(treeUriString, segments)) {
-            is PathResolutionResult.Resolved -> Pair(result.parentUri, result.leafName)
-            else -> null
-        }
-    }
-
-    /**
-     * Resolve all intermediate components before the final item is created.
-     * Existing directories are reused case-insensitively; an existing file
-     * blocks the path. Missing directories use the exact-name creation path so
-     * SAF providers cannot silently create renamed siblings.
-     */
-    suspend fun resolveOrCreatePathSafely(
-        treeUriString: String,
-        segments: List<String>,
-    ): PathResolutionResult = withContext(Dispatchers.IO) {
-        if (segments.isEmpty() || segments.any { !isValidLeafName(it) }) {
-            return@withContext PathResolutionResult.EmptyPath
-        }
-
-        var currentUri = treeUriString
-        val created = mutableListOf<String>()
-        for (segment in segments.dropLast(1)) {
-            val children = when (val inspection = inspectChildren(currentUri)) {
-                is ChildrenInspectionResult.Success -> inspection.children
-                is ChildrenInspectionResult.Failed ->
-                    return@withContext PathResolutionResult.IntermediateCreationFailed(created.toList())
-            }
-            val matching = children.firstOrNull { it.displayName.equals(segment, ignoreCase = true) }
-            if (matching != null) {
-                if (!matching.isDirectory) {
-                    return@withContext PathResolutionResult.BlockedByFile(created.toList())
-                }
-                if (isSameOrDescendant(treeUriString, matching.documentUri) != true) {
-                    return@withContext PathResolutionResult.BlockedByFile(created.toList())
-                }
-                currentUri = matching.documentUri
-                continue
-            }
-
-            when (val result = createFileWithExactName(currentUri, segment, MIME_DIR)) {
-                is ExactCreateResult.Created -> {
-                    val createdNode = when (val inspection = inspectChildren(currentUri)) {
-                        is ChildrenInspectionResult.Success -> inspection.children.firstOrNull {
-                            it.documentUri == result.documentUri
-                        }
-                        is ChildrenInspectionResult.Failed -> {
-                            val absent = deleteDocument(result.documentUri) &&
-                                documentPresence(result.documentUri) != DocumentPresence.EXISTS
-                            return@withContext PathResolutionResult.IntermediateNameMismatch(
-                                if (absent) created.toList() else created + result.documentUri,
-                            )
-                        }
-                    }
-                    if (createdNode == null || !createdNode.isDirectory ||
-                        !createdNode.displayName.equals(segment, ignoreCase = false) ||
-                        isSameOrDescendant(treeUriString, result.documentUri) != true
-                    ) {
-                        val deleted = deleteDocument(result.documentUri) &&
-                            documentPresence(result.documentUri) != DocumentPresence.EXISTS
-                        return@withContext PathResolutionResult.IntermediateNameMismatch(
-                            if (deleted) created.toList() else created + result.documentUri,
-                        )
-                    }
-                    created += result.documentUri
-                    currentUri = result.documentUri
-                }
-                ExactCreateResult.Duplicate -> {
-                    return@withContext PathResolutionResult.IntermediateCreationFailed(created.toList())
-                }
-                ExactCreateResult.InspectionFailed -> {
-                    return@withContext PathResolutionResult.IntermediateCreationFailed(created.toList())
-                }
-                ExactCreateResult.Failed -> {
-                    return@withContext PathResolutionResult.IntermediateCreationFailed(created.toList())
-                }
-                is ExactCreateResult.Partial -> {
-                    return@withContext PathResolutionResult.IntermediateNameMismatch(created + result.documentUri)
-                }
-            }
-        }
-        PathResolutionResult.Resolved(currentUri, segments.last(), created.toList())
-    }
-
-    /** Delete only directories created by the current path-resolution attempt. */
-    suspend fun rollbackCreatedDirectories(documentUris: List<String>): Boolean {
-        var allDeleted = true
-        for (uri in documentUris.asReversed()) {
-            val children = when (val inspection = inspectChildren(uri)) {
-                is ChildrenInspectionResult.Success -> inspection.children
-                is ChildrenInspectionResult.Failed -> {
-                    allDeleted = false
-                    continue
-                }
-            }
-            if (children.isNotEmpty()) {
-                allDeleted = false
-                continue
-            }
-            if (!deleteDocument(uri) || documentPresence(uri) == DocumentPresence.EXISTS) allDeleted = false
-        }
-        return allDeleted
-    }
 }
 
 // ── InputStream extension ─────────────────────────────────────────────────────

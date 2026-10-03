@@ -8,8 +8,9 @@ import android.content.ClipboardManager
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dev.android.ide.data.ProjectRepository
-import dev.android.ide.project.ProjectMetadataAdapterImpl
 import dev.android.ide.project.ProjectStorageAdapterImpl
+import dev.android.ide.project.ProjectManagementService
+import dev.android.ide.project.ProjectMetadataStore
 import dev.android.ide.project.ProjectRegistryStore
 import dev.android.ide.contracts.Surface
 import dev.android.ide.contracts.CapabilityState
@@ -18,15 +19,12 @@ import dev.android.ide.contracts.OperationReport
 import dev.android.ide.contracts.OperationOutcome
 import dev.android.ide.contracts.ErrorCategory
 import dev.android.ide.lifecycle.LifecycleCoordinatorImpl
-import dev.android.ide.project.ProjectStateService
 import dev.android.ide.project.ProjectRestoreResult
-import dev.android.ide.project.ProjectAcquisitionService
 import dev.android.ide.project.CreateProjectTemplate
 import dev.android.ide.project.ProjectDetailsResult
-import dev.android.ide.project.ProjectDetailsService
 import dev.android.ide.data.model.ProjectDetails
-import dev.android.ide.project.ProjectOperationsService
 import dev.android.ide.saf.SafRepository
+import dev.android.ide.saf.FileManagementService
 import dev.android.ide.runtime.RuntimeStateStore
 import dev.android.ide.runtime.TerminalRuntimeAdapterImpl
 import com.termux.terminal.TerminalSession
@@ -89,13 +87,11 @@ data class ProjectSummary(
 
 class AppShellViewModel(application: Application) : AndroidViewModel(application) {
     private val saf = SafRepository(application)
-    private val storage = ProjectStorageAdapterImpl(saf)
+    private val files = FileManagementService(saf)
+    private val storage = ProjectStorageAdapterImpl(saf, files)
     private val registry = ProjectRegistryStore(ProjectRepository(application), storage)
-    private val metadata = ProjectMetadataAdapterImpl(saf)
-    private val projects = ProjectStateService(registry, storage, metadata)
-    private val acquisition = ProjectAcquisitionService(registry, storage, metadata)
-    private val detailsService = ProjectDetailsService(registry, storage)
-    private val operations = ProjectOperationsService(registry, storage, metadata)
+    private val metadata = ProjectMetadataStore(files)
+    private val projectManagement = ProjectManagementService(registry, storage, files, metadata)
     private val lifecycle = LifecycleCoordinatorImpl(application)
     private val applicationState = ApplicationStateStore(application)
     private val runtimeState = RuntimeStateStore(application)
@@ -340,7 +336,7 @@ class AppShellViewModel(application: Application) : AndroidViewModel(application
     fun copyProjectRemoteUrls(projectId: String) {
         viewModelScope.launch {
             _state.update { it.copy(detailsLoading = true, statusMessage = null) }
-            when (val result = detailsService.load(projectId)) {
+            when (val result = projectManagement.loadDetails(projectId)) {
                 is ProjectDetailsResult.Loaded -> {
                     val remotes = result.details.git?.remotes.orEmpty()
                     val clipboard = getApplication<Application>().getSystemService(ClipboardManager::class.java)
@@ -394,17 +390,17 @@ class AppShellViewModel(application: Application) : AndroidViewModel(application
         _state.update { it.copy(folderInspection = null) }
         viewModelScope.launch {
             val location = ProjectLocation(projectRootUri, projectRootUri, projectRootUri)
-            val capabilities = storage.inspectProjectStorage(location)
-            val registered = registry.listRegistered()
+            val capabilities = projectManagement.inspectStorage(location)
+            val registered = projectManagement.registeredProjects()
             val alreadyRegistered = registered.any { it.location.stableId == projectRootUri }
             var containmentVerified = true
             var overlapsRegisteredProject = false
             registered.filterNot { it.location.stableId == projectRootUri }.forEach { project ->
-                val existingContainsSelected = storage.isSameOrDescendant(
+                val existingContainsSelected = projectManagement.isSameOrDescendant(
                     project.location.stableId,
                     projectRootUri,
                 )
-                val selectedContainsExisting = storage.isSameOrDescendant(
+                val selectedContainsExisting = projectManagement.isSameOrDescendant(
                     projectRootUri,
                     project.location.stableId,
                 )
@@ -550,7 +546,7 @@ class AppShellViewModel(application: Application) : AndroidViewModel(application
                     selectedProjectId = projectId,
                 )
             }
-            val result = projects.restore(projectId)
+            val result = projectManagement.restore(projectId)
             if (generation != restoreGeneration) return@launch
             when (result) {
                 is ProjectRestoreResult.Restored -> _state.update {
@@ -575,7 +571,7 @@ class AppShellViewModel(application: Application) : AndroidViewModel(application
                 applicationState.recordProject(result.identity.id)
             }
             if (result is ProjectRestoreResult.Restored && loadDetails) {
-                val details = detailsService.load(result.identity.id)
+                val details = projectManagement.loadDetails(result.identity.id)
                 if (generation != restoreGeneration) return@launch
                 when (details) {
                     is ProjectDetailsResult.Loaded -> _state.update {
@@ -602,7 +598,7 @@ class AppShellViewModel(application: Application) : AndroidViewModel(application
         val generation = restoreGeneration
         viewModelScope.launch {
             _state.update { it.copy(detailsLoading = true, projectDetails = null, statusMessage = null, operationReport = null) }
-            val details = detailsService.load(projectId)
+            val details = projectManagement.loadDetails(projectId)
             if (generation != restoreGeneration || _state.value.selectedProjectId != projectId) return@launch
             when (details) {
                 is ProjectDetailsResult.Loaded -> _state.update {
@@ -627,7 +623,7 @@ class AppShellViewModel(application: Application) : AndroidViewModel(application
     ) {
         viewModelScope.launch {
             _state.update { it.copy(operationInProgress = true, statusMessage = null, operationReport = null) }
-            val report = acquisition.createBlankProject(destinationParentUri, name, description, template)
+            val report = projectManagement.createBlankProject(destinationParentUri, name, description, template)
             _state.update {
                 it.copy(
                     operationInProgress = false,
@@ -643,7 +639,7 @@ class AppShellViewModel(application: Application) : AndroidViewModel(application
     fun importExistingFolder(projectRootUri: String, name: String? = null, description: String? = null) {
         viewModelScope.launch {
             _state.update { it.copy(operationInProgress = true, statusMessage = null, operationReport = null) }
-            val report = acquisition.importExistingFolder(projectRootUri, name, description)
+            val report = projectManagement.importExistingFolder(projectRootUri, name, description)
             _state.update {
                 it.copy(
                     operationInProgress = false,
@@ -668,7 +664,7 @@ class AppShellViewModel(application: Application) : AndroidViewModel(application
     ) {
         viewModelScope.launch {
             _state.update { it.copy(operationInProgress = true, statusMessage = null, operationReport = null) }
-            val report = acquisition.importZip(archiveUri, destinationParentUri, name, description)
+            val report = projectManagement.importZip(archiveUri, destinationParentUri, name, description)
             _state.update {
                 it.copy(
                     operationInProgress = false,
@@ -685,7 +681,7 @@ class AppShellViewModel(application: Application) : AndroidViewModel(application
         val projectId = _state.value.selectedProjectId ?: return
         viewModelScope.launch {
             _state.update { it.copy(operationInProgress = true, statusMessage = null, operationReport = null) }
-            val report = operations.removeFromRegistry(projectId)
+            val report = projectManagement.removeFromRegistry(projectId)
             _state.update {
                 it.copy(
                     operationInProgress = false,
@@ -704,7 +700,7 @@ class AppShellViewModel(application: Application) : AndroidViewModel(application
         val projectId = _state.value.selectedProjectId ?: return
         viewModelScope.launch {
             _state.update { it.copy(operationInProgress = true, statusMessage = null, operationReport = null) }
-            val report = operations.permanentlyDelete(projectId)
+            val report = projectManagement.permanentlyDelete(projectId)
             _state.update {
                 it.copy(
                     operationInProgress = false,
@@ -728,36 +724,44 @@ class AppShellViewModel(application: Application) : AndroidViewModel(application
         val projectId = _state.value.selectedProjectId ?: return
         viewModelScope.launch {
             _state.update { it.copy(operationInProgress = true, statusMessage = null, operationReport = null) }
-            val report = operations.exportProject(projectId, destinationFileUri)
+            val report = projectManagement.exportProject(projectId, destinationFileUri)
             _state.update { it.copy(operationInProgress = false, statusMessage = report.message, operationReport = report) }
             refreshProjects()
             onComplete(report.outcome == dev.android.ide.contracts.OperationOutcome.COMPLETE)
         }
     }
 
+    fun duplicateProject(projectId: String, destinationParentUri: String, name: String, description: String? = null) {
+        runProjectOperation(projectId) {
+            projectManagement.duplicateProject(projectId, destinationParentUri, name, description)
+        }
+    }
+
+    fun relocateProject(projectId: String, destinationParentUri: String, name: String) {
+        runProjectOperation(projectId, replaceSelection = true) {
+            projectManagement.relocateProject(projectId, destinationParentUri, name)
+        }
+    }
+
     fun duplicateSelectedProject(destinationParentUri: String, name: String, description: String? = null) {
-        val projectId = _state.value.selectedProjectId ?: return
-        runProjectOperation { operations.duplicateProject(projectId, destinationParentUri, name, description) }
+        _state.value.selectedProjectId?.let { duplicateProject(it, destinationParentUri, name, description) }
     }
 
     fun relocateSelectedProject(destinationParentUri: String, name: String) {
-        val projectId = _state.value.selectedProjectId ?: return
-        runProjectOperation(replaceSelection = true) {
-            operations.relocateProject(projectId, destinationParentUri, name)
-        }
+        _state.value.selectedProjectId?.let { relocateProject(it, destinationParentUri, name) }
     }
 
     fun renameSelectedProject(name: String) {
         val projectId = _state.value.selectedProjectId ?: return
-        runProjectOperation(replaceSelection = true) {
-            operations.renameProject(projectId, name)
+        runProjectOperation(projectId, replaceSelection = true) {
+            projectManagement.renameProject(projectId, name)
         }
     }
 
     fun removeProjectsFromRegistry(projectIds: List<String>) {
         viewModelScope.launch {
             _state.update { it.copy(operationInProgress = true, statusMessage = null, operationReport = null) }
-            val report = operations.batchRemoveFromRegistry(projectIds)
+            val report = projectManagement.batchRemoveFromRegistry(projectIds)
             _state.update { it.copy(operationInProgress = false, statusMessage = report.message, operationReport = report, selectedProjectIds = if (report.outcome == dev.android.ide.contracts.OperationOutcome.COMPLETE) emptySet() else it.selectedProjectIds) }
             refreshProjects()
         }
@@ -766,7 +770,7 @@ class AppShellViewModel(application: Application) : AndroidViewModel(application
     fun exportProjects(projectIds: List<String>, destinationParentUri: String) {
         viewModelScope.launch {
             _state.update { it.copy(operationInProgress = true, statusMessage = null, operationReport = null) }
-            val report = operations.exportProjects(projectIds, destinationParentUri)
+            val report = projectManagement.exportProjects(projectIds, destinationParentUri)
             _state.update { it.copy(operationInProgress = false, statusMessage = report.message, operationReport = report) }
             refreshProjects()
         }
@@ -775,18 +779,26 @@ class AppShellViewModel(application: Application) : AndroidViewModel(application
     fun permanentlyDeleteProjects(projectIds: List<String>) {
         viewModelScope.launch {
             _state.update { it.copy(operationInProgress = true, statusMessage = null, operationReport = null) }
-            val report = operations.batchPermanentlyDelete(projectIds)
+            val report = projectManagement.batchPermanentlyDelete(projectIds)
             _state.update { it.copy(operationInProgress = false, statusMessage = report.message, operationReport = report, selectedProjectIds = if (report.outcome == dev.android.ide.contracts.OperationOutcome.COMPLETE) emptySet() else it.selectedProjectIds) }
             refreshProjects()
         }
     }
 
     private fun runProjectOperation(
+        projectId: String,
         replaceSelection: Boolean = false,
         operation: suspend () -> dev.android.ide.contracts.OperationReport,
     ) {
         viewModelScope.launch {
-            _state.update { it.copy(operationInProgress = true, statusMessage = null, operationReport = null) }
+            _state.update {
+                it.copy(
+                    selectedProjectId = projectId,
+                    operationInProgress = true,
+                    statusMessage = null,
+                    operationReport = null,
+                )
+            }
             val report = operation()
             _state.update {
                 it.copy(
@@ -808,13 +820,13 @@ class AppShellViewModel(application: Application) : AndroidViewModel(application
 
     private suspend fun refreshProjects() {
         val generation = ++projectRefreshGeneration
-        val registered = projects.registeredProjects()
+        val registered = projectManagement.registeredProjects()
         if (generation != projectRefreshGeneration) return
         val currentIds = registered.map { it.id }.toSet()
-        val warning = registry.warning()
+        val warning = projectManagement.registryWarning()
         _state.update { it.copy(projects = registered, projectSummaries = emptyMap(), registryWarning = warning) }
         val summaries = registered.associate { project ->
-            project.id to when (val result = detailsService.load(project.id)) {
+            project.id to when (val result = projectManagement.loadDetails(project.id)) {
                 is ProjectDetailsResult.Loaded -> ProjectSummary(
                     fileCount = result.details.fileCount,
                     totalBytes = result.details.totalBytes,
@@ -832,7 +844,7 @@ class AppShellViewModel(application: Application) : AndroidViewModel(application
 
     private suspend fun restoreLastProject() {
         val lastProjectId = applicationState.lastProjectId() ?: return
-        projects.restore(lastProjectId)
+        projectManagement.restore(lastProjectId)
         refreshProjects()
     }
 }

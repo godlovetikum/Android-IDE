@@ -1,4 +1,4 @@
-// ProjectDetailsService computes details from the authoritative project location.
+// ProjectDetailsWorkflow computes details from the authoritative project location.
 // Metrics are intentionally not persisted because the user-visible project can
 // change outside the application between openings.
 package dev.android.ide.project
@@ -9,7 +9,7 @@ import dev.android.ide.contracts.ProjectRegistryAdapter
 import dev.android.ide.data.model.Project
 import dev.android.ide.data.model.ProjectDetails
 
-class ProjectDetailsService(
+class ProjectDetailsWorkflow(
     private val registry: ProjectRegistryAdapter,
     private val storage: ProjectStorageAdapterImpl,
 ) {
@@ -22,7 +22,7 @@ class ProjectDetailsService(
                 capabilities.explanation ?: "Project location is unavailable",
             )
         }
-        val metadata = storage.projectMetadata(identity.location)
+        val metadata = storage.inspectTree(identity.location)
             ?: return ProjectDetailsResult.Unavailable(
                 "Project contents could not be inspected completely; metrics were not estimated",
             )

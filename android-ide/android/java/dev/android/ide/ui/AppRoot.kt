@@ -297,11 +297,10 @@ fun AppRoot(viewModel: AppShellViewModel, ideViewModel: IdeViewModel, onExit: ()
                     val id = operationProjectId
                     val destination = operationDestination
                     if (id != null && destination != null) {
-                        viewModel.selectProject(id)
                         if (kind == ProjectOperationKind.DUPLICATE) {
-                            viewModel.duplicateSelectedProject(destination, operationName, operationDescription)
+                            viewModel.duplicateProject(id, destination, operationName, operationDescription)
                         } else {
-                            viewModel.relocateSelectedProject(destination, operationName)
+                            viewModel.relocateProject(id, destination, operationName)
                         }
                     }
                 },

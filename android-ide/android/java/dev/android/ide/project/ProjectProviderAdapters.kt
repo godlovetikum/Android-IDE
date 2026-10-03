@@ -13,7 +13,6 @@ import dev.android.ide.contracts.OperationOutcome
 import dev.android.ide.contracts.OperationReport
 import dev.android.ide.contracts.ProjectIdentity
 import dev.android.ide.contracts.ProjectLocation
-import dev.android.ide.contracts.ProjectMetadataAdapter
 import dev.android.ide.contracts.ProjectMutationIntent
 import dev.android.ide.contracts.ProjectMutationRequest
 import dev.android.ide.contracts.ProjectRegistryAdapter
@@ -23,10 +22,10 @@ import dev.android.ide.saf.SafRepository
 import dev.android.ide.saf.ExactCreateResult
 import dev.android.ide.saf.DocumentPresence
 import dev.android.ide.viewmodel.model.FileNode
-import dev.android.ide.saf.ProjectStorageMetadata
 import dev.android.ide.saf.SafeMutationResult
-import dev.android.ide.saf.ZipExportResult
-import org.json.JSONObject
+import dev.android.ide.saf.FileManagementService
+import dev.android.ide.saf.StorageTreeInspection
+import dev.android.ide.saf.ArchiveWriteResult
 import java.time.Instant
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -134,155 +133,83 @@ class ProjectRegistryStore(
     )
 }
 
-class ProjectMetadataAdapterImpl(
-    private val saf: SafRepository,
-) : ProjectMetadataAdapter {
-    override suspend fun ensurePortableState(project: ProjectIdentity): OperationReport {
-        val result = saf.ensureProjectMetadataDirectory(project.location.stableId)
-        return if (result?.migrationComplete == true) {
-            complete("Portable project metadata initialized", project.id)
-        } else {
-            failed("Portable project metadata could not be initialized", project.id, ErrorCategory.MALFORMED_METADATA)
-        }
-    }
-
-    suspend fun deletePortableState(project: ProjectIdentity): OperationReport {
-        val removed = saf.deleteProjectMetadataDirectory(project.location.stableId)
-        return if (removed) {
-            complete("Android IDE project metadata removed", project.id)
-        } else {
-            failed("Android IDE project metadata could not be removed", project.id, ErrorCategory.PERMISSION_LOST)
-        }
-    }
-
-    override suspend fun readIdentity(location: ProjectLocation): ProjectIdentity? {
-        val manifest = saf.readProjectMetadataFile(location.stableId, "project.json") ?: return null
-        val project = manifest.optJSONObject("project") ?: return null
-        val createdAt = manifest.optLong("createdAt", System.currentTimeMillis())
-        return ProjectIdentity(
-            id = location.stableId,
-            name = project.optString("name", location.displayLabel),
-            description = project.optString("description", ""),
-            location = location,
-            registeredAt = Instant.ofEpochMilli(createdAt),
-            lastOpenedAt = null,
-        )
-    }
-
-    override suspend fun writeIdentity(project: ProjectIdentity): OperationReport {
-        val existing = saf.readProjectMetadataFile(project.location.stableId, "project.json")
-        val manifest = JSONObject().apply {
-            put("schemaVersion", existing?.optInt("schemaVersion", 1) ?: 1)
-            put("project", (existing?.optJSONObject("project") ?: JSONObject()).apply {
-                put("name", project.name)
-                put("description", project.description)
-                if (!has("createdAt")) put("createdAt", project.registeredAt.toEpochMilli())
-                put("updatedAt", System.currentTimeMillis())
-            })
-        }
-        val written = saf.writeProjectMetadataFile(
-            project.location.stableId,
-            "project.json",
-            manifest.toString(2),
-        )
-        return if (written) complete("Portable project identity written", project.id)
-        else failed("Portable project identity could not be written", project.id, ErrorCategory.MALFORMED_METADATA)
-    }
-
-    override suspend fun readWorkspaceDescriptor(projectId: String): ByteArray? =
-        saf.readProjectMetadataFile(projectId, "workspace.json")?.toString()?.toByteArray()
-
-    override suspend fun writeWorkspaceDescriptor(projectId: String, descriptor: ByteArray): OperationReport {
-        val written = saf.writeProjectMetadataFile(
-            projectId,
-            "workspace.json",
-            descriptor.toString(Charsets.UTF_8),
-        )
-        return if (written) complete("Workspace descriptor written", projectId)
-        else failed("Workspace descriptor could not be written", projectId, ErrorCategory.MALFORMED_METADATA)
-    }
-}
-
 class ProjectStorageAdapterImpl(
     private val saf: SafRepository,
+    private val files: FileManagementService = FileManagementService(saf),
 ) : ProjectStorageAdapter {
-    suspend fun safStageDocument(uri: String, maxBytes: Long): dev.android.ide.saf.StagedDocumentResult =
-        saf.stageDocumentBounded(uri, maxBytes)
+    suspend fun stageDocument(uri: String, maxBytes: Long): dev.android.ide.saf.StagedDocumentResult =
+        files.stageDocument(uri, maxBytes)
 
-    suspend fun safWriteDocumentFromStreamVerified(
+    suspend fun writeDocumentFromStreamVerified(
         uri: String,
         input: java.io.InputStream,
         maxBytes: Long,
         expectedBytes: Long,
-    ): Boolean = saf.writeDocumentFromStreamVerified(uri, input, maxBytes, expectedBytes)
+    ): Boolean = files.writeDocumentFromStreamVerified(uri, input, maxBytes, expectedBytes)
 
     suspend fun createDirectoryWithExactName(parentUri: String, name: String): ExactCreateResult =
-        saf.createFileWithExactName(
-            parentUri,
-            name,
-            "vnd.android.document/directory",
-        )
+        files.createFolder(parentUri, name)
 
-    suspend fun deleteDocument(uri: String): Boolean = saf.deleteDocument(uri)
+    suspend fun deleteDocument(uri: String): Boolean = files.delete(uri)
 
-    suspend fun getDisplayName(uri: String): String? = saf.getDisplayName(uri)
+    suspend fun getDisplayName(uri: String): String? = files.displayName(uri)
 
-    suspend fun readDocument(uri: String): ByteArray? = saf.readFile(uri)
+    suspend fun readDocument(uri: String): ByteArray? = files.read(uri)
 
-    suspend fun writeDocument(uri: String, content: ByteArray): Boolean = saf.writeFile(uri, content)
+    suspend fun writeDocument(uri: String, content: ByteArray): Boolean = files.write(uri, content)
 
     suspend fun findChild(parentUri: String, name: String): FileNode? =
-        (saf.inspectChildren(parentUri) as? dev.android.ide.saf.ChildrenInspectionResult.Success)
+        (files.inspectChildren(parentUri) as? dev.android.ide.saf.ChildrenInspectionResult.Success)
             ?.children
             ?.firstOrNull { it.displayName == name }
 
-    suspend fun listChildren(parentUri: String): List<FileNode> = saf.listChildren(parentUri)
+    suspend fun listChildren(parentUri: String): List<FileNode> = files.listChildren(parentUri)
 
     suspend fun inspectChildren(parentUri: String): dev.android.ide.saf.ChildrenInspectionResult =
-        saf.inspectChildren(parentUri)
+        files.inspectChildren(parentUri)
 
     suspend fun deleteChildIfPresent(parentUri: String, name: String): Boolean =
-        saf.deleteChildIfPresent(parentUri, name)
+        files.deleteChildIfPresent(parentUri, name)
 
     suspend fun createFileWithExactName(
         parentUri: String,
         name: String,
         mimeType: String,
-    ): ExactCreateResult = saf.createFileWithExactName(parentUri, name, mimeType)
+    ): ExactCreateResult = files.createFile(parentUri, name, mimeType)
 
     override suspend fun isSameOrDescendant(rootUri: String, candidateUri: String): Boolean? =
-        saf.isSameOrDescendant(rootUri, candidateUri)
+        files.isSameOrDescendant(rootUri, candidateUri)
 
-    suspend fun projectMetadata(location: ProjectLocation): ProjectStorageMetadata? =
-        saf.projectMetadata(location.stableId)
+    suspend fun inspectTree(location: ProjectLocation): StorageTreeInspection? =
+        files.inspectTree(location.stableId)
 
     suspend fun copyExact(sourceUri: String, targetParentUri: String, newName: String? = null): SafeMutationResult =
-        saf.copyDocumentWithExactName(sourceUri, targetParentUri, newName)
+        files.copy(sourceUri, targetParentUri, newName)
 
     suspend fun moveExact(sourceUri: String, sourceParentUri: String, targetParentUri: String): SafeMutationResult =
-        saf.moveDocumentWithExactName(sourceUri, sourceParentUri, targetParentUri)
+        files.move(sourceUri, sourceParentUri, targetParentUri)
 
     suspend fun moveAndRenameExact(
         sourceUri: String,
         sourceParentUri: String,
         targetParentUri: String,
         newName: String,
-    ): SafeMutationResult = saf.moveAndRenameDocumentWithExactName(
+    ): SafeMutationResult = files.moveAndRename(
         sourceUri,
         sourceParentUri,
         targetParentUri,
         newName,
     )
 
-    suspend fun renameDocument(uri: String, newName: String): String? = saf.renameDocument(uri, newName)
+    suspend fun renameDocument(uri: String, newName: String): String? = files.rename(uri, newName)
 
-    suspend fun exportZip(sourceUri: String, destinationUri: String): ZipExportResult? =
-        saf.exportZip(sourceUri, destinationUri)
+    suspend fun writeDirectoryArchive(sourceUri: String, destinationUri: String): ArchiveWriteResult? =
+        files.writeDirectoryArchive(sourceUri, destinationUri)
 
-    suspend fun documentExists(uri: String): Boolean = saf.documentExists(uri)
-    suspend fun documentPresence(uri: String): DocumentPresence = saf.documentPresence(uri)
+    suspend fun documentExists(uri: String): Boolean = files.exists(uri)
+    suspend fun documentPresence(uri: String): DocumentPresence = files.presence(uri)
 
-    override suspend fun inspectProjectStorage(location: ProjectLocation): ProjectStorageCapabilities = saf.inspectProjectStorage(location)
+    override suspend fun inspectProjectStorage(location: ProjectLocation): ProjectStorageCapabilities = files.inspectStorage(location)
 
     private fun relativeSegments(path: ProjectRelativePath, allowRoot: Boolean = false): List<String>? {
         if (path.isEmpty()) return if (allowRoot) emptyList() else null
@@ -296,11 +223,11 @@ class ProjectStorageAdapterImpl(
         var currentUri = project.location.stableId
         var node: FileNode? = null
         for ((index, segment) in segments.withIndex()) {
-            val children = saf.inspectChildren(currentUri) as? dev.android.ide.saf.ChildrenInspectionResult.Success
+            val children = files.inspectChildren(currentUri) as? dev.android.ide.saf.ChildrenInspectionResult.Success
                 ?: return null
             node = children.children.firstOrNull { it.displayName == segment } ?: return null
             if (index < segments.lastIndex && !node.isDirectory) return null
-            if (saf.isSameOrDescendant(project.location.stableId, node.documentUri) != true) return null
+            if (files.isSameOrDescendant(project.location.stableId, node.documentUri) != true) return null
             currentUri = node.documentUri
         }
         return node
@@ -316,7 +243,7 @@ class ProjectStorageAdapterImpl(
         val segments = relativeSegments(path, allowRoot = true) ?: return null
         val directoryUri = if (segments.isEmpty()) project.location.stableId
             else resolveExisting(project, segments)?.takeIf { it.isDirectory }?.documentUri ?: return null
-        val children = saf.inspectChildren(directoryUri) as? dev.android.ide.saf.ChildrenInspectionResult.Success
+        val children = files.inspectChildren(directoryUri) as? dev.android.ide.saf.ChildrenInspectionResult.Success
             ?: return null
         return children.children.map { child -> (segments + child.displayName).joinToString("/") }
     }
@@ -325,7 +252,7 @@ class ProjectStorageAdapterImpl(
         val segments = relativeSegments(path) ?: return null
         val node = resolveExisting(project, segments) ?: return null
         if (node.isDirectory) return null
-        return saf.readFile(node.documentUri)
+        return files.read(node.documentUri)
     }
 
     override suspend fun write(project: ProjectIdentity, path: ProjectRelativePath, content: ByteArray): OperationReport {
@@ -333,7 +260,7 @@ class ProjectStorageAdapterImpl(
         if (!preflight.allowed) return OperationReport(OperationOutcome.BLOCKED, preflight.message, preflight.errorCategory)
         val segments = relativeSegments(path) ?: return failed("The project-relative path is invalid", path, ErrorCategory.DESTINATION_CONFLICT)
         val node = resolveExisting(project, segments) ?: return failed("The project file is no longer available", path, ErrorCategory.PERMISSION_LOST)
-        return if (!node.isDirectory && saf.writeFile(node.documentUri, content)) complete("Project file written", path)
+        return if (!node.isDirectory && files.write(node.documentUri, content)) complete("Project file written", path)
         else failed("Project file could not be written", path, ErrorCategory.PERMISSION_LOST)
     }
 
@@ -355,7 +282,7 @@ class ProjectStorageAdapterImpl(
         if (parentUri == null && request.intent == ProjectMutationIntent.CREATE) {
             var currentUri = request.project.location.stableId
             for (segment in segments.dropLast(1)) {
-                val children = saf.inspectChildren(currentUri) as? dev.android.ide.saf.ChildrenInspectionResult.Success
+                val children = files.inspectChildren(currentUri) as? dev.android.ide.saf.ChildrenInspectionResult.Success
                     ?: return MutationPreflight(false, "The selected project parent could not be inspected", ErrorCategory.PERMISSION_LOST)
                 val existingParent = children.children.firstOrNull { it.displayName == segment }
                 if (existingParent == null) {
@@ -364,7 +291,7 @@ class ProjectStorageAdapterImpl(
                         "The destination is contained by the project root; the calling surface may create missing parent folders",
                     )
                 }
-                if (!existingParent.isDirectory || saf.isSameOrDescendant(request.project.location.stableId, existingParent.documentUri) != true) {
+                if (!existingParent.isDirectory || files.isSameOrDescendant(request.project.location.stableId, existingParent.documentUri) != true) {
                     return MutationPreflight(false, "A file or out-of-project item blocks the destination path", ErrorCategory.DESTINATION_CONFLICT)
                 }
                 currentUri = existingParent.documentUri
@@ -375,7 +302,7 @@ class ProjectStorageAdapterImpl(
             false, "The selected project parent is unavailable", ErrorCategory.PERMISSION_LOST,
         )
         val leaf = segments.last()
-        val children = saf.inspectChildren(parentUri) as? dev.android.ide.saf.ChildrenInspectionResult.Success
+        val children = files.inspectChildren(parentUri) as? dev.android.ide.saf.ChildrenInspectionResult.Success
             ?: return MutationPreflight(false, "The selected project parent could not be inspected", ErrorCategory.PERMISSION_LOST)
         val existing = children.children.firstOrNull { it.displayName.equals(leaf, ignoreCase = true) }
         return when (request.intent) {
@@ -404,7 +331,7 @@ class ProjectStorageAdapterImpl(
     override suspend fun observeChanges(
         project: ProjectIdentity,
         listener: (ProjectRelativePath) -> Unit,
-    ): AutoCloseable? = saf.observeProjectChanges(project.location.stableId, listener)
+    ): AutoCloseable? = files.observeChanges(project, listener)
 }
 
 private fun complete(message: String, id: String) = OperationReport(

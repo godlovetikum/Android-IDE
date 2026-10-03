@@ -1,4 +1,4 @@
-// ProjectAcquisitionService owns reviewed, verified project acquisition workflows.
+// ProjectAcquisitionWorkflow owns reviewed, verified project acquisition workflows.
 // It registers a project only after its selected location and portable metadata
 // have been verified. It does not create an app-private shadow project.
 package dev.android.ide.project
@@ -12,7 +12,7 @@ import dev.android.ide.contracts.ProjectLocation
 import dev.android.ide.contracts.ProjectMetadataAdapter
 import dev.android.ide.contracts.ProjectRegistryAdapter
 import dev.android.ide.saf.ExactCreateResult
-import dev.android.ide.saf.DocumentPresence
+import dev.android.ide.saf.FileManagementService
 import dev.android.ide.saf.StagedDocumentResult
 import java.io.BufferedInputStream
 import java.io.File
@@ -20,10 +20,11 @@ import java.io.FileInputStream
 import java.time.Instant
 import java.util.zip.ZipInputStream
 
-class ProjectAcquisitionService(
+class ProjectAcquisitionWorkflow(
     private val registry: ProjectRegistryAdapter,
     private val storage: ProjectStorageAdapterImpl,
     private val metadata: ProjectMetadataAdapter,
+    private val files: FileManagementService,
 ) {
     private data class ArchiveEntry(
         val archivePath: String,
@@ -57,7 +58,7 @@ class ProjectAcquisitionService(
         }
         val parentContainment = preflightDestinationParent(destinationParentUri)
         if (!parentContainment.allowed) return blocked(parentContainment.message, parentContainment.errorCategory)
-        val rootUri = when (val created = storage.createDirectoryWithExactName(destinationParentUri, cleanName)) {
+        val rootUri = when (val created = files.createFolder(destinationParentUri, cleanName)) {
             is ExactCreateResult.Created -> created.documentUri
             is ExactCreateResult.Partial -> return OperationReport(
                 outcome = OperationOutcome.PARTIAL,
@@ -319,7 +320,7 @@ This project was created with [Android IDE](https://github.com/godlovetikum/Andr
 }
 """
         }
-        val files = buildList {
+        val starterFiles = buildList {
             add("README.md" to readme)
             add(".gitignore" to """node_modules/
 dist/
@@ -366,19 +367,19 @@ body { margin: 0; padding: 2rem; }
             }
         }
         val createdDirectories = mutableMapOf<String, String>()
-        for ((relativePath, content) in files) {
+        for ((relativePath, content) in starterFiles) {
             val parts = relativePath.split('/')
             var parentUri = rootUri
             var currentPath = ""
             for (directory in parts.dropLast(1)) {
                 currentPath = if (currentPath.isEmpty()) directory else "$currentPath/$directory"
                 parentUri = createdDirectories.getOrPut(currentPath) {
-                    (storage.createDirectoryWithExactName(parentUri, directory) as? ExactCreateResult.Created)?.documentUri
+                    (files.createFolder(parentUri, directory) as? ExactCreateResult.Created)?.documentUri
                         ?: return cleanupCreatedRoot(rootUri, blocked("The starter folder $currentPath could not be created; no project was registered", ErrorCategory.PERMISSION_LOST))
                 }
             }
             val fileName = parts.last()
-            val created = storage.createFileWithExactName(parentUri, fileName, when {
+            val created = files.createFile(parentUri, fileName, when {
                 fileName == "README.md" -> "text/markdown"
                 fileName == "package.json" -> "application/json"
                 fileName == "index.html" -> "text/html"
@@ -388,7 +389,7 @@ body { margin: 0; padding: 2rem; }
             })
             val fileUri = (created as? ExactCreateResult.Created)?.documentUri
                 ?: return cleanupCreatedRoot(rootUri, blocked("The starter file $relativePath could not be created; no project was registered", ErrorCategory.PERMISSION_LOST))
-            if (!storage.writeDocument(fileUri, content.toByteArray(Charsets.UTF_8)) || storage.readDocument(fileUri)?.toString(Charsets.UTF_8) != content) {
+            if (!files.writeText(fileUri, content)) {
                 return cleanupCreatedRoot(rootUri, blocked("The starter file $relativePath could not be verified; no project was registered", ErrorCategory.PERMISSION_LOST))
             }
         }
@@ -469,7 +470,7 @@ body { margin: 0; padding: 2rem; }
         }
         val parentContainment = preflightDestinationParent(destinationParentUri)
         if (!parentContainment.allowed) return blocked(parentContainment.message, parentContainment.errorCategory)
-        val staged = when (val result = storage.safStageDocument(archiveUri, MAX_ARCHIVE_BYTES)) {
+        val staged = when (val result = storage.stageDocument(archiveUri, MAX_ARCHIVE_BYTES)) {
             is StagedDocumentResult.Staged -> result
             StagedDocumentResult.TooLarge -> return blocked("The ZIP archive exceeds the 64 MiB import limit", ErrorCategory.INVALID_ARCHIVE)
             StagedDocumentResult.Failed -> return blocked("The selected ZIP archive could not be read", ErrorCategory.PERMISSION_LOST)
@@ -477,7 +478,7 @@ body { margin: 0; padding: 2rem; }
         try {
             val entries = planArchive(staged.file)
                 ?: return blocked("The ZIP archive is invalid, unsafe, or exceeds import limits", ErrorCategory.INVALID_ARCHIVE)
-            val rootUri = when (val created = storage.createDirectoryWithExactName(destinationParentUri, cleanName)) {
+            val rootUri = when (val created = files.createFolder(destinationParentUri, cleanName)) {
                 is ExactCreateResult.Created -> created.documentUri
                 is ExactCreateResult.Partial -> return OperationReport(
                     outcome = OperationOutcome.PARTIAL,
@@ -516,7 +517,7 @@ body { margin: 0; padding: 2rem; }
                             parentUri = if (existing?.isDirectory == true) {
                                 existing.documentUri
                             } else if (existing == null) {
-                                when (val created = storage.createFileWithExactName(parentUri, segment, MIME_DIRECTORY)) {
+                                when (val created = files.createFile(parentUri, segment, MIME_DIRECTORY)) {
                                     is ExactCreateResult.Created -> created.documentUri.also { createdUris += it }
                                     else -> error("The archive directory could not be created exactly")
                                 }
@@ -529,18 +530,18 @@ body { margin: 0; padding: 2rem; }
                             val existing = storage.findChild(parentUri, leaf)
                             if (existing != null && !existing.isDirectory) error("The archive contains a file and directory with the same path")
                             if (existing == null) {
-                                when (val created = storage.createFileWithExactName(parentUri, leaf, MIME_DIRECTORY)) {
+                                when (val created = files.createFile(parentUri, leaf, MIME_DIRECTORY)) {
                                     is ExactCreateResult.Created -> createdUris += created.documentUri
                                     else -> error("The archive directory could not be created exactly")
                                 }
                             }
                             zip.closeEntry()
                         } else {
-                            val created = storage.createFileWithExactName(parentUri, leaf, "application/octet-stream")
+                            val created = files.createFile(parentUri, leaf, "application/octet-stream")
                             val documentUri = (created as? ExactCreateResult.Created)?.documentUri
                                 ?: error("The archive file could not be created without replacing existing data")
                             createdUris += documentUri
-                            if (!storage.safWriteDocumentFromStreamVerified(
+                            if (!storage.writeDocumentFromStreamVerified(
                                     documentUri,
                                     zip,
                                     MAX_ENTRY_BYTES,
@@ -637,9 +638,9 @@ body { margin: 0; padding: 2rem; }
     ): OperationReport {
         var cleaned = true
         createdUris.asReversed().forEach {
-            if (!storage.deleteDocument(it) || storage.documentPresence(it) == DocumentPresence.EXISTS) cleaned = false
+            if (!files.delete(it)) cleaned = false
         }
-        if (!storage.deleteDocument(rootUri) || storage.documentPresence(rootUri) == DocumentPresence.EXISTS) cleaned = false
+        if (!files.delete(rootUri)) cleaned = false
         return if (cleaned) {
             blocked("ZIP import was rejected and created data was removed: ${reason ?: "extraction failed"}", ErrorCategory.INVALID_ARCHIVE)
         } else {
@@ -653,8 +654,7 @@ body { margin: 0; padding: 2rem; }
     }
 
     private suspend fun cleanupCreatedRoot(rootUri: String, report: OperationReport): OperationReport {
-        val cleaned = storage.deleteDocument(rootUri) &&
-            storage.documentPresence(rootUri) != DocumentPresence.EXISTS
+        val cleaned = files.delete(rootUri)
         return if (cleaned) report else report.copy(
             outcome = OperationOutcome.PARTIAL,
             message = "${report.message}; cleanup of the unregistered project was incomplete",
@@ -674,8 +674,7 @@ body { margin: 0; padding: 2rem; }
         }
         val registered = registry.register(identity)
         if (registered.outcome == OperationOutcome.COMPLETE) return registered
-        val cleaned = storage.deleteDocument(rootUri) &&
-            storage.documentPresence(rootUri) != DocumentPresence.EXISTS
+        val cleaned = files.delete(rootUri)
         return if (cleaned) {
             registered.copy(message = "The project was not registered; created data was removed: ${registered.message}")
         } else {

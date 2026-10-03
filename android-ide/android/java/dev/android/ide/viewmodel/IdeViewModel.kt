@@ -36,11 +36,13 @@ import dev.android.ide.saf.ChildrenInspectionResult
 import dev.android.ide.saf.DocumentPresence
 import dev.android.ide.saf.ExactCreateResult
 import dev.android.ide.saf.PathResolutionResult
+import dev.android.ide.saf.PathResolutionScope
 import dev.android.ide.saf.SafeMutationResult
 import dev.android.ide.saf.SafRepository
+import dev.android.ide.saf.FileManagementService
+import dev.android.ide.project.ProjectMetadataStore
 import dev.android.ide.saf.TextDocumentCodec
 import dev.android.ide.saf.AndroidIdeDocumentsProvider
-import dev.android.ide.project.ProjectFileMutationService
 import dev.android.ide.project.ProjectStorageAdapterImpl
 import dev.android.ide.runtime.LanguageServerRuntimeAdapterImpl
 import dev.android.ide.viewmodel.model.AppScreen
@@ -90,7 +92,8 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
 
     private val safRepository      = SafRepository(application)
     private val storageAdapter     = ProjectStorageAdapterImpl(safRepository)
-    private val fileMutations      = ProjectFileMutationService(storageAdapter)
+    private val fileMutations      = FileManagementService(safRepository)
+    private val projectMetadata   = ProjectMetadataStore(fileMutations)
     private val projectRepository  = ProjectRepository(application)
     private val sessionRepository  = SessionRepository(application)
     private val themeRepository    = ThemeRepository(application)
@@ -328,7 +331,7 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
             })
             put("updatedAt", System.currentTimeMillis())
         }
-        if (!safRepository.writeProjectMetadataFile(projectUri, "workspace.json", workspace.toString(2))) {
+        if (!projectMetadata.writeWorkspace(projectUri, workspace)) {
             _uiState.update { it.copy(statusMessage = "Workspace state could not be saved") }
         }
     }
@@ -523,7 +526,7 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
             displayLabel = displayName,
             userVisiblePath = treeUriString,
         )
-        val capabilities = safRepository.inspectProjectStorage(location)
+        val capabilities = fileMutations.inspectStorage(location)
         if (capabilities.state != CapabilityState.SUPPORTED) {
             projectRepository.upsert(
                 Project(
@@ -578,7 +581,7 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update { it.copy(fileTree = nodes.sortedForTree()) }
 
         // Restore this project's workspace state.
-        val workspace = safRepository.readProjectMetadataFile(treeUriString, "workspace.json")
+        val workspace = projectMetadata.readWorkspace(treeUriString)
         val tabUris = workspace?.optJSONArray("openTabUris")?.let { array ->
             (0 until array.length()).mapNotNull { index -> array.optString(index).takeIf(String::isNotBlank) }
         } ?: emptyList()
@@ -612,61 +615,11 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
         createdAt: Long,
         description: String = "",
     ): Boolean {
-        val metadataResult = safRepository.ensureProjectMetadataDirectory(projectUri)
-        val metadataUri = metadataResult?.documentUri
-        if (metadataUri == null || metadataResult != null && !metadataResult.migrationComplete) {
+        val ok = projectMetadata.ensureEditorFiles(projectUri, displayName, createdAt, description)
+        if (!ok) {
             _uiState.update { it.copy(statusMessage = "Project opened, but Android IDE metadata could not be initialized") }
-            return false
         }
-        val hasManifest = safRepository.listChildren(metadataUri)
-            .any { !it.isDirectory && it.displayName == "project.json" }
-        if (!hasManifest) {
-            val manifest = JSONObject().apply {
-                put("schemaVersion", 1)
-                put("project", JSONObject().apply {
-                    put("name", displayName)
-                    put("description", description)
-                    put("createdAt", createdAt)
-                    put("updatedAt", createdAt)
-                })
-            }
-            safRepository.writeProjectMetadataFile(projectUri, "project.json", manifest.toString(2))
-        }
-        val hasWorkspace = safRepository.listChildren(metadataUri)
-            .any { !it.isDirectory && it.displayName == "workspace.json" }
-        if (!hasWorkspace) {
-            val workspace = JSONObject().apply {
-                put("schemaVersion", 1)
-                put("openTabUris", org.json.JSONArray())
-                put("activeTabUri", JSONObject.NULL)
-                put("cursorPositions", JSONObject())
-                put("scrollPositions", JSONObject())
-                put("updatedAt", System.currentTimeMillis())
-            }
-            safRepository.writeProjectMetadataFile(projectUri, "workspace.json", workspace.toString(2))
-        }
-        val hasMetadataReadme = safRepository.listChildren(metadataUri)
-            .any { !it.isDirectory && it.displayName == "README.md" }
-        if (!hasMetadataReadme) {
-            val metadataReadme = """# Android IDE project metadata
-
-This folder is managed by Android IDE and stores project-local workspace state.
-
-- `project.json` stores the project name, description, and lifecycle timestamps.
-- `workspace.json` stores open tabs, the active tab, cursor positions, and scroll positions.
-
-These files are project-local and travel with the project. Global application preferences remain outside this folder.
-"""
-            val metadataReadmeFile = fileMutations.createFile(
-                metadataUri,
-                "README.md",
-                EditorLanguageRegistry.mimeTypeForFileName("README.md"),
-            ) as? ExactCreateResult.Created
-            metadataReadmeFile?.let { created ->
-                fileMutations.write(created.documentUri, metadataReadme.toByteArray(Charsets.UTF_8))
-            }
-        }
-        return true
+        return ok
     }
 
     fun refreshProjectMetadata() {
@@ -676,7 +629,7 @@ These files are project-local and travel with the project. Global application pr
             _uiState.update { it.copy(projectDetailsByUri = emptyMap() ) }
             val capabilitiesByUri = mutableMapOf<String, dev.android.ide.contracts.ProjectStorageCapabilities>()
             val verifiedProjects = projects.map { project ->
-                val capabilities = safRepository.inspectProjectStorage(
+                val capabilities = fileMutations.inspectStorage(
                     ProjectLocation(
                         stableId = project.stableLocationId,
                         displayLabel = project.locationLabel,
@@ -694,7 +647,7 @@ These files are project-local and travel with the project. Global application pr
                 }
             }
             val details = verifiedProjects.mapNotNull { project ->
-                val metadata = safRepository.projectMetadata(project.uri) ?: return@mapNotNull null
+                val metadata = fileMutations.inspectTree(project.uri) ?: return@mapNotNull null
                 project.uri to ProjectDetails(
                     project = project,
                     description = metadata.description,
@@ -706,7 +659,7 @@ These files are project-local and travel with the project. Global application pr
                     folderCount = metadata.folderCount,
                     totalBytes = metadata.totalBytes,
                     storageCapabilities = capabilitiesByUri[project.uri]
-                        ?: safRepository.inspectProjectStorage(
+                        ?: fileMutations.inspectStorage(
                             ProjectLocation(
                                 stableId = project.stableLocationId,
                                 displayLabel = project.locationLabel,
@@ -725,310 +678,6 @@ These files are project-local and travel with the project. Global application pr
                     projectMetadataLoading = false,
                 )
             }
-        }
-    }
-
-    fun createBlankProject(name: String, description: String, targetParentUri: String) {
-        val trimmed = name.trim().ifEmpty { "Project" }
-        viewModelScope.launch {
-            val parentCapabilities = safRepository.inspectProjectStorage(
-                ProjectLocation(
-                    stableId = targetParentUri,
-                    displayLabel = targetParentUri,
-                    userVisiblePath = targetParentUri,
-                ),
-            )
-            if (parentCapabilities.state != CapabilityState.SUPPORTED) {
-                _uiState.update {
-                    it.copy(statusMessage = parentCapabilities.explanation ?: "Destination is not a supported local project location")
-                }
-                return@launch
-            }
-            val created = fileMutations.createFile(
-                targetParentUri,
-                trimmed,
-                "vnd.android.document/directory",
-            )
-            val projectUri = (created as? ExactCreateResult.Created)?.documentUri ?: run {
-                _uiState.update { it.copy(statusMessage = "Could not create project folder: choose another name or location") }
-                return@launch
-            }
-            if (!ensureProjectMetadata(projectUri, trimmed, System.currentTimeMillis(), description.trim())) return@launch
-            val packageName = trimmed.lowercase().replace(Regex("[^a-z0-9-]"), "-")
-            val files = listOf(
-                "package.json" to """{
-  "name": "$packageName",
-  "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
-  "scripts": { "start": "node index.js" },
-  "keywords": [],
-  "author": "",
-  "license": "ISC"
-}
-""",
-                "README.md" to """# $trimmed
-
-${description.trim().ifEmpty { "This project was created with Android IDE." }}
-
-## Attribution
-
-This project was created with [Android IDE](https://github.com/godlovetikum/Android-IDE).
-
-- **Author:** [godlovetikum](https://github.com/godlovetikum)
-- **Android IDE repository:** https://github.com/godlovetikum/Android-IDE
-
-## Getting started
-
-Install dependencies:
-
-```bash
-npm install
-```
-
-Start the project:
-
-```bash
-npm start
-```
-
-## Project
-
-The project entry point is `index.js`. Update this README with the purpose, setup requirements, and deployment instructions for the application as it evolves.
-""",
-                ".gitignore" to """node_modules/
-dist/
-build/
-.DS_Store
-""",
-            )
-            files.forEach { (fileName, content) ->
-                val fileUri = (fileMutations.createFile(
-                    projectUri,
-                    fileName,
-                    EditorLanguageRegistry.mimeTypeForFileName(fileName),
-                ) as? ExactCreateResult.Created)?.documentUri
-                if (fileUri != null) fileMutations.write(fileUri, content.toByteArray(Charsets.UTF_8))
-            }
-            _uiState.update { it.copy(statusMessage = "Project created in the selected location") }
-            openProject(projectUri)
-        }
-    }
-
-    /**
-     * Update the display name stored in the project registry.
-     * Does NOT rename the filesystem folder.
-     */
-    fun renameProjectInRegistry(uri: String, newName: String) {
-        val trimmed = newName.trim()
-        if (trimmed.isEmpty()) {
-            _uiState.update { it.copy(statusMessage = "Project name cannot be empty") }
-            return
-        }
-        val existing = projectRepository.getAll().firstOrNull { it.uri == uri }
-        projectRepository.upsert(
-            existing?.copy(name = trimmed) ?: Project(name = trimmed, uri = uri),
-        )
-        if (_uiState.value.projectRootUri == uri) {
-            _uiState.update { it.copy(projectName = trimmed) }
-        }
-        _uiState.update { it.copy(recentProjects = projectRepository.getAll()) }
-        refreshProjectMetadata()
-    }
-
-    /**
-     * Duplicate a project into a user-selected destination directory.
-     * The destination folder is supplied by Android's document-tree picker.
-     */
-    fun duplicateProject(uri: String) {
-        _uiState.update { it.copy(statusMessage = "Choose a destination folder to duplicate the project") }
-    }
-
-    fun duplicateProject(uri: String, targetParentUri: String) {
-        viewModelScope.launch {
-            when (safRepository.isSameOrDescendant(uri, targetParentUri)) {
-                true -> {
-                    _uiState.update { it.copy(statusMessage = "A project cannot be duplicated inside itself") }
-                    return@launch
-                }
-                null -> {
-                    _uiState.update { it.copy(statusMessage = "Could not validate the destination folder") }
-                    return@launch
-                }
-                false -> Unit
-            }
-            if (uri == targetParentUri) {
-                return@launch
-            }
-            val source = projectRepository.getAll().firstOrNull { it.uri == uri }
-            val baseName = source?.name ?: extractProjectName(uri)
-            val targetName = nextAvailableProjectName(targetParentUri, "$baseName Copy")
-                ?: run {
-                    _uiState.update { it.copy(statusMessage = "Could not inspect the destination folder") }
-                    return@launch
-                }
-            when (val result = fileMutations.copy(uri, targetParentUri, targetName)) {
-                is SafeMutationResult.Created -> {
-                    projectRepository.upsert(
-                        Project(
-                            name = targetName,
-                            uri = result.documentUri,
-                            lastOpenedMs = System.currentTimeMillis(),
-                        ),
-                    )
-                    _uiState.update {
-                        it.copy(
-                            recentProjects = projectRepository.getAll(),
-                            statusMessage = "Duplicated project as $targetName",
-                        )
-                    }
-                    refreshProjectMetadata()
-                }
-                else -> _uiState.update {
-                    it.copy(statusMessage = "Duplicate failed: ${projectMutationReason(result)}")
-                }
-            }
-        }
-    }
-
-    /**
-     * Move a project into a user-selected destination directory. The project is
-     * copied first and the original is deleted only after the copy succeeds.
-     */
-    fun moveProjectStorage(uri: String, targetParentUri: String) {
-        viewModelScope.launch {
-            _uiState.update { it.copy(statusMessage = "Moving project…") }
-            when (safRepository.isSameOrDescendant(uri, targetParentUri)) {
-                true -> {
-                    _uiState.update { it.copy(statusMessage = "Choose a folder outside the project") }
-                    return@launch
-                }
-                null -> {
-                    _uiState.update { it.copy(statusMessage = "Could not validate the destination folder") }
-                    return@launch
-                }
-                false -> Unit
-            }
-            val source = projectRepository.getAll().firstOrNull { it.uri == uri }
-            val projectName = source?.name ?: extractProjectName(uri)
-            val storageName = safRepository.getDisplayName(uri) ?: projectName
-            if (uri == _uiState.value.projectRootUri && !saveDirtyTabsForProject()) return@launch
-
-            val copied = runCatching {
-                fileMutations.copy(uri, targetParentUri, storageName)
-            }.getOrElse { _ ->
-                _uiState.update { state ->
-                    state.copy(statusMessage = "Move failed: the destination could not be verified")
-                }
-                return@launch
-            }
-            when (copied) {
-                is SafeMutationResult.Created -> {
-                    if (!fileMutations.delete(uri)) {
-                        // Keep the original as the source of truth if deletion is denied.
-                        fileMutations.delete(copied.documentUri)
-                        _uiState.update {
-                            it.copy(statusMessage = "Storage path was not changed — the original could not be removed")
-                        }
-                        return@launch
-                    }
-
-                    projectRepository.remove(uri)
-                    projectRepository.upsert(
-                        Project(
-                            name = projectName,
-                            uri = copied.documentUri,
-                            lastOpenedMs = System.currentTimeMillis(),
-                            createdMs = source?.createdMs ?: System.currentTimeMillis(),
-                        ),
-                    )
-                    if (uri == _uiState.value.projectRootUri) {
-                        openProjectInternal(copied.documentUri)
-                    } else {
-                        _uiState.update { it.copy(recentProjects = projectRepository.getAll()) }
-                    }
-                    refreshProjectMetadata()
-                    _uiState.update {
-                        it.copy(statusMessage = "Moved project to $targetParentUri")
-                    }
-                }
-                else -> _uiState.update {
-                    it.copy(statusMessage = "Move failed: ${projectMutationReason(copied)}")
-                }
-            }
-        }
-    }
-
-    fun showProjectDetails(uri: String) {
-        val project = projectRepository.getAll().firstOrNull { it.uri == uri }
-            ?: Project(name = extractProjectName(uri), uri = uri)
-        _uiState.update {
-            it.copy(
-                projectDetails = null,
-                projectDetailsLoading = true,
-                previousScreen = it.currentScreen,
-                currentScreen = AppScreen.PROJECT_DETAILS,
-            )
-        }
-        viewModelScope.launch {
-            val metadata = safRepository.projectMetadata(uri)
-            if (metadata == null) {
-                _uiState.update {
-                    it.copy(
-                        projectDetailsLoading = false,
-                        statusMessage = "Could not read project details",
-                    )
-                }
-            } else {
-                val storageCapabilities = safRepository.inspectProjectStorage(
-                    ProjectLocation(
-                        stableId = project.stableLocationId,
-                        displayLabel = project.locationLabel,
-                        userVisiblePath = project.locationLabel,
-                        capabilityState = project.capabilityState,
-                    ),
-                )
-                _uiState.update {
-                    it.copy(
-                        projectDetails = ProjectDetails(
-                            project = project,
-                            description = metadata.description,
-                            creationTimeMs = metadata.creationTimeMs ?: project.createdMs,
-                            lastModifiedTimeMs = metadata.lastModifiedTimeMs,
-                            storageProvider = metadata.storageProvider,
-                            storagePath = metadata.storagePath,
-                            fileCount = metadata.fileCount,
-                            folderCount = metadata.folderCount,
-                            totalBytes = metadata.totalBytes,
-                            storageCapabilities = storageCapabilities,
-                            languageBytes = metadata.languageBytes,
-                            git = metadata.git,
-                        ),
-                        projectDetailsLoading = false,
-                    )
-                }
-            }
-        }
-    }
-
-    fun dismissProjectDetails() {
-        _uiState.update {
-            it.copy(
-                projectDetails = null,
-                projectDetailsLoading = false,
-                currentScreen = it.previousScreen ?: AppScreen.PROJECTS,
-                previousScreen = null,
-            )
-        }
-    }
-
-    fun removeProjectFromRegistry(uri: String) {
-        projectRepository.remove(uri)
-        _uiState.update {
-            it.copy(
-                recentProjects = projectRepository.getAll(),
-                projectDetailsByUri = it.projectDetailsByUri - uri,
-            )
         }
     }
 
@@ -1057,7 +706,7 @@ build/
     }
 
     private suspend fun visibleFileTreeChildren(parentUri: String): List<FileNode> =
-        safRepository.listChildren(parentUri).filterNot { node ->
+        fileMutations.listChildren(parentUri).filterNot { node ->
             (node.displayName == ".git" && _uiState.value.editorSettings.hideGitFolder) ||
                 (node.displayName in setOf(
                     ApplicationIdentity.TARGET_METADATA_DIRECTORY,
@@ -1069,7 +718,7 @@ build/
         val rootUri = _uiState.value.projectRootUri ?: return
         _uiState.update { it.copy(fileTreeLoading = true) }
         try {
-            when (val inspection = safRepository.inspectChildren(rootUri)) {
+            when (val inspection = fileMutations.inspectChildren(rootUri)) {
                 is ChildrenInspectionResult.Success -> {
                     val settings = _uiState.value.editorSettings
                     val refreshed = inspection.children.filterNot { node ->
@@ -1098,7 +747,7 @@ build/
             val old = previous.firstOrNull { it.documentUri == current.documentUri }
             if (old != null && current.isDirectory) {
                 val children = if (old.isExpanded) {
-                    when (val inspection = safRepository.inspectChildren(current.documentUri)) {
+                    when (val inspection = fileMutations.inspectChildren(current.documentUri)) {
                         is ChildrenInspectionResult.Success ->
                             mergeRefreshedTree(old.children, inspection.children.sortedForTree())
                         is ChildrenInspectionResult.Failed -> old.children
@@ -1178,7 +827,7 @@ build/
             var successCount = 0
             items.forEach { source ->
                 if (source.isDirectory) {
-                    when (safRepository.isSameOrDescendant(source.documentUri, targetDir.documentUri)) {
+                    when (fileMutations.isSameOrDescendant(source.documentUri, targetDir.documentUri)) {
                         true -> {
                             _uiState.update { it.copy(statusMessage = "Cannot paste a folder into itself or one of its subfolders") }
                             return@forEach
@@ -1244,7 +893,7 @@ build/
             try {
                 var count = 0
                 sourceUris.forEach { uri ->
-                    val name  = safRepository.getDisplayName(uri)
+                    val name  = fileMutations.displayName(uri)
                         ?: uri.substringAfterLast('/', "imported_file")
                     when (fileMutations.copy(uri, targetDirUri, name)) {
                         is SafeMutationResult.Created -> count++
@@ -1270,7 +919,7 @@ build/
 
     fun exportProject(projectUri: String, destinationUri: String) {
         viewModelScope.launch {
-            val result = safRepository.exportZip(projectUri, destinationUri)
+            val result = fileMutations.writeDirectoryArchive(projectUri, destinationUri)
             _uiState.update {
                 it.copy(
                     statusMessage = if (result == null) {
@@ -1287,7 +936,7 @@ build/
         viewModelScope.launch {
             _uiState.update { state -> state.copy(fileMutationLoading = true, fileOpDialog = (state.fileOpDialog as? FileOpDialog.Export)?.copy(isSubmitting = true, resultMessage = null, failed = false)) }
             try {
-                val result = safRepository.exportZip(node.documentUri, destinationUri)
+                val result = fileMutations.writeDirectoryArchive(node.documentUri, destinationUri)
                 _uiState.update {
                     it.copy(
                         fileOpDialog = (it.fileOpDialog as? FileOpDialog.Export)?.copy(
@@ -1401,7 +1050,7 @@ build/
             return
         }
         val displayName = _uiState.value.fileTree.findNode(documentUri)?.displayName
-            ?: safRepository.getDisplayName(documentUri)
+            ?: fileMutations.displayName(documentUri)
             ?: displayNameFromUri(documentUri)
         // Binary content (.apk, .class, compiled assets) corrupts Monaco's text model.
         val decodedFile = TextDocumentCodec.decode(bytes)
@@ -1938,7 +1587,7 @@ build/
         viewModelScope.launch {
             val ok = fileMutations.write(newUri, content.toByteArray(Charsets.UTF_8))
             if (!ok) { _uiState.update { it.copy(statusMessage = "Save As failed") }; return@launch }
-            val newName = safRepository.getDisplayName(newUri) ?: displayNameFromUri(newUri)
+            val newName = fileMutations.displayName(newUri) ?: displayNameFromUri(newUri)
             val newLang = EditorLanguageRegistry.languageForFileName(newName)
             pendingContent.remove(active.id)
             _uiState.value.projectRootUri?.let { projectRootUri ->
@@ -2020,7 +1669,7 @@ build/
                 yield()
             }
             suspend fun scan(uri: String, path: String) {
-                safRepository.listChildren(uri).forEach { node ->
+                fileMutations.listChildren(uri).forEach { node ->
                     val nodePath = if (path.isEmpty()) node.displayName else "$path/${node.displayName}"
                     if (node.displayName == ".git" || node.displayName in setOf(ApplicationIdentity.TARGET_METADATA_DIRECTORY, ApplicationIdentity.LEGACY_METADATA_DIRECTORY)) return@forEach
                     if ((!node.isDirectory || includeFolders) && node.displayName.contains(query, ignoreCase = true)) {
@@ -2167,7 +1816,7 @@ build/
             var skippedFiles = 0
 
             suspend fun searchDirectory(uri: String, path: String) {
-                val children = when (val inspection = safRepository.inspectChildren(uri)) {
+                val children = when (val inspection = fileMutations.inspectChildren(uri)) {
                     is ChildrenInspectionResult.Success -> inspection.children
                     is ChildrenInspectionResult.Failed -> {
                         unreadableDirectories++
@@ -2183,7 +1832,7 @@ build/
                         var previousLine = ""
                         var pendingContextIndices = emptyList<Int>()
                         val fileResults = mutableListOf<FileSearchResult>()
-                        val streamed = safRepository.forEachTextLine(node.documentUri) { line ->
+                        val streamed = fileMutations.forEachTextLine(node.documentUri) { line ->
                             if (options.contentSearchShowContext && pendingContextIndices.isNotEmpty()) {
                                 val nextContext = line.trim().take(70)
                                 if (nextContext.isNotEmpty()) {
@@ -2592,7 +2241,7 @@ build/
 
         suspend fun visit(directoryUri: String): LocateResult {
             if (!visited.add(directoryUri)) return LocateResult.NotFound
-            val children = when (val inspection = safRepository.inspectChildren(directoryUri)) {
+            val children = when (val inspection = fileMutations.inspectChildren(directoryUri)) {
                 is ChildrenInspectionResult.Success -> inspection.children
                 is ChildrenInspectionResult.Failed -> {
                     inspectionFailed = true
@@ -2731,119 +2380,6 @@ build/
         }
     }
 
-    // ── Remove project (with confirmation) ────────────────────────────────
-
-    fun requestRemoveProject(uri: String) {
-        _uiState.update { it.copy(confirmRemoveProjectUri = uri) }
-    }
-
-    fun confirmRemoveProject() {
-        val uri = _uiState.value.confirmRemoveProjectUri ?: return
-        _uiState.update { it.copy(statusMessage = "Removing project metadata…") }
-        viewModelScope.launch {
-            val metadataRemoved = fileMutations.deleteChildIfPresent(
-                uri,
-                ApplicationIdentity.TARGET_METADATA_DIRECTORY,
-            ) && fileMutations.deleteChildIfPresent(
-                uri,
-                ApplicationIdentity.LEGACY_METADATA_DIRECTORY,
-            )
-            projectRepository.remove(uri)
-            val wasCurrent = _uiState.value.projectRootUri == uri
-            crashRecovery.clearProject(uri)
-            if (wasCurrent) {
-                _uiState.value.openTabs.forEach { pendingContent.remove(it.id) }
-            }
-            _uiState.update { state ->
-                state.copy(
-                    recentProjects          = projectRepository.getAll(),
-                    confirmRemoveProjectUri = null,
-                    projectRootUri          = if (wasCurrent) null else state.projectRootUri,
-                    projectName             = if (wasCurrent) "" else state.projectName,
-                    fileTree                = if (wasCurrent) emptyList() else state.fileTree,
-                    openTabs                = if (wasCurrent) emptyList() else state.openTabs,
-                    activeTabId             = if (wasCurrent) null else state.activeTabId,
-                    languageIntelligenceAvailable = if (wasCurrent) false else state.languageIntelligenceAvailable,
-                    isEditorReady           = if (wasCurrent) false else state.isEditorReady,
-                    currentScreen           = if (wasCurrent) AppScreen.PROJECTS else state.currentScreen,
-                    statusMessage           = if (metadataRemoved) "Project removed from registry" else "Project removed; metadata cleanup failed",
-                )
-            }
-        }
-    }
-
-    fun cancelRemoveProject() {
-        _uiState.update { it.copy(confirmRemoveProjectUri = null) }
-    }
-
-    fun requestDeleteProject(uri: String) {
-        val code = (100..999).random().toString()
-        _uiState.update {
-            it.copy(confirmDeleteProjectUri = uri, confirmDeleteProjectCode = code)
-        }
-    }
-
-    fun cancelDeleteProject() {
-        _uiState.update { it.copy(confirmDeleteProjectUri = null, confirmDeleteProjectCode = null) }
-    }
-
-    fun confirmDeleteProject(enteredCode: String) {
-        val state = _uiState.value
-        val uri = state.confirmDeleteProjectUri ?: return
-        if (enteredCode.trim() != state.confirmDeleteProjectCode) {
-            _uiState.update { it.copy(statusMessage = "Delete code is incorrect") }
-            return
-        }
-        _uiState.update { it.copy(statusMessage = "Deleting project…") }
-        viewModelScope.launch {
-            var child: Project? = null
-            var containmentUnknown = false
-            projectRepository.getAll().filter { it.uri != uri }.forEach { candidate ->
-                when (safRepository.isSameOrDescendant(uri, candidate.uri)) {
-                    true -> if (child == null) child = candidate
-                    null -> containmentUnknown = true
-                    false -> Unit
-                }
-            }
-            if (containmentUnknown) {
-                _uiState.update { it.copy(statusMessage = "Could not verify project boundaries; deletion was blocked") }
-                return@launch
-            }
-            val registeredChild = child
-            if (registeredChild != null) {
-                _uiState.update { it.copy(statusMessage = "Delete the registered child project first: ${registeredChild.name}") }
-                return@launch
-            }
-            val deleted = fileMutations.delete(uri) && !fileMutations.exists(uri)
-            if (!deleted) {
-                _uiState.update { it.copy(statusMessage = "Project deletion failed; files were not confirmed removed") }
-                return@launch
-            }
-            projectRepository.remove(uri)
-            val wasCurrent = _uiState.value.projectRootUri == uri
-            if (wasCurrent) {
-                _uiState.value.openTabs.forEach { pendingContent.remove(it.id) }
-                crashRecovery.clearProject(uri)
-            }
-            _uiState.update { current ->
-                current.copy(
-                    recentProjects = projectRepository.getAll(),
-                    confirmDeleteProjectUri = null,
-                    confirmDeleteProjectCode = null,
-                    projectRootUri = if (wasCurrent) null else current.projectRootUri,
-                    projectName = if (wasCurrent) "" else current.projectName,
-                    fileTree = if (wasCurrent) emptyList() else current.fileTree,
-                    openTabs = if (wasCurrent) emptyList() else current.openTabs,
-                    activeTabId = if (wasCurrent) null else current.activeTabId,
-                    languageIntelligenceAvailable = if (wasCurrent) false else current.languageIntelligenceAvailable,
-                    isEditorReady = if (wasCurrent) false else current.isEditorReady,
-                    currentScreen = if (wasCurrent) AppScreen.PROJECTS else current.currentScreen,
-                    statusMessage = "Project permanently deleted",
-                )
-            }
-        }
-    }
-
     // ── File operations ────────────────────────────────────────────────────
 
     fun showRenameDialog(node: FileNode)         = _uiState.update { it.copy(fileOpDialog = FileOpDialog.Rename(node)) }
@@ -2874,7 +2410,7 @@ build/
                 _uiState.update { state -> state.copy(fileOpDialog = (state.fileOpDialog as? FileOpDialog.Rename)?.copy(errorMessage = "Enter a valid rename path"), statusMessage = "Enter a valid rename path") }
             is NormalizedPathResult.Success -> viewModelScope.launch {
                 _uiState.update { state -> state.copy(fileOpDialog = (state.fileOpDialog as? FileOpDialog.Rename)?.copy(errorMessage = null, isSubmitting = true)) }
-                when (val resolved = safRepository.resolveOrCreatePathSafely(rootUri, normalized.segments)) {
+                when (val resolved = fileMutations.resolvePath(PathResolutionScope(startUri = rootUri, boundaryUri = rootUri), normalized.segments)) {
                     is PathResolutionResult.Resolved -> {
                         val result = fileMutations.moveAndRename(
                             sourceUri = node.documentUri,
@@ -2894,31 +2430,31 @@ build/
                                 _uiState.update { state -> state.copy(fileOpDialog = (state.fileOpDialog as? FileOpDialog.Rename)?.copy(errorMessage = "Rename partially completed; inspect both source and destination", isSubmitting = false), statusMessage = "Rename partially completed") }
                             }
                             SafeMutationResult.Duplicate -> {
-                                safRepository.rollbackCreatedDirectories(resolved.createdIntermediateUris)
+                                fileMutations.rollbackCreatedDirectories(resolved.createdIntermediateUris)
                                 _uiState.update { state ->
                                     state.copy(fileOpDialog = (state.fileOpDialog as? FileOpDialog.Rename)?.copy(errorMessage = "\u201c${resolved.leafName}\u201d already exists"))
                                 }
                             }
                             SafeMutationResult.InspectionFailed -> {
-                                safRepository.rollbackCreatedDirectories(resolved.createdIntermediateUris)
+                                fileMutations.rollbackCreatedDirectories(resolved.createdIntermediateUris)
                                 _uiState.update { state -> state.copy(fileOpDialog = (state.fileOpDialog as? FileOpDialog.Rename)?.copy(errorMessage = "Could not inspect the rename destination"), statusMessage = "Could not inspect the rename destination") }
                             }
                             SafeMutationResult.Failed -> {
-                                safRepository.rollbackCreatedDirectories(resolved.createdIntermediateUris)
+                                fileMutations.rollbackCreatedDirectories(resolved.createdIntermediateUris)
                                 _uiState.update { state -> state.copy(fileOpDialog = (state.fileOpDialog as? FileOpDialog.Rename)?.copy(errorMessage = "Rename failed"), statusMessage = "Rename failed") }
                             }
                         }
                     }
                     is PathResolutionResult.BlockedByFile -> {
-                        safRepository.rollbackCreatedDirectories(resolved.createdIntermediateUris)
+                        fileMutations.rollbackCreatedDirectories(resolved.createdIntermediateUris)
                         _uiState.update { state -> state.copy(fileOpDialog = (state.fileOpDialog as? FileOpDialog.Rename)?.copy(errorMessage = "A file blocks part of the rename path"), statusMessage = "A file blocks part of the rename path") }
                     }
                     is PathResolutionResult.IntermediateCreationFailed -> {
-                        safRepository.rollbackCreatedDirectories(resolved.createdIntermediateUris)
+                        fileMutations.rollbackCreatedDirectories(resolved.createdIntermediateUris)
                         _uiState.update { state -> state.copy(fileOpDialog = (state.fileOpDialog as? FileOpDialog.Rename)?.copy(errorMessage = "Could not create the rename path"), statusMessage = "Could not create the rename path") }
                     }
                     is PathResolutionResult.IntermediateNameMismatch -> {
-                        safRepository.rollbackCreatedDirectories(resolved.createdIntermediateUris)
+                        fileMutations.rollbackCreatedDirectories(resolved.createdIntermediateUris)
                         _uiState.update { state -> state.copy(fileOpDialog = (state.fileOpDialog as? FileOpDialog.Rename)?.copy(errorMessage = "A rename folder could not be created exactly"), statusMessage = "A rename folder could not be created exactly") }
                     }
                     PathResolutionResult.EmptyPath -> _uiState.update { state -> state.copy(fileOpDialog = (state.fileOpDialog as? FileOpDialog.Rename)?.copy(errorMessage = "Could not resolve the rename path"), statusMessage = "Could not resolve the rename path") }
@@ -3017,7 +2553,7 @@ build/
             is NormalizedPathResult.Success -> {
                 markCreateSubmitting(isDirectory)
                 viewModelScope.launch {
-                    when (val resolved = safRepository.resolveOrCreatePathSafely(rootUri, normalized.segments)) {
+                    when (val resolved = fileMutations.resolvePath(PathResolutionScope(startUri = rootUri, boundaryUri = rootUri), normalized.segments)) {
                         is PathResolutionResult.Resolved -> createEntry(
                             parentUri = resolved.parentUri,
                             name = resolved.leafName,
@@ -3028,15 +2564,15 @@ build/
                         )
                         PathResolutionResult.EmptyPath -> setCreateError(isDirectory, "Enter a file or folder name")
                         is PathResolutionResult.BlockedByFile -> {
-                            safRepository.rollbackCreatedDirectories(resolved.createdIntermediateUris)
+                            fileMutations.rollbackCreatedDirectories(resolved.createdIntermediateUris)
                             setCreateError(isDirectory, "A file blocks part of this path")
                         }
                         is PathResolutionResult.IntermediateCreationFailed -> {
-                            safRepository.rollbackCreatedDirectories(resolved.createdIntermediateUris)
+                            fileMutations.rollbackCreatedDirectories(resolved.createdIntermediateUris)
                             setCreateError(isDirectory, "Could not create the required folders")
                         }
                         is PathResolutionResult.IntermediateNameMismatch -> {
-                            safRepository.rollbackCreatedDirectories(resolved.createdIntermediateUris)
+                            fileMutations.rollbackCreatedDirectories(resolved.createdIntermediateUris)
                             setCreateError(isDirectory, "A required folder could not be created with its exact name")
                         }
                     }
@@ -3076,7 +2612,7 @@ build/
         if (Regex("^[A-Za-z]:[/\\\\]").containsMatchIn(input)) return NormalizedPathResult.AboveProjectRoot
         if (!input.startsWith('/')) return normalizeProjectPath(input, relativeBase)
 
-        val rootPath = safRepository.localFilesystemPath(rootUri)
+        val rootPath = fileMutations.localFilesystemPath(rootUri)
             ?: return NormalizedPathResult.InvalidComponent
         return try {
             val root = File(rootPath).canonicalFile
@@ -3117,24 +2653,24 @@ build/
             )
             when (result) {
                 ExactCreateResult.Duplicate -> {
-                    safRepository.rollbackCreatedDirectories(createdIntermediateUris)
+                    fileMutations.rollbackCreatedDirectories(createdIntermediateUris)
                     setCreateError(
                         isDirectory,
                         "A ${if (isDirectory) "folder" else "file"} already exist with this name. Use a different name",
                     )
                 }
                 ExactCreateResult.InspectionFailed -> {
-                    safRepository.rollbackCreatedDirectories(createdIntermediateUris)
+                    fileMutations.rollbackCreatedDirectories(createdIntermediateUris)
                     setCreateError(isDirectory, "Could not inspect the target folder")
                 }
                 ExactCreateResult.Failed -> {
-                    safRepository.rollbackCreatedDirectories(createdIntermediateUris)
+                    fileMutations.rollbackCreatedDirectories(createdIntermediateUris)
                     setCreateError(isDirectory, "Could not create ${if (isDirectory) "folder" else "file"}")
                 }
                 is ExactCreateResult.Partial -> {
-                    safRepository.deleteDocument(result.documentUri)
-                    val itemAbsent = safRepository.documentPresence(result.documentUri) != DocumentPresence.EXISTS
-                    val parentsRemoved = safRepository.rollbackCreatedDirectories(createdIntermediateUris)
+                    fileMutations.delete(result.documentUri)
+                    val itemAbsent = !fileMutations.exists(result.documentUri)
+                    val parentsRemoved = fileMutations.rollbackCreatedDirectories(createdIntermediateUris)
                     val recovery = if (!itemAbsent || !parentsRemoved) " ${result.recoveryHint}" else ""
                     setCreateError(
                         isDirectory,
@@ -3145,7 +2681,7 @@ build/
                     EditorLanguageRegistry.templateForFileName(normalizedName)?.let { template ->
                         if (!fileMutations.write(result.documentUri, template.toByteArray(Charsets.UTF_8))) {
                             fileMutations.delete(result.documentUri)
-                            safRepository.rollbackCreatedDirectories(createdIntermediateUris)
+                            fileMutations.rollbackCreatedDirectories(createdIntermediateUris)
                             setCreateError(isDirectory, "Could not initialize the HTML file")
                             return@launch
                         }
@@ -3261,7 +2797,7 @@ build/
         }
         viewModelScope.launch {
             _uiState.update { it.copy(fileOpDialog = (it.fileOpDialog as? FileOpDialog.SaveAs)?.copy(errorMessage = null, isSubmitting = true), fileMutationLoading = true) }
-            val resolved = safRepository.resolveOrCreatePathSafely(rootUri, segments)
+            val resolved = fileMutations.resolvePath(PathResolutionScope(startUri = rootUri, boundaryUri = rootUri), segments)
             val path = resolved as? PathResolutionResult.Resolved ?: run {
                 val created = when (resolved) {
                     is PathResolutionResult.BlockedByFile -> resolved.createdIntermediateUris
@@ -3269,7 +2805,7 @@ build/
                     is PathResolutionResult.IntermediateNameMismatch -> resolved.createdIntermediateUris
                     else -> emptyList()
                 }
-                val parentsRemoved = safRepository.rollbackCreatedDirectories(created)
+                val parentsRemoved = fileMutations.rollbackCreatedDirectories(created)
                 _uiState.update {
                     it.copy(
                         fileOpDialog = (it.fileOpDialog as? FileOpDialog.SaveAs)?.copy(
@@ -3292,9 +2828,9 @@ build/
             val newUri = when (created) {
                 is ExactCreateResult.Created -> created.documentUri
                 is ExactCreateResult.Partial -> {
-                    safRepository.deleteDocument(created.documentUri)
-                    val absent = safRepository.documentPresence(created.documentUri) != DocumentPresence.EXISTS
-                    val parentsRemoved = safRepository.rollbackCreatedDirectories(path.createdIntermediateUris)
+                    fileMutations.delete(created.documentUri)
+                    val absent = !fileMutations.exists(created.documentUri)
+                    val parentsRemoved = fileMutations.rollbackCreatedDirectories(path.createdIntermediateUris)
                     _uiState.update {
                         it.copy(
                             fileOpDialog = (it.fileOpDialog as? FileOpDialog.SaveAs)?.copy(
@@ -3309,7 +2845,7 @@ build/
                     return@launch
                 }
                 else -> {
-                    val parentsRemoved = safRepository.rollbackCreatedDirectories(path.createdIntermediateUris)
+                    val parentsRemoved = fileMutations.rollbackCreatedDirectories(path.createdIntermediateUris)
                 val message = if (created is ExactCreateResult.Duplicate) {
                     "\u201c$leafName\u201d already exists — choose a different name"
                 } else {
@@ -3330,9 +2866,9 @@ build/
             }
             val ok = fileMutations.write(newUri, content.toByteArray(Charsets.UTF_8))
             if (!ok) {
-                safRepository.deleteDocument(newUri)
-                val itemAbsent = safRepository.documentPresence(newUri) != DocumentPresence.EXISTS
-                val parentsRemoved = safRepository.rollbackCreatedDirectories(path.createdIntermediateUris)
+                fileMutations.delete(newUri)
+                val itemAbsent = !fileMutations.exists(newUri)
+                val parentsRemoved = fileMutations.rollbackCreatedDirectories(path.createdIntermediateUris)
                 _uiState.update {
                     it.copy(
                         fileOpDialog = (it.fileOpDialog as? FileOpDialog.SaveAs)?.copy(
@@ -3372,7 +2908,7 @@ build/
         targetParentUri: String,
         baseName: String,
     ): String? {
-        val children = when (val inspection = safRepository.inspectChildren(targetParentUri)) {
+        val children = when (val inspection = fileMutations.inspectChildren(targetParentUri)) {
             is ChildrenInspectionResult.Success -> inspection.children
             is ChildrenInspectionResult.Failed -> return null
         }

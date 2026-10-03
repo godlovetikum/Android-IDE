@@ -1,4 +1,4 @@
-// ProjectStateService owns project registration, capability reporting, and
+// ProjectStateWorkflow owns project registration, capability reporting, and
 // metadata initialization without taking ownership of user project contents.
 package dev.android.ide.project
 
@@ -13,7 +13,7 @@ import dev.android.ide.contracts.ProjectRegistryAdapter
 import dev.android.ide.contracts.ProjectStorageAdapter
 import java.time.Instant
 
-class ProjectStateService(
+class ProjectStateWorkflow(
     private val registry: ProjectRegistryAdapter,
     private val storage: ProjectStorageAdapter,
     private val metadata: ProjectMetadataAdapter,

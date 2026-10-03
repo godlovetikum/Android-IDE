@@ -625,9 +625,9 @@ private fun EditorDialogHost(state: IdeUiState, ideViewModel: IdeViewModel, onCh
                 dismissButton = { if (!completed) TextButton(onClick = ideViewModel::dismissFileOpDialog, enabled = !dialog.isSubmitting) { Text(if (dialog.isSubmitting) "Please wait" else "Cancel") } },
             )
         }
-        is FileOpDialog.CreateFile -> EditorTextDialog("Create file", "File path", "", dialog.errorMessage, dialog.resultMessage, ideViewModel::dismissFileOpDialog, dialog.isSubmitting) { ideViewModel.createFileInDirectory(dialog.parentNode, it) }
-        is FileOpDialog.CreateFolder -> EditorTextDialog("Create folder", "Folder path", "", dialog.errorMessage, dialog.resultMessage, ideViewModel::dismissFileOpDialog, dialog.isSubmitting) { ideViewModel.createFolderInDirectory(dialog.parentNode, it) }
-        is FileOpDialog.SaveAs -> EditorTextDialog("Save As", "Project-relative path", dialog.suggestedName, dialog.errorMessage, dialog.resultMessage, ideViewModel::dismissFileOpDialog, dialog.isSubmitting) { ideViewModel.saveAsAtPath(it) }
+        is FileOpDialog.CreateFile -> EditorTextDialog("Create file", "Path from current folder or /root", "", dialog.errorMessage, dialog.resultMessage, ideViewModel::dismissFileOpDialog, dialog.isSubmitting) { ideViewModel.createFileInDirectory(dialog.parentNode, it) }
+        is FileOpDialog.CreateFolder -> EditorTextDialog("Create folder", "Path from current folder or /root", "", dialog.errorMessage, dialog.resultMessage, ideViewModel::dismissFileOpDialog, dialog.isSubmitting) { ideViewModel.createFolderInDirectory(dialog.parentNode, it) }
+        is FileOpDialog.SaveAs -> EditorTextDialog("Save As", "Path from project root", dialog.suggestedName, dialog.errorMessage, dialog.resultMessage, ideViewModel::dismissFileOpDialog, dialog.isSubmitting) { ideViewModel.saveAsAtPath(it) }
         is FileOpDialog.ReplaceAll -> AlertDialog(
             onDismissRequest = { if (!dialog.isSubmitting) ideViewModel.dismissFileOpDialog() },
             title = { Text("Replace project content?") },
